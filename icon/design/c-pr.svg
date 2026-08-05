@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <defs>
+    <linearGradient id="bgC" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#20293B"/>
+      <stop offset="1" stop-color="#0E1220"/>
+    </linearGradient>
+  </defs>
+
+  <rect width="1024" height="1024" rx="228" fill="url(#bgC)"/>
+
+  <!-- Glifo de pull request: rama que sale y vuelve al tronco -->
+  <g stroke="#8FBEFF" stroke-width="66" fill="none" stroke-linecap="round">
+    <line x1="316" y1="326" x2="316" y2="700"/>
+    <path d="M708 386 v196 a118 118 0 0 1 -118 118 h-274"/>
+  </g>
+  <circle cx="316" cy="264" r="86" fill="#8FBEFF"/>
+  <circle cx="316" cy="762" r="86" fill="#8FBEFF"/>
+  <circle cx="708" cy="324" r="86" fill="#8FBEFF"/>
+
+  <!-- Destello: la parte de IA -->
+  <path d="M786 636
+           c 16 92 32 108 124 124
+           c -92 16 -108 32 -124 124
+           c -16 -92 -32 -108 -124 -124
+           c 92 -16 108 -32 124 -124 z"
+        fill="#57C98A"/>
+</svg>

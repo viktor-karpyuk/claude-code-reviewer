@@ -1,0 +1,28 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <defs>
+    <linearGradient id="bgA" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#20293B"/>
+      <stop offset="1" stop-color="#0E1220"/>
+    </linearGradient>
+  </defs>
+
+  <rect width="1024" height="1024" rx="228" fill="url(#bgA)"/>
+
+  <!-- Líneas de diff: verde = agregado, rojo = borrado, gris = contexto -->
+  <g>
+    <rect x="150" y="252" width="330" height="46" rx="23" fill="#5C6880"/>
+    <rect x="150" y="344" width="470" height="46" rx="23" fill="#57C98A"/>
+    <rect x="150" y="436" width="250" height="46" rx="23" fill="#E4685F"/>
+    <rect x="150" y="528" width="400" height="46" rx="23" fill="#5C6880"/>
+    <rect x="150" y="620" width="300" height="46" rx="23" fill="#5C6880"/>
+  </g>
+
+  <!-- Lupa: aro grueso + mango, con halo oscuro para separarla del código -->
+  <g>
+    <circle cx="640" cy="560" r="240" fill="#0E1220" opacity="0.55"/>
+    <circle cx="640" cy="560" r="196" fill="none" stroke="#8FBEFF" stroke-width="62"/>
+    <circle cx="640" cy="560" r="150" fill="#8FBEFF" opacity="0.14"/>
+    <rect x="772" y="692" width="62" height="228" rx="31"
+          fill="#8FBEFF" transform="rotate(-45 803 806)"/>
+  </g>
+</svg>

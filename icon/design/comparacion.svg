@@ -1,0 +1,37 @@
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink"
+     viewBox="0 0 1260 680" width="1260" height="680">
+  <rect width="1260" height="680" fill="#F2F4F8"/>
+  <text x="40" y="58" font-family="Helvetica, Arial, sans-serif" font-size="30" font-weight="bold" fill="#12161F">
+    AI Code Reviewer — tres opciones de icono
+  </text>
+  <text x="40" y="90" font-family="Helvetica, Arial, sans-serif" font-size="17" fill="#4A5567">
+    Cada columna: 1024 px (Finder grande), 128 px (Dock) y 32 px (barra de menú / lista).
+  </text>
+
+  <!-- A -->
+  <g transform="translate(40,130)">
+    <image xlink:href="a-lupa-1024.png" x="0" y="0" width="280" height="280"/>
+    <image xlink:href="a-lupa-128.png" x="0" y="300" width="128" height="128"/>
+    <image xlink:href="a-lupa-32.png" x="150" y="396" width="32" height="32"/>
+    <text x="0" y="470" font-family="Helvetica, Arial, sans-serif" font-size="22" font-weight="bold" fill="#12161F">A — Lupa sobre el diff</text>
+    <text x="0" y="498" font-family="Helvetica, Arial, sans-serif" font-size="16" fill="#4A5567">Revisar código. Muestra el +/- del diff.</text>
+  </g>
+
+  <!-- B -->
+  <g transform="translate(450,130)">
+    <image xlink:href="b-comentario-1024.png" x="0" y="0" width="280" height="280"/>
+    <image xlink:href="b-comentario-128.png" x="0" y="300" width="128" height="128"/>
+    <image xlink:href="b-comentario-32.png" x="150" y="396" width="32" height="32"/>
+    <text x="0" y="470" font-family="Helvetica, Arial, sans-serif" font-size="22" font-weight="bold" fill="#12161F">B — Comentario aprobado</text>
+    <text x="0" y="498" font-family="Helvetica, Arial, sans-serif" font-size="16" fill="#4A5567">Dejar la review. El más legible en chico.</text>
+  </g>
+
+  <!-- C -->
+  <g transform="translate(860,130)">
+    <image xlink:href="c-pr-1024.png" x="0" y="0" width="280" height="280"/>
+    <image xlink:href="c-pr-128.png" x="0" y="300" width="128" height="128"/>
+    <image xlink:href="c-pr-32.png" x="150" y="396" width="32" height="32"/>
+    <text x="0" y="470" font-family="Helvetica, Arial, sans-serif" font-size="22" font-weight="bold" fill="#12161F">C — Pull request + IA</text>
+    <text x="0" y="498" font-family="Helvetica, Arial, sans-serif" font-size="16" fill="#4A5567">El glifo de PR con el destello de IA.</text>
+  </g>
+</svg>

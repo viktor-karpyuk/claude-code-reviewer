@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <defs>
+    <linearGradient id="bgB" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#3B7AD9"/>
+      <stop offset="1" stop-color="#1B4088"/>
+    </linearGradient>
+  </defs>
+
+  <rect width="1024" height="1024" rx="228" fill="url(#bgB)"/>
+
+  <!-- Globo de comentario: el gesto de "dejar una review" -->
+  <path d="M212 236 h600 a76 76 0 0 1 76 76 v368 a76 76 0 0 1 -76 76 h-286
+           l-190 148 v-148 h-124 a76 76 0 0 1 -76 -76 v-368 a76 76 0 0 1 76 -76 z"
+        fill="#FFFFFF"/>
+
+  <!-- Check adentro: la review aprobada -->
+  <path d="M348 500 l104 108 224 -238"
+        fill="none" stroke="#2E9E63" stroke-width="86"
+        stroke-linecap="round" stroke-linejoin="round"/>
+</svg>
