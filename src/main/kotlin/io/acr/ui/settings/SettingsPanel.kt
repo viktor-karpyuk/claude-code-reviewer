@@ -1,5 +1,6 @@
 package io.acr.ui.settings
 
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -50,8 +51,23 @@ fun SettingsPanel(
     val autoStatus by ctx.auto.status.collectAsState()
     val scope = rememberCoroutineScope()
 
-    Column(Modifier.fillMaxSize().padding(24.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
-        Text(io.acr.i18n.t("settings.title"), style = MaterialTheme.typography.headlineSmall)
+    // Con motor, notificaciones, idioma, apariencia, automático y permisos, el contenido supera
+    // el alto de la ventana y lo de abajo quedaba inalcanzable.
+    Column(
+        Modifier.fillMaxSize()
+            .verticalScroll(androidx.compose.foundation.rememberScrollState())
+            .padding(24.dp),
+        verticalArrangement = Arrangement.spacedBy(14.dp),
+    ) {
+        Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+            Text(io.acr.i18n.t("settings.title"), style = MaterialTheme.typography.headlineSmall)
+            Spacer(Modifier.width(10.dp))
+            Text(
+                "v" + io.acr.AppVersion.value,
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
         HorizontalDivider()
 
         Text(io.acr.i18n.t("settings.engine"), style = MaterialTheme.typography.titleSmall)

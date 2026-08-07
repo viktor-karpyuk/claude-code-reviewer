@@ -34,6 +34,11 @@ data class ClaudeResult(
     val tokensCacheWrite: Long,
     val permissionDenials: List<String>,
     val stderr: String,
+    /**
+     * Cuántas herramientas usó el subproceso. Cero significa que contestó sin abrir el diff ni
+     * leer un archivo: lo que haya dicho no puede describir el código.
+     */
+    val toolUses: Int = 0,
 )
 
 /**
@@ -139,6 +144,7 @@ object ClaudeCli {
         var structured: String? = null
         var isError = false
         val denials = mutableListOf<String>()
+        var toolUses = 0
 
         process.inputStream.bufferedReader().forEachLine { line ->
             if (line.isBlank()) return@forEachLine
@@ -148,7 +154,10 @@ object ClaudeCli {
                     sessionId = evt["session_id"]?.jsonPrimitive?.contentOrNull
                     onEvent(ClaudeEvent.Started(sessionId ?: "?", evt["model"]?.jsonPrimitive?.contentOrNull ?: "?"))
                 }
-                "assistant" -> describeAssistant(evt).forEach(onEvent)
+                "assistant" -> describeAssistant(evt).forEach { e ->
+                    if (e is ClaudeEvent.ToolUse) toolUses++
+                    onEvent(e)
+                }
                 "result" -> {
                     isError = evt["is_error"]?.jsonPrimitive?.contentOrNull == "true"
                     finalText = evt["result"]?.jsonPrimitive?.contentOrNull ?: finalText
@@ -165,8 +174,17 @@ object ClaudeCli {
                     }
                     cost = evt["total_cost_usd"]?.jsonPrimitive?.doubleOrNull
                     sessionId = evt["session_id"]?.jsonPrimitive?.contentOrNull ?: sessionId
+                    // Con el nombre pelado —"Bash"— no hay forma de saber qué comando faltó
+                    // permitir, que es justamente el dato que hace falta para arreglarlo. Se
+                    // guarda el comando (o el archivo, o el patrón) junto al nombre.
                     evt["permission_denials"]?.jsonArray?.forEach { d ->
-                        denials += d.jsonObject["tool_name"]?.jsonPrimitive?.contentOrNull ?: d.toString()
+                        val o = d.jsonObject
+                        val name = o["tool_name"]?.jsonPrimitive?.contentOrNull ?: "?"
+                        val input = o["tool_input"] as? JsonObject
+                        val detail = input?.get("command")?.jsonPrimitive?.contentOrNull
+                            ?: input?.get("file_path")?.jsonPrimitive?.contentOrNull
+                            ?: input?.get("pattern")?.jsonPrimitive?.contentOrNull
+                        denials += if (detail.isNullOrBlank()) name else "$name($detail)"
                     }
                 }
             }
@@ -198,6 +216,7 @@ object ClaudeCli {
             permissionDenials = denials,
             stderr = listOfNotNull(stdinError.get()?.let { "stdin: $it" }, stderr.toString().trim())
                 .filter { it.isNotBlank() }.joinToString("\n"),
+            toolUses = toolUses,
         )
     }
 

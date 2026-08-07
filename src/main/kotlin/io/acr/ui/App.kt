@@ -17,6 +17,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Dashboard
+import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.VerticalDivider
@@ -42,7 +43,7 @@ import kotlinx.coroutines.launch
 import io.acr.AppContext
 import io.acr.forge.RepoRecord
 import io.acr.ui.prs.PrsPanel
-import io.acr.ui.repos.RepoDialog
+import io.acr.ui.repos.RepoFormPanel
 import io.acr.ui.review.ReviewPanel
 import io.acr.ui.settings.SettingsPanel
 import io.acr.ui.state.Selection
@@ -66,11 +67,9 @@ fun App(ctx: AppContext) {
     var lang by remember {
         mutableStateOf(io.acr.i18n.Lang.fromCode(ctx.prefs.get(AppContext.PREF_UI_LANG)))
     }
-    var editing by remember { mutableStateOf<RepoRecord?>(null) }
     // Cuántas reviews corren por repo, para verlo en la barra sin entrar a cada uno.
     val progressMap by ctx.engine.progress.collectAsState()
     val runningByRepo = progressMap.values.groupingBy { it.repoId }.eachCount()
-    var dialogOpen by remember { mutableStateOf(false) }
 
     suspend fun reloadRepos() {
         repos = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { ctx.repos.list() }
@@ -84,8 +83,8 @@ fun App(ctx: AppContext) {
                     repos = repos,
                     running = runningByRepo,
                     selection = selection,
-                    onAdd = { editing = null; dialogOpen = true },
-                    onEdit = { editing = it; dialogOpen = true },
+                    onAdd = { selection.go(Selection.RepoForm(null)) },
+                    onEdit = { selection.go(Selection.RepoForm(it.id)) },
                 )
                 VerticalDivider(Modifier.fillMaxHeight())
                 Box(Modifier.weight(1f).fillMaxHeight()) {
@@ -95,6 +94,7 @@ fun App(ctx: AppContext) {
                             ctx = ctx,
                             onOpenPr = { repoId, prId -> selection.go(Selection.Review(repoId, prId)) },
                         )
+                        is Selection.About -> io.acr.ui.about.AboutPanel(ctx)
                         is Selection.Settings -> SettingsPanel(
                             ctx = ctx,
                             theme = theme,
@@ -112,6 +112,25 @@ fun App(ctx: AppContext) {
                                 onOpenReview = { prId -> selection.go(Selection.Review(repo.id, prId)) },
                             )
                         }
+                        is Selection.RepoForm -> {
+                            // `key` fuerza a rehacer el estado del formulario al cambiar de repo:
+                            // sin eso, pasar de editar uno a otro conservaría los campos del primero.
+                            androidx.compose.runtime.key(sel.repoId) {
+                                RepoFormPanel(
+                                    ctx = ctx,
+                                    existing = sel.repoId?.let { id -> repos.firstOrNull { it.id == id } },
+                                    onCancel = { selection.back() },
+                                    onSaved = { id ->
+                                        scope.launch { reloadRepos() }
+                                        selection.go(Selection.Repo(id))
+                                    },
+                                    onDeleted = {
+                                        scope.launch { reloadRepos() }
+                                        selection.go(Selection.Welcome)
+                                    },
+                                )
+                            }
+                        }
                         is Selection.Review -> {
                             val repo = repos.firstOrNull { it.id == sel.repoId }
                             if (repo == null) Welcome(hasRepos = repos.isNotEmpty())
@@ -125,24 +144,6 @@ fun App(ctx: AppContext) {
                         }
                     }
                 }
-            }
-
-            if (dialogOpen) {
-                RepoDialog(
-                    ctx = ctx,
-                    existing = editing,
-                    onDismiss = { dialogOpen = false },
-                    onSaved = { id ->
-                        dialogOpen = false
-                        scope.launch { reloadRepos() }
-                        selection.go(Selection.Repo(id))
-                    },
-                    onDeleted = {
-                        dialogOpen = false
-                        scope.launch { reloadRepos() }
-                        selection.go(Selection.Welcome)
-                    },
-                )
             }
         }
     }
@@ -191,7 +192,8 @@ private fun RepoSidebar(
         LazyColumn(Modifier.weight(1f)) {
             items(repos, key = { it.id }) { repo ->
                 val active = (selection.current as? Selection.Repo)?.repoId == repo.id ||
-                    (selection.current as? Selection.Review)?.repoId == repo.id
+                    (selection.current as? Selection.Review)?.repoId == repo.id ||
+                    (selection.current as? Selection.RepoForm)?.repoId == repo.id
                 RepoRow(
                     repo = repo,
                     running = running[repo.id] ?: 0,
@@ -203,27 +205,40 @@ private fun RepoSidebar(
         }
 
         HorizontalDivider()
+        // Dos filas de dos: cuatro items no entran en 260dp sin recortar las etiquetas, y el
+        // último —Ajustes— quedaba comido.
         Row(
-            Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp),
+            Modifier.fillMaxWidth().padding(horizontal = 4.dp),
             horizontalArrangement = Arrangement.SpaceEvenly,
         ) {
             NavigationRailItem(
                 selected = selection.current is Selection.Dashboard,
                 onClick = { selection.go(Selection.Dashboard) },
                 icon = { Icon(Icons.Default.Dashboard, contentDescription = null) },
-                label = { Text(io.acr.i18n.t("nav.panel")) },
+                label = { Text(io.acr.i18n.t("nav.panel"), maxLines = 1) },
             )
             NavigationRailItem(
-                selected = false,
+                selected = selection.current is Selection.RepoForm,
                 onClick = onAdd,
                 icon = { Icon(Icons.Default.Add, contentDescription = null) },
-                label = { Text(io.acr.i18n.t("nav.repo")) },
+                label = { Text(io.acr.i18n.t("nav.repo"), maxLines = 1) },
+            )
+        }
+        Row(
+            Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 2.dp),
+            horizontalArrangement = Arrangement.SpaceEvenly,
+        ) {
+            NavigationRailItem(
+                selected = selection.current is Selection.About,
+                onClick = { selection.go(Selection.About) },
+                icon = { Icon(Icons.Default.Info, contentDescription = null) },
+                label = { Text(io.acr.i18n.t("nav.about"), maxLines = 1) },
             )
             NavigationRailItem(
                 selected = selection.current is Selection.Settings,
                 onClick = { selection.go(Selection.Settings) },
                 icon = { Icon(Icons.Default.Settings, contentDescription = null) },
-                label = { Text(io.acr.i18n.t("nav.settings")) },
+                label = { Text(io.acr.i18n.t("nav.settings"), maxLines = 1) },
             )
         }
     }

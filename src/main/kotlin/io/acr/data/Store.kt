@@ -8,7 +8,7 @@ import java.sql.DriverManager
  * SQLite storage. Forward-only migrations applied transactionally at startup, mirroring the
  * mongo-explorer v3 approach: a migration is never edited once shipped, only appended to.
  */
-class Store(dbPath: Path) : AutoCloseable {
+class Store(private val dbPath: Path) : AutoCloseable {
 
     val conn: Connection = DriverManager.getConnection("jdbc:sqlite:$dbPath").apply {
         createStatement().use {
@@ -90,6 +90,18 @@ class Store(dbPath: Path) : AutoCloseable {
             }
         }
     }
+
+    /** Versión de esquema aplicada, y cuántas conoce este build. Para la pantalla de info. */
+    fun schemaVersion(): Pair<Int, Int> = synchronized(lock) {
+        val applied = conn.createStatement().use { st ->
+            st.executeQuery("SELECT COALESCE(MAX(version), 0) FROM schema_version").use {
+                if (it.next()) it.getInt(1) else 0
+            }
+        }
+        applied to MIGRATIONS.size
+    }
+
+    val path: String = dbPath.toString()
 
     override fun close() = conn.close()
 
@@ -300,6 +312,107 @@ class Store(dbPath: Path) : AutoCloseable {
             """
             ALTER TABLE repo ADD COLUMN reply_mode TEXT NOT NULL DEFAULT 'DRAFT'
             """.trimIndent(),
+
+            // v17 — PRs ya vistos. Sin esto no hay forma de distinguir "apareció uno nuevo" de
+            // "está abierto desde hace una semana", y avisar de todos sería ruido inservible.
+            """
+            CREATE TABLE seen_pr (
+                repo_id       TEXT NOT NULL REFERENCES repo(id) ON DELETE CASCADE,
+                pr_id         INTEGER NOT NULL,
+                title         TEXT NOT NULL,
+                author        TEXT NOT NULL,
+                first_seen_at TEXT NOT NULL,
+                PRIMARY KEY (repo_id, pr_id)
+            )
+            """.trimIndent(),
+
+            // v18 — caché de la lista de PRs. Traerla tarda medio segundo cuando el proveedor
+            // responde, pero bajo rate limit el backoff la lleva a decenas de segundos; con caché
+            // la lista aparece al instante y se revalida atrás.
+            """
+            CREATE TABLE pr_cache (
+                repo_id    TEXT NOT NULL REFERENCES repo(id) ON DELETE CASCADE,
+                pr_id      INTEGER NOT NULL,
+                title      TEXT NOT NULL,
+                author     TEXT NOT NULL,
+                source     TEXT NOT NULL,
+                target     TEXT NOT NULL,
+                head_sha   TEXT NOT NULL,
+                comments   INTEGER NOT NULL DEFAULT 0,
+                updated_on TEXT NOT NULL DEFAULT '',
+                url        TEXT NOT NULL DEFAULT '',
+                is_draft   INTEGER NOT NULL DEFAULT 0,
+                PRIMARY KEY (repo_id, pr_id)
+            );--split--
+            CREATE TABLE pr_cache_meta (
+                repo_id    TEXT PRIMARY KEY REFERENCES repo(id) ON DELETE CASCADE,
+                etag       TEXT,
+                fetched_at TEXT NOT NULL
+            )
+            """.trimIndent(),
+
+            // v19 — corrige las reviews que se publicaron hallazgo por hallazgo.
+            //
+            // `review.published_url` sólo se escribía al publicar el comentario resumen. Quien
+            // publicaba los hallazgos como comentarios inline —el camino normal— dejaba la review
+            // con la columna en NULL, así que el PR seguía figurando "listo para publicar" para
+            // siempre, en la lista, en el panel y en el icono de la barra de menú.
+            //
+            // Se marcan publicadas las reviews que tienen hallazgos y ninguno sin publicar,
+            // heredando la URL de uno de sus comentarios.
+            //
+            // La condición mira `published_id` y no `published_url`: el proveedor a veces devuelve
+            // el comentario creado sin link (hay 2 así en esta base), y condicionar por la URL
+            // dejaría esas reviews colgadas como pendientes para siempre.
+            """
+            UPDATE review
+               SET published_url = COALESCE((
+                   SELECT f.published_url FROM finding f
+                    WHERE f.review_id = review.id AND f.published_url IS NOT NULL
+                      AND f.published_url <> ''
+                    LIMIT 1
+               ), '')
+             WHERE published_url IS NULL
+               AND EXISTS (SELECT 1 FROM finding f WHERE f.review_id = review.id)
+               AND NOT EXISTS (
+                   SELECT 1 FROM finding f
+                    WHERE f.review_id = review.id AND f.published_id IS NULL
+               )
+            """.trimIndent(),
+
+            // v20 — marca como nuestros los comentarios que publicamos y no figuraban así.
+            //
+            // Al sincronizar el hilo sólo se pasaban los ids del comentario resumen, así que los
+            // hallazgos publicados inline y nuestras propias respuestas se guardaban con
+            // `is_ours = 0`: el historial los mostraba como si fueran de otra persona, y una
+            // respuesta a una contestación nuestra no se detectaba porque su padre no figuraba
+            // como nuestro.
+            """
+            UPDATE pr_comment
+               SET is_ours = 1
+             WHERE is_ours = 0
+               AND comment_id IN (
+                   SELECT f.published_id FROM finding f
+                    WHERE f.repo_id = pr_comment.repo_id AND f.pr_id = pr_comment.pr_id
+                      AND f.published_id IS NOT NULL
+                   UNION
+                   SELECT d.published_id FROM reply_draft d
+                    WHERE d.repo_id = pr_comment.repo_id AND d.pr_id = pr_comment.pr_id
+                      AND d.published_id IS NOT NULL
+                   UNION
+                   SELECT p.comment_id FROM publication p
+                    WHERE p.repo_id = pr_comment.repo_id AND p.pr_id = pr_comment.pr_id
+                      AND p.comment_id IS NOT NULL
+               )
+            """.trimIndent(),
+
+            // v21 — cuándo se abrió el PR, para poder empezar por los más viejos.
+            //
+            // Hasta acá sólo se guardaba `updated_on`, y los proveedores devuelven la lista
+            // ordenada por actividad reciente: el PR que lleva más tiempo esperando quedaba
+            // último. Queda vacío hasta el primer refresco, y el orden trata el vacío como
+            // desconocido en vez de como "muy viejo".
+            "ALTER TABLE pr_cache ADD COLUMN created_on TEXT NOT NULL DEFAULT ''",
         )
     }
 }

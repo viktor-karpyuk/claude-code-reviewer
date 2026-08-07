@@ -27,6 +27,8 @@ class AutoReviewer(
     private val engine: ReviewEngine,
     private val notifier: io.acr.notify.Notifier,
     private val replies: io.acr.data.ReplyRepository,
+    private val seenPrs: io.acr.data.SeenPrRepository,
+    private val prLoader: io.acr.forge.PrLoader,
 ) {
 
     /**
@@ -140,12 +142,26 @@ class AutoReviewer(
 
             for (repo in targets) {
                 if (done >= maxPerCycle()) break
-                val listed = runCatching { io.acr.forge.Forges.of(repo.provider).listPullRequests(repo) }
+                val listed = runCatching { prLoader.refresh(repo, force = true) }
                 if (listed.isFailure) {
                     notes += "${repo.name}: no pude listar PRs (${listed.exceptionOrNull()?.message?.take(60)})"
                     continue
                 }
                 val prs = listed.getOrDefault(emptyList())
+
+                // Aviso de PRs nuevos. En el primer barrido de un repo se registran en silencio:
+                // si no, la primera vez llegarían diez notificaciones de PRs que ya conocías.
+                val silent = seenPrs.isFirstSweep(repo.id)
+                val fresh = seenPrs.registerNew(repo.id, prs)
+                if (!silent && fresh.isNotEmpty()) {
+                    notes += "${repo.name}: ${fresh.size} PR(s) nuevo(s)"
+                    val first = fresh.first()
+                    notifier.notify(
+                        if (fresh.size == 1) "PR nuevo · ${repo.name} #${first.id}"
+                        else "${fresh.size} PRs nuevos · ${repo.name}",
+                        if (fresh.size == 1) "${first.author}: ${first.title}" else first.title,
+                    )
+                }
                 for (pr in prs) {
                     if (done >= maxPerCycle()) {
                         notes += "corte por límite de $done por ciclo"

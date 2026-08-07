@@ -39,3 +39,6 @@ build/
 
 # macOS
 .DS_Store
+
+# Guía de trabajo local: no se versiona.
+CLAUDE.md

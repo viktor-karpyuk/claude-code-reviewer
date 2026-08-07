@@ -14,6 +14,8 @@ import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 import java.io.File
 import java.util.concurrent.ConcurrentHashMap
 
@@ -66,6 +68,9 @@ class ReviewEngine(
         val ourIds = buildSet {
             publications.forPr(repoId, prId).forEach { it.commentId?.let(::add) }
             findings.forPr(repoId, prId).forEach { it.publishedId?.let(::add) }
+            // Nuestras propias respuestas cuentan: si alguien contesta a una contestación nuestra,
+            // eso también hay que verlo. Sin esto la conversación se cortaba en la primera vuelta.
+            addAll(replies.publishedIds(repoId, prId))
             addAll(thread.filter { it.ours }.map { it.commentId })
         }
         if (ourIds.isEmpty()) return 0
@@ -93,8 +98,24 @@ class ReviewEngine(
         return registered
     }
 
+    /**
+     * Cuántas redacciones de respuesta corren a la vez.
+     *
+     * Se pueden lanzar todas las pendientes de un PR de una sola vez, pero cada una abre un
+     * subproceso de Claude Code que lee el repo: diez juntas compiten por CPU y por el límite de
+     * la cuenta, y terminan tardando más que en tanda. Con tres a la vez, el resto queda encolado
+     * y arranca solo a medida que se libera un lugar.
+     */
+    private val replySlots = Semaphore(3)
+
     /** Analiza una respuesta y redacta la contestación. No publica nada. */
     suspend fun draftReply(
+        repo: RepoRecord,
+        pr: PullRequest,
+        draft: io.acr.data.ReplyDraft,
+    ): Result<String> = replySlots.withPermit { draftReplyNow(repo, pr, draft) }
+
+    private suspend fun draftReplyNow(
         repo: RepoRecord,
         pr: PullRequest,
         draft: io.acr.data.ReplyDraft,
@@ -161,6 +182,9 @@ class ReviewEngine(
         val posted = io.acr.forge.Forges.of(repo.provider)
             .postInlineComment(repo, prId, body, finding.filePath, finding.lineNo, headSha)
         findings.markPublished(finding.id, posted.id, posted.url)
+        // Si era el último que quedaba, la review pasa a publicada: si no, el PR seguiría
+        // figurando "listo para publicar" con todo ya comentado en el PR.
+        reviews.markPublishedIfComplete(finding.reviewId, posted.url)
         syncComments(repo, prId)
         posted.url
     }
@@ -171,7 +195,15 @@ class ReviewEngine(
      */
     suspend fun syncComments(repo: RepoRecord, prId: Long): Result<Int> = runCatching {
         val fetched = io.acr.forge.Forges.of(repo.provider).listComments(repo, prId)
-        val ours = publications.forPr(repo.id, prId).mapNotNull { it.commentId }.toSet()
+        // Los tres caminos por los que publicamos algo. Antes sólo se pasaban las publicaciones
+        // —el comentario resumen—, así que nuestros hallazgos inline y nuestras respuestas
+        // quedaban guardados como comentarios ajenos: el historial no los marcaba como nuestros
+        // y una respuesta a una respuesta nuestra no se detectaba nunca.
+        val ours = buildSet {
+            addAll(publications.forPr(repo.id, prId).mapNotNull { it.commentId })
+            addAll(findings.forPr(repo.id, prId).mapNotNull { it.publishedId })
+            addAll(replies.publishedIds(repo.id, prId))
+        }
         comments.sync(repo.id, prId, fetched, ours)
         val newReplies = detectReplies(repo.id, prId)
         if (newReplies > 0) {
@@ -384,6 +416,19 @@ class ReviewEngine(
                 return ReviewOutcome.Error(msg)
             }
 
+            // Una corrida sin una sola herramienta usada no abrió el diff ni leyó un archivo, así
+            // que lo que devolvió no describe este PR: son las veces que el modelo contesta "no
+            // puedo acceder al diff" sin haberlo intentado (pasó con el nivel liviano en el PR
+            // #151, con `permission_denials` vacío). Guardarla como terminada la dejaba publicable
+            // y contada como review hecha; se marca fallida para que se pueda reintentar.
+            if (result.toolUses == 0) {
+                val msg = "El modelo respondió sin abrir el diff ni leer un solo archivo, así que " +
+                    "la review no describe este PR. Reintentá, y si se repite subí la profundidad: " +
+                    "los niveles altos usan un modelo más capaz.\n\nDevolvió:\n" + result.text.take(500)
+                reviews.fail(reviewId, msg)
+                return ReviewOutcome.Error(msg)
+            }
+
             // Un permiso denegado no rompe la corrida, pero la deja parcialmente ciega: si no se
             // avisa, una review que no pudo leer el diff se guarda como exitosa. Fue exactamente lo
             // que pasó cuando los patrones con espacios llegaban partidos al CLI.
@@ -403,6 +448,15 @@ class ReviewEngine(
                 renderMarkdown(parsed.first, parsed.second) + warning,
                 result.sessionId,
                 result.costUsd,
+                result.tokensIn,
+                result.tokensOut,
+                result.tokensCacheRead,
+                result.tokensCacheWrite,
+                // Se guardan de verdad: la columna existía desde la v11 pero nunca se escribía,
+                // así que el aviso de "corrió con herramientas denegadas" vivía sólo en el feed
+                // en vivo y se perdía al cerrar la pantalla. Sin eso no hay forma de saber qué
+                // comando hay que permitir.
+                deniedTools = result.permissionDenials.distinct().joinToString("; ").take(1_000),
             )
             return reviews.get(reviewId)?.let { ReviewOutcome.Ok(it) }
                 ?: ReviewOutcome.Error("No pude releer la review recién guardada.")

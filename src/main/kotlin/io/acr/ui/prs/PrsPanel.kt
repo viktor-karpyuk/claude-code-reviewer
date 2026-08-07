@@ -62,6 +62,19 @@ fun PrsPanel(
     var lastReviews by remember(repo.id) { mutableStateOf<Map<Long, io.acr.data.ReviewRecord>>(emptyMap()) }
     var openReplies by remember(repo.id) { mutableStateOf<Map<Long, Int>>(emptyMap()) }
     var answered by remember(repo.id) { mutableStateOf<Set<Long>>(emptySet()) }
+    // Por PR: hallazgos totales y ya publicados, para distinguir "sin publicar" de "a medias".
+    var findingProgress by remember(repo.id) { mutableStateOf<Map<Long, Pair<Int, Int>>>(emptyMap()) }
+    // El orden se guarda en preferencias: es una decisión de trabajo, no algo que uno quiera
+    // volver a elegir cada vez que abre la app.
+    var sort by remember { mutableStateOf(PrSort.fromKey(ctx.prefs.get(AppContext.PREF_PR_SORT))) }
+    var sortOpen by remember { mutableStateOf(false) }
+    // Qué estados se muestran. Sólo abiertos por defecto y a propósito: los históricos son
+    // cientos —148 contra 4 en kubrik-erp-be— y traerlos siempre sería pagar todo eso para ver
+    // los cuatro que importan. Se piden con el botón, y no tocan el caché de abiertos.
+    var estados by remember(repo.id) { mutableStateOf(setOf(io.acr.forge.PrState.OPEN)) }
+    var historicos by remember(repo.id) { mutableStateOf<List<PullRequest>>(emptyList()) }
+    var buscandoHistorico by remember(repo.id) { mutableStateOf(false) }
+    var errorHistorico by remember(repo.id) { mutableStateOf<String?>(null) }
     val allProgress by ctx.engine.progress.collectAsState()
     // Filtrado por repo: el mapa se indexa por número de PR, y el #18 de un repo no tiene nada
     // que ver con el #18 de otro. Sin esto, un PR ajeno se marcaba como "revisando" acá.
@@ -77,11 +90,17 @@ fun PrsPanel(
         }
     }
 
-    suspend fun load() {
+    suspend fun load(force: Boolean = false) {
+        // Primero lo que ya sabemos: la lista aparece sin esperar a la red.
+        val cached = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+            ctx.prLoader.cached(repo.id)
+        }
+        if (cached.isNotEmpty() && prs.isEmpty()) prs = cached
+
         loading = true
         error = null
         runCatching { kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
-            Forges.of(repo.provider).listPullRequests(repo)
+            ctx.prLoader.refresh(repo, force)
         } }
             .onSuccess { list ->
                 prs = list
@@ -90,9 +109,15 @@ fun PrsPanel(
                         .mapValues { (_, v) -> v.first() }
                     openReplies = ctx.replies.openCountsByPr(repo.id)
                     answered = ctx.replies.answeredPrs(repo.id)
+                    findingProgress = ctx.reviews.findingProgressByPr(repo.id)
                 }
             }
-            .onFailure { error = it.message ?: "No pude traer los pull requests." }
+            .onFailure {
+                // Con caché en pantalla, un fallo de red no debe vaciar la lista: se avisa y se
+                // deja lo último conocido, que sigue siendo útil.
+                if (prs.isEmpty()) error = it.message ?: "No pude traer los pull requests."
+                else error = null
+            }
         loading = false
     }
 
@@ -119,12 +144,87 @@ fun PrsPanel(
                     )
                 }
             }
-            OutlinedButton(onClick = { scope.launch { load() } }, enabled = !loading) {
+            Box {
+                OutlinedButton(onClick = { sortOpen = true }) {
+                    Text(io.acr.i18n.t("prs.sortLabel") + ": " + io.acr.i18n.t(sort.labelKey))
+                }
+                androidx.compose.material3.DropdownMenu(sortOpen, { sortOpen = false }) {
+                    PrSort.entries.forEach { s ->
+                        androidx.compose.material3.DropdownMenuItem(
+                            text = { Text(io.acr.i18n.t(s.labelKey)) },
+                            onClick = {
+                                sort = s
+                                ctx.prefs.put(AppContext.PREF_PR_SORT, s.key)
+                                sortOpen = false
+                            },
+                        )
+                    }
+                }
+            }
+            Spacer(Modifier.width(8.dp))
+            OutlinedButton(onClick = { scope.launch { load(force = true) } }, enabled = !loading) {
                 Text(io.acr.i18n.t("common.refresh"))
             }
         }
 
-        Spacer(Modifier.height(16.dp))
+        Spacer(Modifier.height(10.dp))
+
+        // Filtro de estado. Cambiarlo NO dispara nada solo: el histórico se trae al apretar
+        // "Buscar", que es la acción explícita.
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            io.acr.forge.PrState.entries.forEach { e ->
+                androidx.compose.material3.FilterChip(
+                    selected = e in estados,
+                    onClick = {
+                        estados = if (e in estados) (estados - e).ifEmpty { setOf(io.acr.forge.PrState.OPEN) }
+                        else estados + e
+                    },
+                    label = { Text(io.acr.i18n.t(e.labelKey)) },
+                    modifier = Modifier.padding(end = 6.dp),
+                )
+            }
+            val soloAbiertos = estados == setOf(io.acr.forge.PrState.OPEN)
+            if (!soloAbiertos) {
+                OutlinedButton(
+                    enabled = !buscandoHistorico,
+                    onClick = {
+                        buscandoHistorico = true
+                        errorHistorico = null
+                        scope.launch {
+                            runCatching {
+                                kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                                    Forges.of(repo.provider).searchPullRequests(
+                                        repo, estados - io.acr.forge.PrState.OPEN,
+                                    )
+                                }
+                            }
+                                .onSuccess { historicos = it }
+                                .onFailure { errorHistorico = it.message ?: "No pude buscar." }
+                            buscandoHistorico = false
+                        }
+                    },
+                ) {
+                    Text(
+                        if (buscandoHistorico) io.acr.i18n.t("prs.searching")
+                        else io.acr.i18n.t("prs.searchHistory"),
+                    )
+                }
+                if (historicos.isNotEmpty()) {
+                    Spacer(Modifier.width(10.dp))
+                    Text(
+                        io.acr.i18n.t("prs.historyLoaded", historicos.size),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+        }
+        errorHistorico?.let {
+            Spacer(Modifier.height(6.dp))
+            io.acr.ui.components.ErrorBox(io.acr.i18n.t("prs.searchError"), it)
+        }
+
+        Spacer(Modifier.height(10.dp))
         HorizontalDivider()
 
         // Barra indeterminada pegada al divisor: ocupa el ancho, no desplaza el contenido y deja
@@ -156,7 +256,13 @@ fun PrsPanel(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
             else -> LazyColumn(Modifier.fillMaxSize()) {
-                items(prs, key = { it.id }) { pr ->
+                // Los abiertos salen del caché; los históricos, sólo si se buscaron. Se combinan
+                // por id para que un PR que se mergeó mientras tanto no aparezca dos veces.
+                val visibles = (
+                    (if (io.acr.forge.PrState.OPEN in estados) prs else emptyList()) +
+                        historicos.filter { it.state in estados }
+                    ).distinctBy { it.id }
+                items(visibles.sortedBy(sort), key = { it.id }) { pr ->
                     val last = lastReviews[pr.id]
                     PrRow(
                         pr = pr,
@@ -167,13 +273,19 @@ fun PrsPanel(
                             progress.containsKey(pr.id) -> null
                             (openReplies[pr.id] ?: 0) > 0 ->
                                 io.acr.i18n.t("prs.repliedCount", openReplies[pr.id] ?: 0)
-                            last?.status == ReviewStatus.DONE && last.publishedUrl == null ->
-                                io.acr.i18n.t("prs.readyToPublish")
+                            last?.status == ReviewStatus.DONE && last.publishedUrl == null -> {
+                                val (total, done) = findingProgress[pr.id] ?: (0 to 0)
+                                if (done in 1 until total) io.acr.i18n.t("prs.partlyPublished", done, total)
+                                else io.acr.i18n.t("prs.readyToPublish")
+                            }
                             last?.status == ReviewStatus.DONE && last.headSha != pr.headSha ->
                                 io.acr.i18n.t("prs.needsRerun")
                             last == null -> null
                             last.publishedUrl != null && pr.id in answered ->
                                 io.acr.i18n.t("prs.publishedAnswered")
+                            // Haber contestado también es un estado: sin esto, al publicar la
+                            // última respuesta el PR volvía a mostrarse como si nada hubiera pasado.
+                            pr.id in answered -> io.acr.i18n.t("prs.answered")
                             last.publishedUrl != null -> io.acr.i18n.t("common.published")
                             last.status == ReviewStatus.DONE -> io.acr.i18n.t("prs.reviewed")
                             last.status == ReviewStatus.FAILED -> io.acr.i18n.t("prs.failed")
@@ -200,16 +312,40 @@ private fun PrRow(
         Modifier.fillMaxWidth().clickableText(onOpen).padding(vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Text(
-            "#${pr.id}",
-            style = MaterialTheme.typography.labelLarge,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.width(64.dp),
-        )
+        Column(Modifier.width(84.dp)) {
+            Text(
+                "#${pr.id}",
+                style = MaterialTheme.typography.labelLarge,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            // El estado se muestra siempre, no sólo al buscar histórico: un PR abierto que se
+            // mergeó mientras estaba en pantalla ya no hay que revisarlo.
+            Text(
+                io.acr.i18n.t(pr.state.labelKey),
+                style = MaterialTheme.typography.labelSmall,
+                color = when (pr.state) {
+                    io.acr.forge.PrState.OPEN -> MaterialTheme.colorScheme.primary
+                    io.acr.forge.PrState.MERGED -> androidx.compose.ui.graphics.Color(0xFF7A5CD0)
+                    io.acr.forge.PrState.DECLINED -> MaterialTheme.colorScheme.error
+                },
+            )
+        }
         Column(Modifier.weight(1f)) {
             Text(pr.title, style = MaterialTheme.typography.bodyLarge)
+            // Se muestra cuándo se abrió, no sólo la última actividad: es el dato por el que se
+            // ordena por defecto, y sin verlo el orden parece arbitrario.
+            val fechas = buildString {
+                pr.createdOn.takeIf { it.isNotBlank() }?.let {
+                    append(io.acr.i18n.t("prs.opened")).append(' ').append(it)
+                }
+                if (pr.updatedOn.isNotBlank() && pr.updatedOn != pr.createdOn) {
+                    if (isNotEmpty()) append(" · ")
+                    append("↻ ").append(pr.updatedOn)
+                }
+            }
             Text(
-                "${pr.author} · ${pr.sourceBranch} → ${pr.targetBranch} · ${pr.updatedOn}",
+                "${pr.author} · ${pr.sourceBranch} → ${pr.targetBranch}" +
+                    if (fechas.isBlank()) "" else " · $fechas",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )

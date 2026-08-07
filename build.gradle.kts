@@ -8,7 +8,8 @@ plugins {
 }
 
 group = "io.acr"
-version = "1.0.0"
+// Fuente ÚNICA de la versión. Ver CLAUDE.md para cuándo incrementar qué.
+version = "8.0.0"
 
 repositories {
     mavenCentral()
@@ -44,6 +45,25 @@ dependencies {
     testImplementation(kotlin("test"))
 }
 
+/**
+ * Escribe la versión a un recurso para que la app pueda mostrarla. Sin esto habría que repetir
+ * el número en el código y se desincronizaría con el build.
+ */
+val generateVersionResource by tasks.registering {
+    val outDir = layout.buildDirectory.dir("generated/version")
+    val v = project.version.toString()
+    outputs.dir(outDir)
+    doLast {
+        val f = outDir.get().file("acr-version.properties").asFile
+        f.parentFile.mkdirs()
+        f.writeText("version=$v\n")
+    }
+}
+
+sourceSets.named("main") {
+    resources.srcDir(generateVersionResource.map { layout.buildDirectory.dir("generated/version") })
+}
+
 tasks.test {
     useJUnitPlatform()
     // Los tests NO deben tocar los datos reales del usuario. Con ACR_LIVE=1 se apunta a la
@@ -60,7 +80,8 @@ compose.desktop {
         nativeDistributions {
             targetFormats(TargetFormat.Dmg, TargetFormat.Msi, TargetFormat.Deb)
             packageName = "AI Code Reviewer"
-            packageVersion = "1.0.0"
+            // Se deriva de `version`: tenerla escrita dos veces las hacía divergir.
+            packageVersion = project.version.toString()
             description = "Review pull requests with Claude Code"
             vendor = "Viktor Karpyuk"
 

@@ -273,6 +273,59 @@ class ReviewRepository(private val store: Store) {
         }
     }
 
+    /**
+     * Marca la review publicada si ya no le queda ningún hallazgo sin publicar.
+     *
+     * Publicar los hallazgos uno a uno —el camino normal, porque son comentarios anclados a
+     * archivo y línea— no tocaba `published_url`, que sólo escribía el comentario resumen. El PR
+     * quedaba figurando "listo para publicar" aunque estuviera todo comentado en el PR.
+     *
+     * Va en un solo UPDATE condicional en vez de leer-y-decidir: publicar dos hallazgos a la vez
+     * dispararía dos veces esta comprobación y con dos pasos podrían pisarse.
+     *
+     * @return true si esta llamada fue la que la marcó.
+     */
+    fun markPublishedIfComplete(reviewId: String, url: String?): Boolean =
+        store.stmt(
+            """UPDATE review
+                  SET published_url = COALESCE(?, '')
+                WHERE id = ?
+                  AND published_url IS NULL
+                  AND EXISTS (SELECT 1 FROM finding f WHERE f.review_id = review.id)
+                  AND NOT EXISTS (
+                      SELECT 1 FROM finding f
+                       WHERE f.review_id = review.id AND f.published_id IS NULL
+                  )""",
+        ) { ps ->
+            ps.setString(1, url?.takeIf { it.isNotBlank() })
+            ps.setString(2, reviewId)
+            ps.executeUpdate() > 0
+        }
+
+    /**
+     * Por PR: cuántos hallazgos tiene la última review y cuántos ya se publicaron. Sirve para
+     * distinguir "sin publicar" de "publicada a medias", que antes se veían igual.
+     */
+    fun findingProgressByPr(repoId: String): Map<Long, Pair<Int, Int>> =
+        store.stmt(
+            """SELECT f.pr_id, COUNT(*), SUM(CASE WHEN f.published_id IS NOT NULL THEN 1 ELSE 0 END)
+                 FROM finding f
+                WHERE f.repo_id = ?
+                  AND f.review_id = (
+                      SELECT id FROM review r
+                       WHERE r.repo_id = f.repo_id AND r.pr_id = f.pr_id AND r.status = 'DONE'
+                       ORDER BY r.created_at DESC LIMIT 1
+                  )
+                GROUP BY f.pr_id""",
+        ) { ps ->
+            ps.setString(1, repoId)
+            ps.executeQuery().use { rs ->
+                buildMap {
+                    while (rs.next()) put(rs.getLong(1), rs.getInt(2) to rs.getInt(3))
+                }
+            }
+        }
+
     fun updateBody(id: String, body: String) {
         store.stmt("UPDATE review SET body = ? WHERE id = ?") { ps ->
             ps.setString(1, body)
@@ -282,6 +335,17 @@ class ReviewRepository(private val store: Store) {
     }
 
     fun get(id: String): ReviewRecord? = query("WHERE id = ?") { it.setString(1, id) }.firstOrNull()
+
+    /**
+     * La última review con contenido. Si la corrida más nueva falló o se canceló, sigue habiendo
+     * una review buena de antes y es la que el usuario quiere ver: mostrar el error y esconder el
+     * contenido hacía que un PR marcado "listo para publicar" apareciera vacío.
+     */
+    fun latestUsableFor(repoId: String, prId: Long): ReviewRecord? =
+        query("WHERE repo_id = ? AND pr_id = ? AND status = 'DONE' ORDER BY created_at DESC LIMIT 1") {
+            it.setString(1, repoId)
+            it.setLong(2, prId)
+        }.firstOrNull() ?: latestFor(repoId, prId)
 
     fun latestFor(repoId: String, prId: Long): ReviewRecord? =
         query("WHERE repo_id = ? AND pr_id = ? ORDER BY created_at DESC LIMIT 1") {
@@ -322,7 +386,19 @@ class ReviewRepository(private val store: Store) {
 
     /** Reviews terminadas que todavía no se publicaron: lo accionable del dashboard. */
     fun readyToPublish(limit: Int = 50): List<ReviewRecord> =
-        query("WHERE status = 'DONE' AND published_url IS NULL ORDER BY created_at DESC LIMIT $limit") {}
+        query(
+            """WHERE status = 'DONE' AND published_url IS NULL
+               AND created_at = (
+                   SELECT MAX(created_at) FROM review r2
+                   WHERE r2.repo_id = review.repo_id AND r2.pr_id = review.pr_id
+                     AND r2.status = 'DONE'
+               )
+               ORDER BY created_at DESC LIMIT $limit""",
+        ) {}
+
+    /** Reviews ya publicadas en su PR. */
+    fun published(limit: Int = 50): List<ReviewRecord> =
+        query("WHERE published_url IS NOT NULL ORDER BY created_at DESC LIMIT $limit") {}
 
     /** Últimas reviews de todos los repos, para la actividad reciente. */
     fun recent(limit: Int = 30): List<ReviewRecord> =
@@ -353,6 +429,39 @@ class ReviewRepository(private val store: Store) {
                     }
                 }
             }
+        }
+    }
+
+    data class Current(
+        val todayReviews: Int, val todayPrs: Int,
+        val weekReviews: Int, val weekPrs: Int,
+        val monthReviews: Int, val monthPrs: Int,
+        val today: String, val week: String, val month: String,
+    )
+
+    /**
+     * Lo hecho en el período en curso: hoy, esta semana, este mes.
+     *
+     * Las comparaciones se hacen todas contra 'now' sin convertir zona horaria, para que el
+     * corte del día sea el mismo criterio con el que se guardó el timestamp y no aparezca una
+     * review "de mañana" por un desfase de husos.
+     */
+    fun currentPeriods(): Current = store.stmt(
+        """SELECT
+              COUNT(CASE WHEN date(created_at)=date('now') THEN 1 END),
+              COUNT(DISTINCT CASE WHEN date(created_at)=date('now') THEN repo_id||'#'||pr_id END),
+              COUNT(CASE WHEN strftime('%Y-%W',created_at)=strftime('%Y-%W','now') THEN 1 END),
+              COUNT(DISTINCT CASE WHEN strftime('%Y-%W',created_at)=strftime('%Y-%W','now') THEN repo_id||'#'||pr_id END),
+              COUNT(CASE WHEN strftime('%Y-%m',created_at)=strftime('%Y-%m','now') THEN 1 END),
+              COUNT(DISTINCT CASE WHEN strftime('%Y-%m',created_at)=strftime('%Y-%m','now') THEN repo_id||'#'||pr_id END),
+              date('now'), strftime('%W','now'), strftime('%Y-%m','now')
+           FROM review WHERE status = 'DONE'""",
+    ) { ps ->
+        ps.executeQuery().use { rs ->
+            if (rs.next()) Current(
+                rs.getInt(1), rs.getInt(2), rs.getInt(3), rs.getInt(4), rs.getInt(5), rs.getInt(6),
+                rs.getString(7) ?: "", rs.getString(8) ?: "", rs.getString(9) ?: "",
+            ) else Current(0, 0, 0, 0, 0, 0, "", "", "")
         }
     }
 
@@ -739,22 +848,31 @@ class FindingRepository(private val store: Store) {
         query("WHERE repo_id = ? AND pr_id = ?") { it.setString(1, repoId); it.setLong(2, prId) }
 
     /**
-     * Sólo los hallazgos de la review más reciente del PR.
+     * Sólo los hallazgos de la review vigente del PR.
      *
      * `forPr` devuelve los de TODAS las reviews, y como cada corrida crea un review_id nuevo, los
      * viejos nunca se borran. Al superponerlos sobre el diff actual quedaban anclados a números
      * de línea de un diff anterior —es decir, señalando el código equivocado— y encima seguían
      * siendo publicables como si fueran vigentes.
+     *
+     * "Vigente" es la última DONE, con la última corrida como respaldo: exactamente el mismo
+     * criterio que [ReviewRepository.latestUsableFor], y tiene que seguir siéndolo. Antes acá se
+     * tomaba la última de cualquier estado: si la corrida más nueva fallaba, la vista de código
+     * mostraba cero hallazgos mientras la de Review mostraba los de la última buena, y publicar
+     * desde una no se reflejaba en la otra.
      */
     fun forLatestReview(repoId: String, prId: Long): List<Finding> =
         query(
-            """WHERE repo_id = ? AND pr_id = ? AND review_id = (
-                   SELECT id FROM review WHERE repo_id = ? AND pr_id = ?
-                   ORDER BY created_at DESC LIMIT 1
+            """WHERE repo_id = ? AND pr_id = ? AND review_id = COALESCE(
+                   (SELECT id FROM review WHERE repo_id = ? AND pr_id = ? AND status = 'DONE'
+                     ORDER BY created_at DESC LIMIT 1),
+                   (SELECT id FROM review WHERE repo_id = ? AND pr_id = ?
+                     ORDER BY created_at DESC LIMIT 1)
                )""",
         ) {
             it.setString(1, repoId); it.setLong(2, prId)
             it.setString(3, repoId); it.setLong(4, prId)
+            it.setString(5, repoId); it.setLong(6, prId)
         }
 
     private fun query(tail: String, bind: (java.sql.PreparedStatement) -> Unit): List<Finding> =
@@ -801,6 +919,7 @@ data class ReplyDraft(
     val body: String?,
     val status: ReplyStatus,
     val error: String?,
+    val publishedId: String?,
     val publishedUrl: String?,
     val createdAt: String,
 )
@@ -907,6 +1026,17 @@ class ReplyRepository(private val store: Store) {
             }
         }
 
+    /** Ids de los comentarios que publicamos como respuesta, para marcarlos como nuestros. */
+    fun publishedIds(repoId: String, prId: Long): Set<String> =
+        store.stmt(
+            """SELECT published_id FROM reply_draft
+               WHERE repo_id = ? AND pr_id = ? AND published_id IS NOT NULL""",
+        ) { ps ->
+            ps.setString(1, repoId)
+            ps.setLong(2, prId)
+            ps.executeQuery().use { rs -> buildSet { while (rs.next()) add(rs.getString(1)) } }
+        }
+
     /** PRs donde ya contestamos todo, para distinguir "cerrado" de "sin respuestas". */
     fun answeredPrs(repoId: String): Set<Long> =
         store.stmt(
@@ -920,7 +1050,7 @@ class ReplyRepository(private val store: Store) {
         store.stmt(
             """SELECT id, repo_id, pr_id, their_comment_id, their_author, their_body,
                       our_comment_id, our_body, file_path, line_no, body, status, error,
-                      published_url, created_at
+                      published_url, created_at, published_id
                FROM reply_draft $tail""",
         ) { ps ->
             bind(ps)
@@ -944,11 +1074,124 @@ class ReplyRepository(private val store: Store) {
                             error = rs.getString(13),
                             publishedUrl = rs.getString(14),
                             createdAt = rs.getString(15),
+                            publishedId = rs.getString(16),
                         ),
                     )
                 }
             }
         }
+}
+
+/** PRs ya conocidos, para avisar sólo cuando aparece uno nuevo. */
+class SeenPrRepository(private val store: Store) {
+
+    fun isFirstSweep(repoId: String): Boolean =
+        store.stmt("SELECT 1 FROM seen_pr WHERE repo_id = ? LIMIT 1") { ps ->
+            ps.setString(1, repoId)
+            ps.executeQuery().use { !it.next() }
+        }
+
+    /** Registra y devuelve los que no estaban. */
+    fun registerNew(repoId: String, prs: List<io.acr.forge.PullRequest>): List<io.acr.forge.PullRequest> {
+        val known = store.stmt("SELECT pr_id FROM seen_pr WHERE repo_id = ?") { ps ->
+            ps.setString(1, repoId)
+            ps.executeQuery().use { rs -> buildSet<Long> { while (rs.next()) add(rs.getLong(1)) } }
+        }
+        val fresh = prs.filter { it.id !in known }
+        if (fresh.isEmpty()) return emptyList()
+        store.transaction { conn ->
+            fresh.forEach { pr ->
+                conn.prepareStatement(
+                    "INSERT OR IGNORE INTO seen_pr(repo_id, pr_id, title, author, first_seen_at) VALUES (?,?,?,?,?)",
+                ).use { ps ->
+                    ps.setString(1, repoId)
+                    ps.setLong(2, pr.id)
+                    ps.setString(3, pr.title)
+                    ps.setString(4, pr.author)
+                    ps.setString(5, Instant.now().toString())
+                    ps.executeUpdate()
+                }
+            }
+        }
+        return fresh
+    }
+}
+
+/**
+ * Última lista de PRs conocida por repo, con su ETag.
+ *
+ * Sirve para dos cosas: mostrar la lista al instante mientras se revalida, y ahorrarse la
+ * descarga cuando el proveedor contesta 304.
+ */
+class PrCacheRepository(private val store: Store) {
+
+    data class Cached(val prs: List<io.acr.forge.PullRequest>, val etag: String?, val fetchedAt: String?)
+
+    fun get(repoId: String): Cached {
+        val prs = store.stmt(
+            """SELECT pr_id, title, author, source, target, head_sha, comments, updated_on, url,
+                      is_draft, created_on
+               FROM pr_cache WHERE repo_id = ? ORDER BY pr_id DESC""",
+        ) { ps ->
+            ps.setString(1, repoId)
+            ps.executeQuery().use { rs ->
+                buildList {
+                    while (rs.next()) add(
+                        io.acr.forge.PullRequest(
+                            id = rs.getLong(1), title = rs.getString(2), author = rs.getString(3),
+                            sourceBranch = rs.getString(4), targetBranch = rs.getString(5),
+                            headSha = rs.getString(6), commentCount = rs.getInt(7),
+                            updatedOn = rs.getString(8), url = rs.getString(9),
+                            isDraft = rs.getInt(10) == 1,
+                            createdOn = rs.getString(11) ?: "",
+                        ),
+                    )
+                }
+            }
+        }
+        val meta = store.stmt("SELECT etag, fetched_at FROM pr_cache_meta WHERE repo_id = ?") { ps ->
+            ps.setString(1, repoId)
+            ps.executeQuery().use { if (it.next()) it.getString(1) to it.getString(2) else null to null }
+        }
+        return Cached(prs, meta.first, meta.second)
+    }
+
+    /** Reemplaza la lista entera: un PR que se cerró tiene que desaparecer, no quedar pegado. */
+    fun put(repoId: String, prs: List<io.acr.forge.PullRequest>, etag: String?) {
+        store.transaction { conn ->
+            conn.prepareStatement("DELETE FROM pr_cache WHERE repo_id = ?").use { ps ->
+                ps.setString(1, repoId); ps.executeUpdate()
+            }
+            prs.forEach { pr ->
+                conn.prepareStatement(
+                    """INSERT INTO pr_cache(repo_id, pr_id, title, author, source, target, head_sha,
+                                             comments, updated_on, url, is_draft, created_on)
+                       VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
+                ).use { ps ->
+                    ps.setString(1, repoId); ps.setLong(2, pr.id); ps.setString(3, pr.title)
+                    ps.setString(4, pr.author); ps.setString(5, pr.sourceBranch)
+                    ps.setString(6, pr.targetBranch); ps.setString(7, pr.headSha)
+                    ps.setInt(8, pr.commentCount); ps.setString(9, pr.updatedOn)
+                    ps.setString(10, pr.url); ps.setInt(11, if (pr.isDraft) 1 else 0)
+                    ps.setString(12, pr.createdOn)
+                    ps.executeUpdate()
+                }
+            }
+            conn.prepareStatement(
+                """INSERT INTO pr_cache_meta(repo_id, etag, fetched_at) VALUES (?,?,?)
+                   ON CONFLICT(repo_id) DO UPDATE SET etag = excluded.etag, fetched_at = excluded.fetched_at""",
+            ).use { ps ->
+                ps.setString(1, repoId); ps.setString(2, etag)
+                ps.setString(3, Instant.now().toString()); ps.executeUpdate()
+            }
+        }
+    }
+
+    fun touch(repoId: String) {
+        store.stmt("UPDATE pr_cache_meta SET fetched_at = ? WHERE repo_id = ?") { ps ->
+            ps.setString(1, Instant.now().toString()); ps.setString(2, repoId); ps.executeUpdate()
+        }
+    }
 }
 
 class PrefsRepo(private val store: Store) {

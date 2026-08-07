@@ -21,7 +21,7 @@ import java.nio.file.Path
  * by a shutdown hook — same shape as mongo-explorer v3, no DI container.
  */
 class AppContext private constructor(
-    private val store: Store,
+    val store: Store,
     val repos: RepoRepository,
     val reviews: ReviewRepository,
     val publications: PublicationRepository,
@@ -29,6 +29,9 @@ class AppContext private constructor(
     val notes: LocalNoteRepository,
     val findings: FindingRepository,
     val replies: ReplyRepository,
+    val seenPrs: io.acr.data.SeenPrRepository,
+    val prCache: io.acr.data.PrCacheRepository,
+    val prLoader: io.acr.forge.PrLoader,
     val prefs: PrefsRepo,
     val engine: ReviewEngine,
     val auto: AutoReviewer,
@@ -56,6 +59,8 @@ class AppContext private constructor(
         const val PREF_LANGUAGE = "review.language"
         const val PREF_THEME = "ui.theme"
         const val PREF_UI_LANG = "ui.lang"
+        const val PREF_CLOSE_ACTION = "ui.closeAction"
+        const val PREF_PR_SORT = "ui.prSort"
 
         /**
          * @param dataDir dónde viven la base y la clave. Configurable para que los tests NO
@@ -73,14 +78,17 @@ class AppContext private constructor(
             val notes = LocalNoteRepository(store)
             val findings = FindingRepository(store)
             val replies = ReplyRepository(store)
+            val seenPrs = io.acr.data.SeenPrRepository(store)
+            val prCache = io.acr.data.PrCacheRepository(store)
+            val prLoader = io.acr.forge.PrLoader(prCache)
             val prefs = PrefsRepo(store)
             // Ninguna review de una corrida anterior puede seguir viva: el estado del motor es
             // en memoria. Sin esto quedan como "corriendo" para siempre en el panel.
             reviews.failOrphanedRunning()
             val notifier = io.acr.notify.Notifier(prefs)
             val engine = ReviewEngine(reviews, publications, comments, findings, replies, prefs, notifier)
-            val auto = AutoReviewer(repos, reviews, prefs, engine, notifier, replies)
-            return AppContext(store, repos, reviews, publications, comments, notes, findings, replies, prefs, engine, auto, notifier)
+            val auto = AutoReviewer(repos, reviews, prefs, engine, notifier, replies, seenPrs, prLoader)
+            return AppContext(store, repos, reviews, publications, comments, notes, findings, replies, seenPrs, prCache, prLoader, prefs, engine, auto, notifier)
         }
 
         /** La propiedad `acr.dataDir` gana sobre la ubicación estándar; la usan los tests. */

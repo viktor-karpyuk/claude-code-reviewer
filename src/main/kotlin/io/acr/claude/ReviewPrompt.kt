@@ -114,6 +114,10 @@ object ReviewPrompt {
             - Commit head: ${pr.headSha}
             - Rango del diff: $range
 
+            Los comandos de git de sólo lectura YA ESTAN AUTORIZADOS en esta sesión: corrélos sin
+            pedir permiso y sin avisar que no podrías. Si uno falla, mostrá el error exacto que
+            devolvió; no supongas que es un problema de permisos.
+
             Empezá por `git diff --stat $range` para dimensionar el cambio antes de leer nada.
             Si hay CLAUDE.md en la raíz o en los directorios afectados, leelos y verificá que el
             cambio cumpla lo que dicen; cuando marques una violación, citá textualmente la regla.

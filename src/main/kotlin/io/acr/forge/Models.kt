@@ -84,7 +84,37 @@ data class PullRequest(
     val url: String,
     /** GitHub lo marca explícito; Bitbucket no tiene borradores nativos y se detecta por título. */
     val isDraft: Boolean = false,
+    /**
+     * Cuándo se abrió el PR. Distinto de [updatedOn] y necesario aparte: para decidir qué revisar
+     * primero importa hace cuánto espera, no cuándo fue el último commit. El proveedor los
+     * devuelve ordenados por actividad reciente, que es justo el orden inverso.
+     */
+    val createdOn: String = "",
+    /** OPEN, MERGED o DECLINED. Por defecto abierto: es lo único que se lista sin pedirlo. */
+    val state: PrState = PrState.OPEN,
 )
+
+/**
+ * Estado del pull request.
+ *
+ * Los históricos —mergeados y cerrados— no se traen nunca solos: en `kubrik-erp-be` son más de
+ * 148 contra 4 abiertos, así que cargarlos por defecto sería pagar cientos de resultados para
+ * mostrar los cuatro que importan. Se piden cuando el usuario los pide.
+ */
+enum class PrState(val api: String, val labelKey: String) {
+    OPEN("OPEN", "prs.state.open"),
+    MERGED("MERGED", "prs.state.merged"),
+    DECLINED("DECLINED", "prs.state.declined"),
+    ;
+
+    companion object {
+        fun fromApi(value: String?): PrState =
+            entries.firstOrNull { it.api.equals(value, ignoreCase = true) }
+            // SUPERSEDED de Bitbucket y cualquier otro cierre caen en DECLINED: para revisar, lo
+            // único que cambia es que ya no está abierto.
+                ?: if (value.isNullOrBlank()) OPEN else DECLINED
+    }
+}
 
 /** Result of publishing a review back to the PR. */
 data class PostedComment(val id: String, val url: String)

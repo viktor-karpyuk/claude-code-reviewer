@@ -18,8 +18,38 @@ import java.net.http.HttpResponse
 import java.time.Duration
 
 /** Read PRs from a hosting provider and publish a review back to one. */
+/** Resultado de una revalidación: `notModified` significa que el caché sigue vigente. */
+data class PrListResult(
+    val prs: List<PullRequest>,
+    val etag: String?,
+    val notModified: Boolean,
+)
+
 interface Forge {
     suspend fun listPullRequests(repo: RepoRecord): List<PullRequest>
+
+    /**
+     * Igual que [listPullRequests] pero con revalidación condicional.
+     *
+     * Sólo aprovecha el 304 cuando la respuesta cabe en una página: con varias páginas el ETag
+     * de la primera no garantiza que el resto no haya cambiado, y dar por buena una lista
+     * incompleta sería peor que volver a pedirla.
+     */
+    suspend fun listPullRequestsConditional(repo: RepoRecord, etag: String?): PrListResult
+
+    /**
+     * Busca pull requests por estado, incluidos los históricos.
+     *
+     * Deliberadamente aparte de [listPullRequests] y sin caché: los cerrados y mergeados son
+     * cientos —148 contra 4 abiertos en `kubrik-erp-be`— y no se traen salvo que el usuario los
+     * pida. [maxPages] acota lo que se descarga de una vez.
+     */
+    suspend fun searchPullRequests(
+        repo: RepoRecord,
+        states: Set<PrState>,
+        maxPages: Int = 3,
+    ): List<PullRequest>
+
     suspend fun postComment(repo: RepoRecord, prId: Long, body: String): PostedComment
 
     /**
@@ -65,6 +95,29 @@ internal val lenientJson = Json { ignoreUnknownKeys = true; isLenient = true }
 internal val log: org.slf4j.Logger = org.slf4j.LoggerFactory.getLogger("io.acr.forge")
 
 /**
+ * Espera antes del reintento número [attempt] (base 0).
+ *
+ * Arranca en milisegundos y recién después escala. Medido contra `api.bitbucket.org` el
+ * 2026-08-06: con pedidos de a uno, sin concurrencia y sin ráfaga, alrededor del 40% devuelve 401
+ * al azar —falla en el borde, sin llegar a validar el token: el 401 no trae `x-asap-succeeded` ni
+ * `x-credential-type`, y responde en 1ms contra los 300ms de un 200—. Un reintento inmediato con
+ * la misma credencial pasa. Ante eso, esperar 16s no aporta nada y colgaba la UI casi un minuto
+ * antes de rendirse. La cola exponencial se conserva igual, porque el bloqueo por frecuencia
+ * —ráfagas seguidas y después un corte— también existe y de ese sólo se sale esperando.
+ *
+ * El jitter es proporcional y no un fijo de 400ms: varias llamadas que fallan juntas seguían la
+ * misma escalera y volvían a chocar en cada vuelta.
+ */
+private fun retryDelayMs(attempt: Int): Long {
+    val base = when (attempt) {
+        0 -> 250L
+        1 -> 500L
+        else -> (1_000L shl (attempt - 2)).coerceAtMost(20_000L)
+    }
+    return base + (0..(base / 2).toInt().coerceAtLeast(1)).random()
+}
+
+/**
  * @param idempotent si la petición se puede repetir sin efectos. Un GET sí; un POST que crea un
  *   comentario NO: si el servidor lo procesó y se perdió la respuesta, repetirlo publica el
  *   comentario dos veces. Para POST sólo se reintenta el 401, que es previo a la autorización y
@@ -73,7 +126,7 @@ internal val log: org.slf4j.Logger = org.slf4j.LoggerFactory.getLogger("io.acr.f
  */
 internal suspend fun send(
     request: HttpRequest,
-    attempts: Int = 7,
+    attempts: Int = 10,
     idempotent: Boolean = true,
     context: String = "",
 ): String = withContext(Dispatchers.IO) {
@@ -97,12 +150,7 @@ internal suspend fun send(
         if (!retryable) throw ForgeException(describe(context, lastStatus, lastBody))
         // No dormir después del último intento: eran ~20s de espera muerta antes de fallar.
         if (attempt == attempts - 1) return@repeat
-        // Backoff exponencial con jitter. Bitbucket devuelve 401 —no 429— cuando limita por
-        // frecuencia: deja pasar unas pocas seguidas y después corta un rato. Con esperas de
-        // cientos de milisegundos los 6 reintentos caían todos dentro de la misma ventana de
-        // bloqueo; hay que esperar en escala de segundos para salir de ella.
-        val backoff = (1_000L shl attempt).coerceAtMost(20_000L)
-        delay(backoff + (0..400).random())
+        delay(retryDelayMs(attempt))
     }
     throw ForgeException(describe(context, lastStatus, lastBody, attempts))
 }
@@ -111,11 +159,44 @@ private fun describe(context: String, status: Int, body: String, attempts: Int? 
     val where = if (context.isBlank()) "" else "[$context] "
     val tries = attempts?.let { " tras $it intentos" } ?: ""
     val hint = if (status == 401) {
-        "\n\nBitbucket responde 401 también cuando limita por frecuencia, no sólo cuando el " +
-            "token es inválido. Si otras llamadas al mismo repo funcionan, es límite de tasa: " +
-            "esperá unos segundos y reintentá."
+        "\n\nUn 401 de Bitbucket no significa necesariamente que el token esté vencido: una " +
+            "parte de los pedidos falla en el borde de Atlassian sin llegar a validar la " +
+            "credencial, y también responde 401 —no 429— cuando limita por frecuencia. Si otras " +
+            "llamadas al mismo repo funcionan, el token está bien: reintentá. Si fallan TODAS, " +
+            "ahí sí revisá el token en Ajustes."
     } else ""
     return "${where}HTTP $status$tries — ${body.take(300)}$hint"
+}
+
+internal data class ConditionalResponse(val status: Int, val body: String, val etag: String?)
+
+/**
+ * Como [send], pero deja pasar el 304: no es un error, es "tu copia sigue vigente".
+ */
+internal suspend fun sendConditional(
+    request: HttpRequest,
+    attempts: Int = 10,
+    context: String = "",
+): ConditionalResponse = withContext(Dispatchers.IO) {
+    var lastBody = ""
+    var lastStatus = 0
+    repeat(attempts) { attempt ->
+        val response = httpClient.send(request, HttpResponse.BodyHandlers.ofString())
+        val code = response.statusCode()
+        if (code == 304 || code in 200..299) {
+            return@withContext ConditionalResponse(
+                code, response.body(), response.headers().firstValue("etag").orElse(null),
+            )
+        }
+        lastStatus = code
+        lastBody = response.body()
+        val retryable = lastStatus == 401 || lastStatus == 429 || lastStatus >= 500 ||
+            (lastStatus == 403 && lastBody.contains("rate limit", ignoreCase = true))
+        if (!retryable) throw ForgeException(describe(context, lastStatus, lastBody))
+        if (attempt == attempts - 1) return@repeat
+        delay(retryDelayMs(attempt))
+    }
+    throw ForgeException(describe(context, lastStatus, lastBody, attempts))
 }
 
 /** Sigue la paginación hasta agotarla y devuelve todos los elementos. */
@@ -223,24 +304,76 @@ class BitbucketForge : Forge {
     /** Identidad del repo, para que un error diga siempre a cuál pertenece. */
     private fun ctx(repo: RepoRecord) = "${repo.name} · ${repo.owner}/${repo.slug}"
 
+    override suspend fun searchPullRequests(
+        repo: RepoRecord,
+        states: Set<PrState>,
+        maxPages: Int,
+    ): List<PullRequest> {
+        if (states.isEmpty()) return emptyList()
+        // Bitbucket acepta el parámetro repetido: state=MERGED&state=DECLINED.
+        val filtro = states.joinToString("&") { "state=${it.api}" }
+        val url = "$API/repositories/${repo.owner}/${repo.slug}/pullrequests?$filtro&pagelen=50"
+        return pagedBitbucket(
+            url, { request(it, repo.token).GET().build() }, maxPages = maxPages, context = ctx(repo),
+        ).mapNotNull { toPr(it) }
+    }
+
+    /** Un PR del JSON de Bitbucket. Devuelve null si le falta el id: se saltea, no rompe la lista. */
+    private fun toPr(pr: JsonObject): PullRequest? {
+        val id = pr.long("id") ?: return null
+        return PullRequest(
+            id = id,
+            title = pr.str("title") ?: "(sin título)",
+            author = pr.str("author", "display_name") ?: "?",
+            sourceBranch = pr.str("source", "branch", "name") ?: "?",
+            targetBranch = pr.str("destination", "branch", "name") ?: "?",
+            headSha = pr.str("source", "commit", "hash") ?: "",
+            commentCount = pr.int("comment_count") ?: 0,
+            updatedOn = pr.str("updated_on")?.take(16)?.replace('T', ' ') ?: "",
+            createdOn = pr.str("created_on")?.take(16)?.replace('T', ' ') ?: "",
+            state = PrState.fromApi(pr.str("state")),
+            url = pr.str("links", "html", "href") ?: "",
+        )
+    }
+
     override suspend fun listPullRequests(repo: RepoRecord): List<PullRequest> {
         val url = "$API/repositories/${repo.owner}/${repo.slug}/pullrequests?state=OPEN&pagelen=50"
         // mapNotNull y no map: un PR con forma inesperada se salta, no rompe todo el listado.
         return pagedBitbucket(url, { request(it, repo.token).GET().build() }, context = ctx(repo))
-            .mapNotNull { pr ->
-            val id = pr.long("id") ?: return@mapNotNull null
-            PullRequest(
-                id = id,
-                title = pr.str("title") ?: "(sin título)",
-                author = pr.str("author", "display_name") ?: "?",
-                sourceBranch = pr.str("source", "branch", "name") ?: "?",
-                targetBranch = pr.str("destination", "branch", "name") ?: "?",
-                headSha = pr.str("source", "commit", "hash") ?: "",
-                commentCount = pr.int("comment_count") ?: 0,
-                updatedOn = pr.str("updated_on")?.take(16)?.replace('T', ' ') ?: "",
-                url = pr.str("links", "html", "href") ?: "",
-            )
-        }
+            .mapNotNull { toPr(it) }
+    }
+
+    override suspend fun listPullRequestsConditional(repo: RepoRecord, etag: String?): PrListResult {
+        val url = "$API/repositories/${repo.owner}/${repo.slug}/pullrequests?state=OPEN&pagelen=50"
+        val req = request(url, repo.token)
+            .apply { if (!etag.isNullOrBlank()) header("If-None-Match", etag) }
+            .GET().build()
+        val res = sendConditional(req, context = ctx(repo))
+        if (res.status == 304) return PrListResult(emptyList(), etag, notModified = true)
+
+        val obj = lenientJson.parseToJsonElement(res.body).jsonObject
+        val hasMore = obj["next"]?.jsonPrimitive?.contentOrNull != null
+        // Con más páginas se resuelve por el camino normal, sin atajo de 304.
+        if (hasMore) return PrListResult(listPullRequests(repo), null, notModified = false)
+
+        val prs = (obj["values"]?.jsonArray ?: return PrListResult(emptyList(), res.etag, false))
+            .map { it.jsonObject }.mapNotNull { pr ->
+                val id = pr.long("id") ?: return@mapNotNull null
+                PullRequest(
+                    id = id,
+                    title = pr.str("title") ?: "(sin título)",
+                    author = pr.str("author", "display_name") ?: "?",
+                    sourceBranch = pr.str("source", "branch", "name") ?: "?",
+                    targetBranch = pr.str("destination", "branch", "name") ?: "?",
+                    headSha = pr.str("source", "commit", "hash") ?: "",
+                    commentCount = pr.int("comment_count") ?: 0,
+                    updatedOn = pr.str("updated_on")?.take(16)?.replace('T', ' ') ?: "",
+                createdOn = pr.str("created_on")?.take(16)?.replace('T', ' ') ?: "",
+                state = PrState.fromApi(pr.str("state")),
+                    url = pr.str("links", "html", "href") ?: "",
+                )
+            }
+        return PrListResult(prs, res.etag, notModified = false)
     }
 
     override suspend fun getPullRequest(repo: RepoRecord, prId: Long): PullRequest? {
@@ -258,6 +391,8 @@ class BitbucketForge : Forge {
             headSha = pr.str("source", "commit", "hash") ?: "",
             commentCount = pr.int("comment_count") ?: 0,
             updatedOn = pr.str("updated_on")?.take(16)?.replace('T', ' ') ?: "",
+                createdOn = pr.str("created_on")?.take(16)?.replace('T', ' ') ?: "",
+                state = PrState.fromApi(pr.str("state")),
             url = pr.str("links", "html", "href") ?: "",
         )
     }
@@ -398,6 +533,52 @@ class GitHubForge : Forge {
                 headSha = pr.str("head", "sha") ?: "",
                 commentCount = pr.int("comments") ?: 0,
                 updatedOn = pr.str("updated_at")?.take(16)?.replace('T', ' ') ?: "",
+                createdOn = pr.str("created_at")?.take(16)?.replace('T', ' ') ?: "",
+                url = pr.str("html_url") ?: "",
+                isDraft = pr.str("draft") == "true",
+            )
+        }
+    }
+
+    override suspend fun listPullRequestsConditional(repo: RepoRecord, etag: String?): PrListResult =
+        PrListResult(listPullRequests(repo), null, notModified = false)
+
+    override suspend fun searchPullRequests(
+        repo: RepoRecord,
+        states: Set<PrState>,
+        maxPages: Int,
+    ): List<PullRequest> {
+        if (states.isEmpty()) return emptyList()
+        // GitHub no distingue "mergeado" de "cerrado" en el filtro: sólo open/closed/all. Se pide
+        // lo que corresponda y se separa acá con `merged_at`, que es el único dato que lo dice.
+        val api = when {
+            states == setOf(PrState.OPEN) -> "open"
+            PrState.OPEN in states -> "all"
+            else -> "closed"
+        }
+        val url = "$API/repos/${repo.owner}/${repo.slug}/pulls?state=$api&per_page=50" +
+            "&sort=updated&direction=desc"
+        return pagedGitHub(
+            url, { request(it, repo.token).GET().build() }, maxPages = maxPages, context = ctx(repo),
+        ).mapNotNull { pr ->
+            val number = pr.long("number") ?: return@mapNotNull null
+            val estado = when {
+                pr.str("state").equals("open", ignoreCase = true) -> PrState.OPEN
+                !pr.str("merged_at").isNullOrBlank() -> PrState.MERGED
+                else -> PrState.DECLINED
+            }
+            if (estado !in states) return@mapNotNull null
+            PullRequest(
+                id = number,
+                title = pr.str("title") ?: "(untitled)",
+                author = pr.str("user", "login") ?: "?",
+                sourceBranch = pr.str("head", "ref") ?: "?",
+                targetBranch = pr.str("base", "ref") ?: "?",
+                headSha = pr.str("head", "sha") ?: "",
+                commentCount = pr.int("comments") ?: 0,
+                updatedOn = pr.str("updated_at")?.take(16)?.replace('T', ' ') ?: "",
+                createdOn = pr.str("created_at")?.take(16)?.replace('T', ' ') ?: "",
+                state = estado,
                 url = pr.str("html_url") ?: "",
                 isDraft = pr.str("draft") == "true",
             )
@@ -419,6 +600,7 @@ class GitHubForge : Forge {
             headSha = pr.str("head", "sha") ?: "",
             commentCount = pr.int("comments") ?: 0,
             updatedOn = pr.str("updated_at")?.take(16)?.replace('T', ' ') ?: "",
+                createdOn = pr.str("created_at")?.take(16)?.replace('T', ' ') ?: "",
             url = pr.str("html_url") ?: "",
         )
     }

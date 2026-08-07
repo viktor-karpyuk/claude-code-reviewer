@@ -16,13 +16,17 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.FilterChip
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
@@ -87,6 +91,13 @@ fun CodePanel(
     // Sin esto, un doble click lanzaba dos publicaciones: ambas leían publishedId == null del
     // mismo closure y el POST no es idempotente, así que quedaban dos comentarios iguales.
     val publishingIds = remember(repo.id, prId) { mutableStateListOf<String>() }
+    // Recorrido de hallazgos: en qué punto va, y a qué línea hay que bajar cuando el archivo
+    // termine de cargar (el diff se lee en otro hilo, así que el scroll no puede ser inmediato).
+    var cursor by remember(repo.id, prId) { mutableStateOf(-1) }
+    var pendingLine by remember(repo.id, prId) { mutableStateOf<Int?>(null) }
+    var highlight by remember(repo.id, prId) { mutableStateOf<Pair<String, Int>?>(null) }
+    var sidebar by remember(repo.id, prId) { mutableStateOf(Sidebar.ARCHIVOS) }
+    val diffState = rememberLazyListState()
 
     val notes = io.acr.ui.dbState(repo.id, prId, notesVersion, initial = emptyList()) {
         ctx.notes.forPr(repo.id, prId)
@@ -109,6 +120,36 @@ fun CodePanel(
         lines = DiffParser.parse(Git.diffFile(workDir, range, path))
     }
 
+    // Todo lo que hay para revisar, en el orden en que se lee: por archivo del diff y, dentro de
+    // cada archivo, por línea. Los hallazgos de la review y las notas propias van juntos: para
+    // recorrerlos uno por uno da igual quién los escribió.
+    val anchors = remember(files, findings, notes) { buildAnchors(files, findings, notes) }
+
+    fun irA(i: Int) {
+        if (i !in anchors.indices) return
+        cursor = i
+        val a = anchors[i]
+        if (selected != a.filePath) selected = a.filePath
+        pendingLine = a.lineNo
+        highlight = a.lineNo?.let { a.filePath to it }
+        if (a.lineNo == null) {
+            // Sin línea (hallazgo de archivo entero) no hay adónde bajar: alcanza con abrirlo.
+            pendingLine = null
+        }
+    }
+
+    // El scroll espera a que el archivo cargue: al cambiar de archivo, `lines` llega después.
+    LaunchedEffect(lines, pendingLine) {
+        val target = pendingLine ?: return@LaunchedEffect
+        if (lines.isEmpty()) return@LaunchedEffect
+        val idx = lines.indexOfFirst { it.anchorLine == target && it.kind != DiffLine.Kind.HUNK }
+        if (idx >= 0) {
+            // Unas líneas de contexto arriba: pegado al borde superior no se entiende qué se mira.
+            diffState.scrollToItem(maxOf(0, idx - 4))
+        }
+        pendingLine = null
+    }
+
     if (range == null) {
         Box(Modifier.fillMaxSize()) {
             Text(
@@ -123,20 +164,60 @@ fun CodePanel(
     Row(Modifier.fillMaxSize()) {
         // Lista de archivos
         Column(Modifier.width(330.dp).fillMaxHeight()) {
-            Text(
-                "${files.size} archivos · ${notes.size} notas · ${findings.size} hallazgos",
-                style = MaterialTheme.typography.labelMedium,
-                modifier = Modifier.padding(bottom = 6.dp),
-            )
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                FilterChip(
+                    sidebar == Sidebar.ARCHIVOS,
+                    { sidebar = Sidebar.ARCHIVOS },
+                    { Text(io.acr.i18n.t("code.tabFiles", files.size)) },
+                )
+                FilterChip(
+                    sidebar == Sidebar.HALLAZGOS,
+                    { sidebar = Sidebar.HALLAZGOS },
+                    { Text(io.acr.i18n.t("code.tabFindings", anchors.size)) },
+                )
+            }
+            Spacer(Modifier.height(6.dp))
             if (loading) LinearProgressIndicator(Modifier.fillMaxWidth())
-            LazyColumn(Modifier.fillMaxSize()) {
-                items(files, key = { it.path }) { f ->
-                    FileRow(
-                        f = f,
-                        active = selected == f.path,
-                        notes = notes.count { it.filePath == f.path },
-                        findings = findings.count { it.filePath == f.path },
-                    ) { selected = f.path }
+            if (sidebar == Sidebar.ARCHIVOS) {
+                LazyColumn(Modifier.fillMaxSize()) {
+                    items(files, key = { it.path }) { f ->
+                        FileRow(
+                            f = f,
+                            active = selected == f.path,
+                            notes = notes.count { it.filePath == f.path },
+                            findings = findings.count { it.filePath == f.path },
+                        ) { selected = f.path }
+                    }
+                }
+            } else if (anchors.isEmpty()) {
+                Text(
+                    io.acr.i18n.t("code.noFindings"),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(top = 12.dp),
+                )
+            } else {
+                // Agrupados por archivo: lo que el usuario quiere ver de un vistazo es en qué
+                // archivo cae cada observación, no una lista plana de títulos.
+                LazyColumn(Modifier.fillMaxSize()) {
+                    anchors.groupBy { it.filePath }.forEach { (path, delArchivo) ->
+                        item(key = "h:$path") {
+                            Text(
+                                path,
+                                style = MaterialTheme.typography.labelSmall
+                                    .copy(fontFamily = FontFamily.Monospace),
+                                color = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.padding(top = 10.dp, bottom = 2.dp),
+                            )
+                        }
+                        items(delArchivo, key = { it.id }) { a ->
+                            AnchorRow(
+                                a = a,
+                                active = cursor >= 0 && anchors.getOrNull(cursor)?.id == a.id,
+                                onClick = { irA(anchors.indexOfFirst { it.id == a.id }) },
+                            )
+                        }
+                    }
                 }
             }
         }
@@ -145,10 +226,36 @@ fun CodePanel(
 
         // Diff del archivo elegido
         Column(Modifier.weight(1f).fillMaxHeight()) {
+            if (anchors.isNotEmpty()) {
+                // Recorrido secuencial: avanza de hallazgo en hallazgo y cambia de archivo solo
+                // cuando se terminan los del actual.
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    OutlinedButton(
+                        enabled = cursor > 0,
+                        onClick = { irA(cursor - 1) },
+                    ) { Text(io.acr.i18n.t("code.prev")) }
+                    Spacer(Modifier.width(6.dp))
+                    OutlinedButton(
+                        enabled = cursor < anchors.size - 1,
+                        onClick = { irA(if (cursor < 0) 0 else cursor + 1) },
+                    ) { Text(io.acr.i18n.t("code.next")) }
+                    Spacer(Modifier.width(10.dp))
+                    val actual = anchors.getOrNull(cursor)
+                    Text(
+                        if (actual == null) io.acr.i18n.t("code.walkStart", anchors.size)
+                        else io.acr.i18n.t("code.walkAt", cursor + 1, anchors.size) +
+                            " · " + actual.filePath.substringAfterLast('/') +
+                            (actual.lineNo?.let { ":$it" } ?: ""),
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                Spacer(Modifier.height(6.dp))
+            }
             selected?.let {
                 Text(it, style = MaterialTheme.typography.titleSmall.copy(fontFamily = FontFamily.Monospace))
                 Text(
-                    "Hacé clic en una línea para dejar una nota local.",
+                    io.acr.i18n.t("code.clickLine"),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -156,11 +263,14 @@ fun CodePanel(
                 HorizontalDivider()
             }
             val hScroll = rememberScrollState()
-            LazyColumn(Modifier.fillMaxSize()) {
+            LazyColumn(Modifier.fillMaxSize(), state = diffState) {
                 itemsIndexed(lines) { idx, line ->
                     DiffRow(
                         line = line,
                         hScroll = hScroll,
+                        highlighted = highlight?.let { (f, l) ->
+                            f == selected && line.anchorLine == l && line.kind != DiffLine.Kind.HUNK
+                        } == true,
                         onClick = {
                             if (line.kind != DiffLine.Kind.META && line.kind != DiffLine.Kind.HUNK) {
                                 composing = (selected ?: "") to line.anchorLine
@@ -298,11 +408,19 @@ private fun FileRow(f: Git.FileChange, active: Boolean, notes: Int, findings: In
 }
 
 @Composable
-internal fun DiffRow(line: DiffLine, hScroll: androidx.compose.foundation.ScrollState, onClick: () -> Unit) {
-    val bg = when (line.kind) {
-        DiffLine.Kind.ADDED -> ADDED_BG
-        DiffLine.Kind.REMOVED -> REMOVED_BG
-        DiffLine.Kind.HUNK -> HUNK_BG
+internal fun DiffRow(
+    line: DiffLine,
+    hScroll: androidx.compose.foundation.ScrollState,
+    onClick: () -> Unit,
+    highlighted: Boolean = false,
+) {
+    // El resaltado gana sobre el color del diff: al saltar a un hallazgo hay que ver dónde cayó
+    // sin buscarlo con la vista, y el verde de "línea agregada" no alcanza para distinguirla.
+    val bg = when {
+        highlighted -> MaterialTheme.colorScheme.primary.copy(alpha = 0.22f)
+        line.kind == DiffLine.Kind.ADDED -> ADDED_BG
+        line.kind == DiffLine.Kind.REMOVED -> REMOVED_BG
+        line.kind == DiffLine.Kind.HUNK -> HUNK_BG
         else -> Color.Transparent
     }
     if (line.kind == DiffLine.Kind.META) return
@@ -432,4 +550,92 @@ private fun NoteDialog(title: String, initial: String, onDismiss: () -> Unit, on
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancelar") } },
     )
+}
+
+/** Qué muestra la columna izquierda: el árbol del diff o lo que hay para revisar. */
+internal enum class Sidebar { ARCHIVOS, HALLAZGOS }
+
+/**
+ * Una observación anclada al código: un hallazgo de la review o una nota propia.
+ *
+ * Existe para poder recorrerlas en orden sin importar de dónde salió cada una. El orden es el de
+ * lectura —archivo del diff, después línea—, que es como uno revisa; el orden en que la review las
+ * devolvió no le sirve a nadie.
+ */
+internal data class Anchor(
+    val id: String,
+    val kind: Kind,
+    val filePath: String,
+    val lineNo: Int?,
+    val title: String,
+    val severity: String?,
+    val published: Boolean,
+) {
+    enum class Kind { HALLAZGO, NOTA }
+}
+
+/**
+ * Arma el recorrido: hallazgos de la review y notas propias, en orden de lectura.
+ *
+ * El orden es el del diff —archivo por archivo, y dentro de cada uno por línea—, que es como uno
+ * revisa. El orden en que la review devolvió los hallazgos no le sirve a nadie. Un archivo que ya
+ * no está en el diff (porque el PR cambió desde la review) va al final en vez de descolocar todo.
+ */
+internal fun buildAnchors(
+    files: List<Git.FileChange>,
+    findings: List<io.acr.data.Finding>,
+    notes: List<LocalNote>,
+): List<Anchor> {
+    val orden = files.withIndex().associate { (i, f) -> f.path to i }
+    val deHallazgos = findings.map {
+        Anchor(it.id, Anchor.Kind.HALLAZGO, it.filePath, it.lineNo, it.title, it.severity, it.publishedId != null)
+    }
+    val deNotas = notes.map {
+        Anchor(
+            it.id, Anchor.Kind.NOTA, it.filePath, it.lineNo,
+            it.body.lineSequence().firstOrNull().orEmpty(), null, it.publishedId != null,
+        )
+    }
+    return (deHallazgos + deNotas).sortedWith(
+        compareBy(
+            { orden[it.filePath] ?: Int.MAX_VALUE },
+            { it.lineNo ?: Int.MAX_VALUE },
+            { it.kind.ordinal },
+            { it.id },
+        ),
+    )
+}
+
+@Composable
+private fun AnchorRow(a: Anchor, active: Boolean, onClick: () -> Unit) {
+    val bg = if (active) MaterialTheme.colorScheme.surfaceVariant else MaterialTheme.colorScheme.surface
+    Row(
+        Modifier.fillMaxWidth().background(bg).clickableText(onClick)
+            .padding(horizontal = 6.dp, vertical = 5.dp),
+    ) {
+        Text(
+            a.lineNo?.let { ":$it" } ?: "—",
+            style = MaterialTheme.typography.labelSmall.copy(fontFamily = FontFamily.Monospace),
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.width(46.dp),
+        )
+        Column(Modifier.weight(1f)) {
+            Text(a.title, style = MaterialTheme.typography.bodySmall, maxLines = 2)
+            Row {
+                Text(
+                    if (a.kind == Anchor.Kind.HALLAZGO) "▲ " + (a.severity ?: "") else "✎",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = if (a.kind == Anchor.Kind.HALLAZGO) Color(0xFFD08A2C)
+                    else MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                if (a.published) {
+                    Text(
+                        "  " + io.acr.i18n.t("common.published"),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.primary,
+                    )
+                }
+            }
+        }
+    }
 }

@@ -4,6 +4,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -53,6 +54,7 @@ private val CONSUMO_FG = Color(0xFF2E9E63)
  * revisando varios repos de fondo hace falta un lugar donde ver todo junto y, sobre todo, qué
  * quedó listo esperando que alguien lo publique.
  */
+@OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
 @Composable
 fun DashboardPanel(ctx: AppContext, onOpenPr: (repoId: String, prId: Long) -> Unit) {
     val scope = rememberCoroutineScope()
@@ -74,6 +76,7 @@ fun DashboardPanel(ctx: AppContext, onOpenPr: (repoId: String, prId: Long) -> Un
     // Al tocar una tarjeta se muestra sólo esa sección: el número de arriba y la lista de abajo
     // eran la misma cosa, pero la lista quedaba enterrada bajo los gráficos.
     var focus by remember { mutableStateOf<String?>(null) }
+    var showHistory by remember { mutableStateOf(false) }
     // Los pendientes salen de consultar a los proveedores, así que NO se refrescan con el tic:
     // sería una ráfaga de llamadas cada 10s contra un token que ya limita por frecuencia.
     var pending by remember { mutableStateOf<List<PendingPr>?>(null) }
@@ -99,112 +102,182 @@ fun DashboardPanel(ctx: AppContext, onOpenPr: (repoId: String, prId: Long) -> Un
         snapshot = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
             Snapshot(
                 ready = ctx.reviews.readyToPublish(),
+                published = ctx.reviews.published(),
                 recent = ctx.reviews.recent(),
                 usage = ctx.reviews.usage(),
                 repoNames = ctx.repos.list().associate { it.id to it.name },
                 replies = ctx.replies.openOnes(),
                 totals = ctx.reviews.totals(),
+                current = ctx.reviews.currentPeriods(),
+                daily = ctx.reviews.statsByPeriod("day", 14),
                 weekly = ctx.reviews.statsByPeriod("week", 8),
-                monthly = ctx.reviews.statsByPeriod("month", 6),
+                monthly = ctx.reviews.statsByPeriod("month", 12),
             )
         }
     }
 
     Column(Modifier.fillMaxSize().padding(20.dp)) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Column(Modifier.weight(1f)) {
-                Text(io.acr.i18n.t("dash.title"), style = MaterialTheme.typography.headlineSmall)
-                Text(
-                    io.acr.i18n.t("dash.subtitle"),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-            OutlinedButton(
-                enabled = !autoStatus.running,
-                onClick = { scope.launch { ctx.auto.runOnce() } },
-            ) { Text(if (autoStatus.running) io.acr.i18n.t("dash.searching") else io.acr.i18n.t("dash.findNew")) }
-        }
-
-        Spacer(Modifier.height(12.dp))
-        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-            Stat(
-                io.acr.i18n.t("dash.inProgress"), running.size.toString(),
-                "${running.count { it.auto }} automáticas",
-                selected = focus == "running",
-                onClick = { focus = if (focus == "running") null else "running" },
-            )
-            Stat(
-                io.acr.i18n.t("dash.readyToPublish"), snapshot.ready.size.toString(),
-                io.acr.i18n.t("dash.awaitingYou"),
-                selected = focus == "ready",
-                onClick = { focus = if (focus == "ready") null else "ready" },
-            )
-            Stat(
-                io.acr.i18n.t("dash.repliedToYou"), snapshot.replies.size.toString(),
-                io.acr.i18n.t("dash.threadsWaiting"),
-                selected = focus == "replies",
-                onClick = { focus = if (focus == "replies") null else "replies" },
-            )
-            Stat(io.acr.i18n.t("dash.prsReviewed"), snapshot.totals.prsReviewed.toString(), "${snapshot.totals.reviews} corridas")
-            Stat(io.acr.i18n.t("dash.publishedCount"), snapshot.totals.published.toString(), "de ${snapshot.totals.reviews} terminadas")
-        }
-        Spacer(Modifier.height(10.dp))
-        // El costo va aparte y en verde: no es una métrica de trabajo como las de arriba, y con
-        // suscripción ni siquiera es un cargo. Mezclarlo con el resto lo hacía leer como factura.
-        Row(
-            Modifier.fillMaxWidth()
-                .clip(RoundedCornerShape(8.dp))
-                .background(CONSUMO_BG)
-                .padding(12.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Column {
-                Text(
-                    "Consumo · ~US$ ${"%.2f".format(snapshot.usage.costUsd)} equivalente API",
-                    style = MaterialTheme.typography.titleSmall,
-                    color = CONSUMO_FG,
-                )
-                Text(
-                    "${formatTokens(snapshot.usage.tokens)} tokens. Con suscripción no se factura " +
-                        "por review: el consumo real son los tokens, no los dólares.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-        }
-        Spacer(Modifier.height(8.dp))
-        Text(
-            "Origen: ${snapshot.totals.auto} automáticas · ${snapshot.totals.manual} manuales" +
-                if (snapshot.totals.failed > 0) " · ${snapshot.totals.failed} fallidas" else "",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-
-        Spacer(Modifier.height(8.dp))
-        Text(
-            autoStatus.lastRunAt
-                ?.let { "Automático · último barrido ${it.take(16).replace('T', ' ')} · ${autoStatus.lastMessage}" }
-                ?: "Automático · todavía no corrió.",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-
-        Spacer(Modifier.height(12.dp))
-        HorizontalDivider()
-
-        focus?.let {
-            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(bottom = 6.dp)) {
-                Text(
-                    io.acr.i18n.t("dash.filtered"),
-                    style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.primary,
-                )
-                TextButton(onClick = { focus = null }) { Text(io.acr.i18n.t("dash.showAll")) }
-            }
-        }
-
         LazyColumn(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            // El encabezado va DENTRO de la lista: si queda fijo arriba, en una ventana chica
+            // ocupa toda la altura y no hay forma de llegar a lo de abajo.
+            item {
+                Column {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text(io.acr.i18n.t("dash.title"), style = MaterialTheme.typography.headlineSmall)
+                    Text(
+                        io.acr.i18n.t("dash.subtitle"),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                OutlinedButton(
+                    enabled = !autoStatus.running,
+                    onClick = { scope.launch { ctx.auto.runOnce() } },
+                ) { Text(if (autoStatus.running) io.acr.i18n.t("dash.searching") else io.acr.i18n.t("dash.findNew")) }
+            }
+
+            Spacer(Modifier.height(12.dp))
+            // FlowRow y no Row: en una ventana angosta las tarjetas se acomodan
+            // en varias filas en vez de quedar cortadas a la derecha.
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                Stat(
+                    io.acr.i18n.t("dash.inProgress"), running.size.toString(),
+                    "${running.count { it.auto }} automáticas",
+                    selected = focus == "running",
+                    onClick = { focus = if (focus == "running") null else "running" },
+                )
+                Stat(
+                    io.acr.i18n.t("dash.readyToPublish"), snapshot.ready.size.toString(),
+                    io.acr.i18n.t("dash.awaitingYou"),
+                    selected = focus == "ready",
+                    onClick = { focus = if (focus == "ready") null else "ready" },
+                )
+                Stat(
+                    io.acr.i18n.t("dash.repliedToYou"), snapshot.replies.size.toString(),
+                    io.acr.i18n.t("dash.threadsWaiting"),
+                    selected = focus == "replies",
+                    onClick = { focus = if (focus == "replies") null else "replies" },
+                )
+                Stat(
+                    io.acr.i18n.t("dash.prsReviewed"), snapshot.totals.prsReviewed.toString(),
+                    "${snapshot.totals.reviews} corridas",
+                    selected = focus == "recent",
+                    onClick = { focus = if (focus == "recent") null else "recent" },
+                )
+                Stat(
+                    io.acr.i18n.t("dash.publishedCount"), snapshot.totals.published.toString(),
+                    "de ${snapshot.totals.reviews} terminadas",
+                    selected = focus == "published",
+                    onClick = { focus = if (focus == "published") null else "published" },
+                )
+            }
+            Spacer(Modifier.height(10.dp))
+            // El costo va aparte y en verde: no es una métrica de trabajo como las de arriba, y con
+            // suscripción ni siquiera es un cargo. Mezclarlo con el resto lo hacía leer como factura.
+            Row(
+                Modifier.fillMaxWidth()
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(CONSUMO_BG)
+                    .padding(12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Column {
+                    Text(
+                        "Consumo · ~US$ ${"%.2f".format(snapshot.usage.costUsd)} equivalente API",
+                        style = MaterialTheme.typography.titleSmall,
+                        color = CONSUMO_FG,
+                    )
+                    Text(
+                        "${formatTokens(snapshot.usage.tokens)} tokens. Con suscripción no se factura " +
+                            "por review: el consumo real son los tokens, no los dólares.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+            Spacer(Modifier.height(8.dp))
+            Text(
+                "Origen: ${snapshot.totals.auto} automáticas · ${snapshot.totals.manual} manuales" +
+                    if (snapshot.totals.failed > 0) " · ${snapshot.totals.failed} fallidas" else "",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+
+            Spacer(Modifier.height(8.dp))
+            Text(
+                autoStatus.lastRunAt
+                    ?.let { "Automático · último barrido ${it.take(16).replace('T', ' ')} · ${autoStatus.lastMessage}" }
+                    ?: "Automático · todavía no corrió.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+
+            Spacer(Modifier.height(12.dp))
+            HorizontalDivider()
+
+            focus?.let {
+                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(bottom = 6.dp)) {
+                    Text(
+                        io.acr.i18n.t("dash.filtered"),
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.primary,
+                    )
+                    TextButton(onClick = { focus = null }) { Text(io.acr.i18n.t("dash.showAll")) }
+                }
+            }
+
+
+                }
+            }
+
+            if (focus == null) {
+                item {
+                    // El período EN CURSO, no un listado: lo primero que uno quiere saber es
+                    // cuánto se hizo hoy, esta semana y este mes.
+                    // FlowRow y no Row: en una ventana angosta las tarjetas se acomodan
+                    // en varias filas en vez de quedar cortadas a la derecha.
+                    FlowRow(
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                        verticalArrangement = Arrangement.spacedBy(10.dp),
+                    ) {
+                        val c = snapshot.current
+                        PeriodNow(
+                            io.acr.i18n.t("dash.today"), c.today.takeLast(5).replace('-', '/'),
+                            c.todayReviews, c.todayPrs, Modifier.weight(1f),
+                        )
+                        PeriodNow(
+                            io.acr.i18n.t("dash.thisWeek"),
+                            io.acr.i18n.t("dash.weekNum") + " " + c.week,
+                            c.weekReviews, c.weekPrs, Modifier.weight(1f),
+                        )
+                        PeriodNow(
+                            io.acr.i18n.t("dash.thisMonth"), monthName(c.month),
+                            c.monthReviews, c.monthPrs, Modifier.weight(1f),
+                        )
+                    }
+                    Spacer(Modifier.height(8.dp))
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(io.acr.i18n.t("dash.history"), style = MaterialTheme.typography.titleSmall)
+                        TextButton(onClick = { showHistory = !showHistory }) {
+                            Text(io.acr.i18n.t(if (showHistory) "dash.hide" else "dash.show"))
+                        }
+                    }
+                    if (showHistory) {
+                        Row(horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+                            MiniChart(io.acr.i18n.t("dash.byDay"), snapshot.daily, Modifier.weight(1f))
+                            MiniChart(io.acr.i18n.t("dash.byWeek"), snapshot.weekly, Modifier.weight(1f))
+                            MiniChart(io.acr.i18n.t("dash.byMonth"), snapshot.monthly, Modifier.weight(1f))
+                        }
+                    }
+                    Spacer(Modifier.height(6.dp))
+                    HorizontalDivider()
+                }
+            }
+
             if (focus == null || focus == "ready") {
             item { Section("Listas para publicar (${snapshot.ready.size})") }
             if (snapshot.ready.isEmpty()) {
@@ -308,17 +381,21 @@ fun DashboardPanel(ctx: AppContext, onOpenPr: (repoId: String, prId: Long) -> Un
             }
             }
 
-            if (focus == null) {
+            if (focus == "published") {
+                item { Section(io.acr.i18n.t("dash.publishedSection") + " (${snapshot.published.size})") }
+                if (snapshot.published.isEmpty()) {
+                    item { Empty(io.acr.i18n.t("dash.publishedNone")) }
+                }
+                items(snapshot.published, key = { "pub-${it.id}" }) { r ->
+                    ReviewRow(r, snapshot.repoNames[r.repoId] ?: r.repoId) { onOpenPr(r.repoId, r.prId) }
+                }
+            }
+
+            if (focus == null || focus == "recent") {
             item { Section(io.acr.i18n.t("dash.recent")) }
             items(snapshot.recent, key = { "h-${it.id}" }) { r ->
                 ReviewRow(r, snapshot.repoNames[r.repoId] ?: r.repoId) { onOpenPr(r.repoId, r.prId) }
             }
-            }
-            if (focus == null) {
-            item { Section(io.acr.i18n.t("dash.byWeek")) }
-            item { PeriodChart(snapshot.weekly) }
-            item { Section(io.acr.i18n.t("dash.byMonth")) }
-            item { PeriodChart(snapshot.monthly) }
             }
 
         }
@@ -336,12 +413,16 @@ private data class PendingPr(
 
 private data class Snapshot(
     val ready: List<ReviewRecord> = emptyList(),
+    val published: List<ReviewRecord> = emptyList(),
     val recent: List<ReviewRecord> = emptyList(),
     val usage: io.acr.data.ReviewRepository.Usage = io.acr.data.ReviewRepository.Usage(0.0, 0),
     val repoNames: Map<String, String> = emptyMap(),
     val replies: List<io.acr.data.ReplyDraft> = emptyList(),
     val totals: io.acr.data.ReviewRepository.Totals =
         io.acr.data.ReviewRepository.Totals(0, 0, 0, 0, 0, 0),
+    val current: io.acr.data.ReviewRepository.Current =
+        io.acr.data.ReviewRepository.Current(0, 0, 0, 0, 0, 0, "", "", ""),
+    val daily: List<io.acr.data.ReviewRepository.PeriodStat> = emptyList(),
     val weekly: List<io.acr.data.ReviewRepository.PeriodStat> = emptyList(),
     val monthly: List<io.acr.data.ReviewRepository.PeriodStat> = emptyList(),
 )
@@ -364,6 +445,92 @@ private fun openInBrowser(url: String) {
 private fun elapsed(startedAt: Long): String {
     val seconds = ((System.currentTimeMillis() - startedAt) / 1000).coerceAtLeast(0)
     return if (seconds < 60) "${seconds}s" else "${seconds / 60}m ${seconds % 60}s"
+}
+
+/** Un período en curso: el número grande y de qué período habla. */
+@Composable
+private fun PeriodNow(
+    label: String,
+    period: String,
+    reviews: Int,
+    prs: Int,
+    modifier: Modifier = Modifier,
+) {
+    Column(
+        modifier.clip(RoundedCornerShape(8.dp))
+            .background(MaterialTheme.colorScheme.surfaceVariant)
+            .padding(12.dp),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(label, style = MaterialTheme.typography.titleSmall)
+            Spacer(Modifier.weight(1f))
+            Text(
+                period,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        Text("$reviews", style = MaterialTheme.typography.headlineSmall)
+        Text(
+            io.acr.i18n.t("dash.reviewsOnPrs", prs),
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
+}
+
+/** "2026-08" -> "agosto". Sin locale: son doce nombres y evita depender del idioma del sistema. */
+@Composable
+private fun monthName(ym: String): String {
+    val idx = ym.substringAfter('-', "").toIntOrNull() ?: return ym
+    val key = listOf(
+        "jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec",
+    ).getOrNull(idx - 1) ?: return ym
+    return io.acr.i18n.t("month.$key")
+}
+
+/** Versión compacta para el bloque de arriba: etiqueta corta, barra y número. */
+@Composable
+private fun MiniChart(
+    title: String,
+    stats: List<io.acr.data.ReviewRepository.PeriodStat>,
+    modifier: Modifier = Modifier,
+) {
+    Column(modifier) {
+        Text(title, style = MaterialTheme.typography.titleSmall)
+        Spacer(Modifier.height(4.dp))
+        if (stats.isEmpty()) {
+            Text(
+                io.acr.i18n.t("dash.noStats"),
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            return@Column
+        }
+        val max = stats.maxOf { it.reviews }.coerceAtLeast(1)
+        stats.forEach { st ->
+            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(vertical = 1.dp)) {
+                Text(
+                    // El período viene como 2026-08-05 o 2026-S31; se muestra sólo la parte útil.
+                    st.period.removePrefix("2026-").removePrefix("20"),
+                    style = MaterialTheme.typography.labelSmall.copy(fontFamily = FontFamily.Monospace),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.width(52.dp),
+                )
+                Box(
+                    Modifier.width((110 * st.reviews / max).coerceAtLeast(3).dp)
+                        .height(10.dp)
+                        .clip(RoundedCornerShape(2.dp))
+                        .background(MaterialTheme.colorScheme.primary),
+                )
+                Text(
+                    "  ${st.reviews}",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+    }
 }
 
 /** Barras simples: la escala es relativa al período con más reviews. */

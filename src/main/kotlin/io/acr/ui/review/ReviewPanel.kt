@@ -74,7 +74,9 @@ fun ReviewPanel(
     var depth by remember(repo.id, prId) { mutableStateOf(repo.defaultDepth) }
     var kind by remember(repo.id, prId) { mutableStateOf(repo.projectKind) }
     var reload by remember(repo.id, prId) { mutableStateOf(0) }
-    var replyBusy by remember(repo.id, prId) { mutableStateOf<String?>(null) }
+    // Conjunto y no un solo id: se pueden analizar y publicar varias respuestas a la vez, y cada
+    // tarjeta necesita saber si LA SUYA está ocupada, no si hay algo ocupado en la pantalla.
+    var replyBusy by remember(repo.id, prId) { mutableStateOf<Set<String>>(emptySet()) }
 
     val history = io.acr.ui.dbState(repo.id, prId, reload, initial = emptyList()) {
         ctx.reviews.historyForPr(repo.id, prId)
@@ -110,7 +112,7 @@ fun ReviewPanel(
     // Relee la review vigente cuando algo cambió (terminó una corrida, se publicó algo).
     LaunchedEffect(repo.id, prId, reload) {
         val fresh = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
-            ctx.reviews.latestFor(repo.id, prId)
+            ctx.reviews.latestUsableFor(repo.id, prId)
         }
         if (fresh != null) {
             val isNewRun = fresh.id != review?.id
@@ -153,6 +155,19 @@ fun ReviewPanel(
         }
 
         Text("#$prId ${pr?.title ?: review?.prTitle ?: ""}", style = MaterialTheme.typography.headlineSmall)
+        // Si lo último que corrió falló pero hay una review buena anterior, se muestra esa y se
+        // dice por qué, en vez de dejar la pantalla en un error sin contenido.
+        val newest = io.acr.ui.dbState(repo.id, prId, reload, initial = null) {
+            ctx.reviews.latestFor(repo.id, prId)
+        }
+        if (newest != null && review != null && newest.id != review!!.id) {
+            Text(
+                io.acr.i18n.t("review.showingPrevious", newest.status.name.lowercase()),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+
         if (pr == null && review != null) {
             // Sin datos vivos del PR igual se puede leer y publicar la review guardada: lo que
             // se pierde es revisar de nuevo y ver código, que sí necesitan las ramas.
@@ -216,33 +231,51 @@ fun ReviewPanel(
         }
 
         if (tab == Tab.Respuestas) {
+            // Lanzar una redacción: se puede llamar para una sola o para todas las pendientes.
+            fun draft(d: io.acr.data.ReplyDraft, target: io.acr.forge.PullRequest) {
+                if (d.id in replyBusy) return
+                replyBusy = replyBusy + d.id
+                // appScope y no el de la pantalla: la redacción sobrevive a navegar a otro lado.
+                ctx.appScope.launch {
+                    ctx.engine.draftReply(repo, target, d)
+                        .onFailure { e -> snackbar.showSnackbar("No pude redactar: ${e.message?.take(140)}") }
+                    replyBusy = replyBusy - d.id
+                    reload++
+                }
+            }
+
             RepliesList(
                 replies = replies,
-                busyId = replyBusy,
+                busy = replyBusy,
+                onDraftAll = {
+                    val target = pr
+                    if (target == null) {
+                        scope.launch { snackbar.showSnackbar("Necesito los datos del PR para analizar.") }
+                    } else {
+                        // Se lanzan todas juntas; el motor las encola de a tres para no abrir un
+                        // subproceso por respuesta.
+                        replies.filter { it.status != io.acr.data.ReplyStatus.PUBLISHED && it.body.isNullOrBlank() }
+                            .forEach { draft(it, target) }
+                    }
+                },
                 onDraft = { d ->
                     val target = pr
                     if (target == null) {
                         scope.launch { snackbar.showSnackbar("Necesito los datos del PR para analizar.") }
                         return@RepliesList
                     }
-                    replyBusy = d.id
-                    ctx.appScope.launch {
-                        ctx.engine.draftReply(repo, target, d)
-                            .onFailure { e ->
-                                snackbar.showSnackbar("No pude redactar: ${e.message?.take(140)}")
-                            }
-                        replyBusy = null
-                        reload++
-                    }
+                    draft(d, target)
                 },
                 onPublish = { d, body ->
-                    replyBusy = d.id
-                    ctx.appScope.launch {
-                        ctx.engine.publishReply(repo, prId, d, body)
-                            .onSuccess { snackbar.showSnackbar("Respuesta publicada en el hilo.") }
-                            .onFailure { e -> snackbar.showSnackbar("No pude publicar: ${e.message?.take(140)}") }
-                        replyBusy = null
-                        reload++
+                    if (d.id !in replyBusy) {
+                        replyBusy = replyBusy + d.id
+                        ctx.appScope.launch {
+                            ctx.engine.publishReply(repo, prId, d, body)
+                                .onSuccess { snackbar.showSnackbar("Respuesta publicada en el hilo.") }
+                                .onFailure { e -> snackbar.showSnackbar("No pude publicar: ${e.message?.take(140)}") }
+                            replyBusy = replyBusy - d.id
+                            reload++
+                        }
                     }
                 },
                 onEdit = { d, body ->
@@ -296,7 +329,7 @@ fun ReviewPanel(
                                 draft = out.record.body.orEmpty()
                             }
                             is ReviewOutcome.Error -> {
-                                review = ctx.reviews.latestFor(repo.id, prId)
+                                review = ctx.reviews.latestUsableFor(repo.id, prId)
                                 snackbar.showSnackbar(out.message)
                             }
                         }
@@ -322,12 +355,18 @@ fun ReviewPanel(
 
         Spacer(Modifier.height(12.dp))
 
+        // Mientras corre se muestra una tarjeta compacta arriba y, debajo, la review anterior si
+        // la hay: antes el feed de log ocupaba la pantalla entera y tapaba lo único que en ese
+        // momento se podía leer.
         if (running) {
-            ProgressFeed(progress!!.lines)
-        } else {
-            if (findings.isNotEmpty()) {
+            RunningCard(progress!!)
+            Spacer(Modifier.height(12.dp))
+        }
+        run {
+            if (findings.isNotEmpty() || localNotes.isNotEmpty()) {
                 FindingsSummary(
                     findings = findings,
+                    notes = localNotes,
                     publishing = publishing,
                     onPublishAll = {
                         val head = pr?.headSha ?: return@FindingsSummary
@@ -338,6 +377,14 @@ fun ReviewPanel(
                             try {
                                 findings.filter { it.publishedId == null }.forEach { f ->
                                     ctx.engine.publishFinding(repo, prId, f, head)
+                                        .onSuccess { ok++ }
+                                        .onFailure { failed++ }
+                                }
+                                // Las notas propias van en la misma tanda: para el PR son
+                                // comentarios inline iguales, y separarlas obligaba a ir a otra
+                                // pestaña a terminar de publicar lo mismo.
+                                localNotes.filter { it.publishedId == null }.forEach { n ->
+                                    ctx.engine.publishNote(repo, prId, n, head, ctx.notes)
                                         .onSuccess { ok++ }
                                         .onFailure { failed++ }
                                 }
@@ -549,28 +596,88 @@ private fun Card(content: @Composable androidx.compose.foundation.layout.ColumnS
     )
 }
 
+/**
+ * Estado de la corrida, en una tarjeta y no en un muro de log.
+ *
+ * Lo que importa mientras espera es una línea: qué está haciendo ahora y hace cuánto. El detalle
+ * completo sigue estando, plegado, para cuando algo se atasca y hay que mirar.
+ */
 @Composable
-private fun ProgressFeed(lines: List<String>) {
-    val listState = rememberLazyListState()
-    LaunchedEffect(lines.size) {
-        if (lines.isNotEmpty()) listState.animateScrollToItem(lines.lastIndex)
+private fun RunningCard(progress: io.acr.claude.RunProgress) {
+    var expandido by remember { mutableStateOf(false) }
+    var tick by remember { mutableStateOf(0) }
+    LaunchedEffect(progress.prId) {
+        while (true) {
+            kotlinx.coroutines.delay(1_000)
+            tick++
+        }
     }
-    Column(Modifier.fillMaxSize()) {
-        Text(io.acr.i18n.t("review.running"), style = MaterialTheme.typography.titleSmall)
-        Spacer(Modifier.height(8.dp))
-        LazyColumn(
-            state = listState,
-            modifier = Modifier.fillMaxSize()
-                .clip(RoundedCornerShape(8.dp))
-                .background(MaterialTheme.colorScheme.surfaceVariant)
-                .padding(12.dp),
-        ) {
-            items(lines) { line ->
+    // `tick` va como clave del remember sólo para que esto se recalcule cada segundo: el valor
+    // sale del reloj, no del contador.
+    val segundos = remember(tick) {
+        ((System.currentTimeMillis() - progress.startedAt) / 1000).coerceAtLeast(0)
+    }
+    val transcurrido = if (segundos < 60) "${segundos}s" else "${segundos / 60}m ${segundos % 60}s"
+
+    Card {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            androidx.compose.material3.CircularProgressIndicator(
+                Modifier.height(16.dp).width(16.dp),
+                strokeWidth = 2.dp,
+            )
+            Spacer(Modifier.width(10.dp))
+            Column(Modifier.weight(1f)) {
+                Text(io.acr.i18n.t("review.running"), style = MaterialTheme.typography.titleSmall)
                 Text(
-                    line,
-                    style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
+                    listOfNotNull(
+                        progress.depth.takeIf { it.isNotBlank() },
+                        progress.model.takeIf { it.isNotBlank() },
+                        transcurrido,
+                    ).joinToString(" · "),
+                    style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
+            }
+            TextButton(onClick = { expandido = !expandido }) {
+                Text(
+                    if (expandido) io.acr.i18n.t("review.hideDetail")
+                    else io.acr.i18n.t("review.showDetail", progress.lines.size),
+                )
+            }
+        }
+        Spacer(Modifier.height(6.dp))
+        androidx.compose.material3.LinearProgressIndicator(
+            Modifier.fillMaxWidth().clip(RoundedCornerShape(4.dp)),
+        )
+        Spacer(Modifier.height(8.dp))
+        // El paso actual, en texto normal y una sola línea: es lo único que se mira de reojo.
+        Text(
+            progress.lines.lastOrNull().orEmpty(),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            maxLines = 1,
+            overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+        )
+        if (expandido) {
+            Spacer(Modifier.height(8.dp))
+            val listState = rememberLazyListState()
+            LaunchedEffect(progress.lines.size) {
+                if (progress.lines.isNotEmpty()) listState.animateScrollToItem(progress.lines.lastIndex)
+            }
+            LazyColumn(
+                state = listState,
+                modifier = Modifier.fillMaxWidth().height(240.dp)
+                    .clip(RoundedCornerShape(6.dp))
+                    .background(MaterialTheme.colorScheme.surface)
+                    .padding(10.dp),
+            ) {
+                items(progress.lines) { line ->
+                    Text(
+                        line,
+                        style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
             }
         }
     }
@@ -608,7 +715,10 @@ private fun ReviewBody(
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text(io.acr.i18n.t("review.proposed"), style = MaterialTheme.typography.titleSmall)
             Spacer(Modifier.weight(1f))
-            review.publishedUrl?.let { url ->
+            // Vacía y no nula: una review publicada hallazgo por hallazgo puede quedar sin link
+            // si el proveedor devolvió el comentario sin URL. Sigue estando publicada, pero no
+            // hay adónde llevar, así que no se ofrece el botón.
+            review.publishedUrl?.takeIf { it.isNotBlank() }?.let { url ->
                 TextButton(onClick = { openInBrowser(url) }) { Text(io.acr.i18n.t("review.seePublished")) }
             }
         }
@@ -654,10 +764,14 @@ private fun ReviewBody(
 @Composable
 private fun FindingsSummary(
     findings: List<io.acr.data.Finding>,
+    notes: List<io.acr.data.LocalNote>,
     publishing: Boolean,
     onPublishAll: () -> Unit,
 ) {
-    val pending = findings.count { it.publishedId == null }
+    // Las notas propias cuentan igual que los hallazgos: son comentarios anclados a archivo y
+    // línea que también hay que publicar. Antes vivían sólo en la vista de código, así que desde
+    // acá no había forma de saber que quedaban pendientes.
+    val pending = findings.count { it.publishedId == null } + notes.count { it.publishedId == null }
     Column(
         Modifier.fillMaxWidth()
             .clip(RoundedCornerShape(8.dp))
@@ -665,7 +779,11 @@ private fun FindingsSummary(
             .padding(10.dp),
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            Text("${findings.size} " + io.acr.i18n.t("review.findingsAnchored"), style = MaterialTheme.typography.titleSmall)
+            Text(
+                "${findings.size + notes.size} " + io.acr.i18n.t("review.findingsAnchored") +
+                    if (notes.isEmpty()) "" else " · " + io.acr.i18n.t("review.ownNotes", notes.size),
+                style = MaterialTheme.typography.titleSmall,
+            )
             Spacer(Modifier.weight(1f))
             if (pending > 0) {
                 Button(enabled = !publishing, onClick = onPublishAll) { Text(io.acr.i18n.t("review.publishInline") + " ($pending)") }
@@ -697,6 +815,41 @@ private fun FindingsSummary(
                     maxLines = 1,
                 )
                 Text(f.title, style = MaterialTheme.typography.bodySmall, maxLines = 1)
+                if (f.publishedId != null) {
+                    Text(
+                        "  ✓",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.primary,
+                    )
+                }
+            }
+        }
+        notes.take(12).forEach { n ->
+            Row(Modifier.padding(vertical = 2.dp)) {
+                Text(
+                    "✎",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.width(36.dp),
+                )
+                Text(
+                    n.filePath.substringAfterLast('/') + (n.lineNo?.let { ":$it" } ?: ""),
+                    style = MaterialTheme.typography.labelSmall.copy(fontFamily = FontFamily.Monospace),
+                    modifier = Modifier.width(220.dp),
+                    maxLines = 1,
+                )
+                Text(
+                    n.body.lineSequence().firstOrNull().orEmpty(),
+                    style = MaterialTheme.typography.bodySmall,
+                    maxLines = 1,
+                )
+                if (n.publishedId != null) {
+                    Text(
+                        "  ✓",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.primary,
+                    )
+                }
             }
         }
     }
@@ -705,7 +858,8 @@ private fun FindingsSummary(
 @Composable
 private fun RepliesList(
     replies: List<io.acr.data.ReplyDraft>,
-    busyId: String?,
+    busy: Set<String>,
+    onDraftAll: () -> Unit,
     onDraft: (io.acr.data.ReplyDraft) -> Unit,
     onPublish: (io.acr.data.ReplyDraft, String) -> Unit,
     onEdit: (io.acr.data.ReplyDraft, String) -> Unit,
@@ -721,7 +875,30 @@ private fun RepliesList(
         }
         return
     }
+    val pending = replies.filter {
+        it.status != io.acr.data.ReplyStatus.PUBLISHED && it.body.isNullOrBlank()
+    }
     LazyColumn(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        // Con varias respuestas sin analizar, hacerlo de a una es trabajo manual innecesario:
+        // se lanzan todas y el motor las encola.
+        if (pending.size > 1 || busy.isNotEmpty()) {
+            item {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Button(
+                        enabled = pending.any { it.id !in busy },
+                        onClick = onDraftAll,
+                    ) { Text(io.acr.i18n.t("replies.analyzeAll", pending.count { it.id !in busy })) }
+                    if (busy.isNotEmpty()) {
+                        Spacer(Modifier.width(10.dp))
+                        Text(
+                            io.acr.i18n.t("replies.inFlight", busy.size),
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.primary,
+                        )
+                    }
+                }
+            }
+        }
         items(replies, key = { it.id }) { d ->
             var draftText by remember(d.id, d.body) { mutableStateOf(d.body.orEmpty()) }
             Card {
@@ -773,8 +950,8 @@ private fun RepliesList(
                         Text(it, style = MaterialTheme.typography.bodySmall)
                     }
                 } else if (d.body.isNullOrBlank()) {
-                    Button(enabled = busyId != d.id, onClick = { onDraft(d) }) {
-                        Text(if (busyId == d.id) io.acr.i18n.t("replies.analyzing") else io.acr.i18n.t("replies.analyze"))
+                    Button(enabled = d.id !in busy, onClick = { onDraft(d) }) {
+                        Text(if (d.id in busy) io.acr.i18n.t("replies.analyzing") else io.acr.i18n.t("replies.analyze"))
                     }
                 } else {
                     OutlinedTextField(
@@ -787,11 +964,11 @@ private fun RepliesList(
                     Spacer(Modifier.height(6.dp))
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         Button(
-                            enabled = busyId != d.id && draftText.isNotBlank(),
+                            enabled = d.id !in busy && draftText.isNotBlank(),
                             onClick = { onPublish(d, draftText) },
-                        ) { Text(if (busyId == d.id) io.acr.i18n.t("replies.analyzing") else io.acr.i18n.t("replies.publishReply")) }
+                        ) { Text(if (d.id in busy) io.acr.i18n.t("replies.analyzing") else io.acr.i18n.t("replies.publishReply")) }
                         OutlinedButton(onClick = { onEdit(d, draftText) }) { Text(io.acr.i18n.t("common.saveDraft")) }
-                        OutlinedButton(enabled = busyId != d.id, onClick = { onDraft(d) }) {
+                        OutlinedButton(enabled = d.id !in busy, onClick = { onDraft(d) }) {
                             Text("Redactar de nuevo")
                         }
                     }
