@@ -61,6 +61,7 @@ class AppContext private constructor(
         const val PREF_UI_LANG = "ui.lang"
         const val PREF_CLOSE_ACTION = "ui.closeAction"
         const val PREF_PR_SORT = "ui.prSort"
+        const val PREF_FOLLOWUP_DAYS = "followup.days"
 
         /**
          * @param dataDir dónde viven la base y la clave. Configurable para que los tests NO
@@ -87,7 +88,7 @@ class AppContext private constructor(
             reviews.failOrphanedRunning()
             val notifier = io.acr.notify.Notifier(prefs)
             val engine = ReviewEngine(reviews, publications, comments, findings, replies, prefs, notifier)
-            val auto = AutoReviewer(repos, reviews, prefs, engine, notifier, replies, seenPrs, prLoader)
+            val auto = AutoReviewer(repos, reviews, prefs, engine, notifier, replies, seenPrs, prLoader, findings)
             return AppContext(store, repos, reviews, publications, comments, notes, findings, replies, seenPrs, prCache, prLoader, prefs, engine, auto, notifier)
         }
 

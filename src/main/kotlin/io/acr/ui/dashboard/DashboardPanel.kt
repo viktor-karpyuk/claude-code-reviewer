@@ -107,6 +107,7 @@ fun DashboardPanel(ctx: AppContext, onOpenPr: (repoId: String, prId: Long) -> Un
                 usage = ctx.reviews.usage(),
                 repoNames = ctx.repos.list().associate { it.id to it.name },
                 replies = ctx.replies.openOnes(),
+                awaitingThem = ctx.reviews.awaitingThem(),
                 totals = ctx.reviews.totals(),
                 current = ctx.reviews.currentPeriods(),
                 daily = ctx.reviews.statsByPeriod("day", 14),
@@ -288,8 +289,25 @@ fun DashboardPanel(ctx: AppContext, onOpenPr: (repoId: String, prId: Long) -> Un
             }
             }
 
+            // Separado de "te respondieron" a propósito: un PR donde ya contestaste todo seguía
+            // apareciendo como si te tocara mover algo, cuando lo único que falta es que el otro
+            // conteste o corrija.
+            if (focus == null || focus == "awaiting") {
+            item {
+                Section(
+                    io.acr.i18n.t("dash.awaitingThem") + " (${snapshot.awaitingThem.size})",
+                )
+            }
+            if (snapshot.awaitingThem.isEmpty()) {
+                item { Empty(io.acr.i18n.t("dash.awaitingThemNote")) }
+            }
+            items(snapshot.awaitingThem, key = { "aw-${it.id}" }) { r ->
+                ReviewRow(r, snapshot.repoNames[r.repoId] ?: r.repoId) { onOpenPr(r.repoId, r.prId) }
+            }
+            }
+
             if (focus == null || focus == "replies") {
-            item { Section("Te respondieron (${snapshot.replies.size})") }
+            item { Section(io.acr.i18n.t("dash.repliedToYou") + " (${snapshot.replies.size})") }
             if (snapshot.replies.isEmpty()) {
                 item { Empty(io.acr.i18n.t("dash.noReplies")) }
             }
@@ -418,6 +436,8 @@ private data class Snapshot(
     val usage: io.acr.data.ReviewRepository.Usage = io.acr.data.ReviewRepository.Usage(0.0, 0),
     val repoNames: Map<String, String> = emptyMap(),
     val replies: List<io.acr.data.ReplyDraft> = emptyList(),
+    /** PRs donde ya contestaste todo y la pelota está del otro lado. */
+    val awaitingThem: List<ReviewRecord> = emptyList(),
     val totals: io.acr.data.ReviewRepository.Totals =
         io.acr.data.ReviewRepository.Totals(0, 0, 0, 0, 0, 0),
     val current: io.acr.data.ReviewRepository.Current =

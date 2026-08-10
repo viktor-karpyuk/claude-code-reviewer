@@ -49,11 +49,14 @@ import io.acr.data.StoredComment
 import io.acr.forge.Forges
 import io.acr.forge.PullRequest
 import io.acr.forge.RepoRecord
+import io.acr.ui.clickableText
+import io.acr.ui.prs.color
+import io.acr.ui.prs.mark
 import kotlinx.coroutines.launch
 import java.awt.Desktop
 import java.net.URI
 
-private enum class Tab { Review, Codigo, Commits, Respuestas, Historial }
+private enum class Tab { Review, Codigo, Commits, Conversacion, Historial }
 
 @Composable
 fun ReviewPanel(
@@ -77,6 +80,23 @@ fun ReviewPanel(
     // Conjunto y no un solo id: se pueden analizar y publicar varias respuestas a la vez, y cada
     // tarjeta necesita saber si LA SUYA está ocupada, no si hay algo ocupado en la pantalla.
     var replyBusy by remember(repo.id, prId) { mutableStateOf<Set<String>>(emptySet()) }
+    var confirmarMerge by remember(repo.id, prId) { mutableStateOf(false) }
+    var mergeando by remember(repo.id, prId) { mutableStateOf(false) }
+    var verificando by remember(repo.id, prId) { mutableStateOf(false) }
+    var aprobando by remember(repo.id, prId) { mutableStateOf(false) }
+    var confirmarDeclinar by remember(repo.id, prId) { mutableStateOf(false) }
+    // Salto pendiente al visor de código, pedido desde la conversación.
+    var codeFocus by remember(repo.id, prId) { mutableStateOf<io.acr.ui.code.CodeFocus?>(null) }
+    // De qué hilo se salió al código, para poder volver exactamente ahí. Null = se entró al
+    // código de frente por la pestaña, y entonces no hay a dónde volver.
+    var volverAlHilo by remember(repo.id, prId) { mutableStateOf<String?>(null) }
+    // Hilo al que hay que llevar la conversación al volver.
+    var hiloDestacado by remember(repo.id, prId) { mutableStateOf<String?>(null) }
+    // Hilo sobre el que se está por mandar un recordatorio.
+    var seguimientoDe by remember(repo.id, prId) { mutableStateOf<ConversationThread?>(null) }
+    val diasParaRecordar = remember {
+        ctx.prefs.get(AppContext.PREF_FOLLOWUP_DAYS)?.toLongOrNull()?.coerceAtLeast(1) ?: 3L
+    }
 
     val history = io.acr.ui.dbState(repo.id, prId, reload, initial = emptyList()) {
         ctx.reviews.historyForPr(repo.id, prId)
@@ -133,6 +153,26 @@ fun ReviewPanel(
         reload++
     }
 
+    // La conversación se arma acá porque la usan tanto el contador de la pestaña como la vista.
+    val hilos = buildConversation(findings, thread, replies)
+
+    // Lanzar una redacción: sirve para una sola o para todas las pendientes.
+    fun draft(d: io.acr.data.ReplyDraft, target: PullRequest) {
+        if (d.id in replyBusy) return
+        replyBusy = replyBusy + d.id
+        // appScope y no el de la pantalla: la redacción sobrevive a navegar a otro lado.
+        ctx.appScope.launch {
+            ctx.engine.draftReply(repo, target, d)
+                .onFailure { e -> snackbar.showSnackbar("No pude redactar: ${e.message?.take(140)}") }
+            replyBusy = replyBusy - d.id
+            reload++
+        }
+    }
+
+    // Si te vas del código por tu cuenta —tocando otra pestaña— el "volver" deja de tener sentido:
+    // apuntaría a un hilo del que ya saliste. Se limpia salvo cuando el salto acaba de ponerlo.
+    LaunchedEffect(tab) { if (tab != Tab.Codigo) volverAlHilo = null }
+
     Column(Modifier.fillMaxSize().padding(20.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             TextButton(
@@ -184,6 +224,17 @@ fun ReviewPanel(
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
+            // Desde que se abrió el PR, no desde el último commit: es cuánto lleva esperando.
+            io.acr.ui.prs.ageInDays(it.createdOn, java.time.LocalDate.now())?.let { dias ->
+                val nivel = io.acr.ui.prs.Urgency.fromDays(dias)!!
+                Text(
+                    io.acr.i18n.t("prs.ageTitle", dias) + " · " + it.createdOn.take(10) +
+                        nivel.mark().let { m -> if (m.isBlank()) "" else "  $m " } +
+                        (if (nivel == io.acr.ui.prs.Urgency.FRESCO) "" else io.acr.i18n.t(nivel.labelKey)),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = nivel.color(),
+                )
+            }
         }
         loadError?.let {
             io.acr.ui.components.ErrorBox(
@@ -191,6 +242,109 @@ fun ReviewPanel(
                 message = it,
                 modifier = Modifier.padding(vertical = 6.dp),
             )
+        }
+
+        // Mergear: la única acción de la app que cambia el repositorio y no se puede deshacer.
+        // Se habilita sólo cuando no queda nada esperando y el autor subió código después de la
+        // review; en cualquier otro caso el botón dice por qué no.
+        val bloqueo = mergeBlocker(pr, review, findings, localNotes, replies)
+        if (pr != null && pr!!.state == io.acr.forge.PrState.OPEN && review != null) {
+            Spacer(Modifier.height(10.dp))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                // Verificar va antes de mergear en el orden de lectura porque ese es el orden
+                // real: primero se comprueba que lo señalado se arregló, después se mergea.
+                val publicados = findings.count { it.publishedId != null && it.dismissedAt == null }
+                if (publicados > 0) {
+                    OutlinedButton(
+                        enabled = !verificando && !mergeando,
+                        onClick = {
+                            val objetivo = pr ?: return@OutlinedButton
+                            val rev = review ?: return@OutlinedButton
+                            verificando = true
+                            ctx.appScope.launch {
+                                ctx.engine.verifyResolution(repo, objetivo, rev)
+                                    .onFailure {
+                                        snackbar.showSnackbar(
+                                            io.acr.i18n.t2("verify.failed") + ": " + it.message?.take(160),
+                                        )
+                                    }
+                                verificando = false
+                                reload++
+                            }
+                        },
+                    ) {
+                        Text(
+                            if (verificando) io.acr.i18n.t("verify.running")
+                            else io.acr.i18n.t("verify.action"),
+                        )
+                    }
+                    Spacer(Modifier.width(8.dp))
+                }
+                // Aprobar es una opinión y se puede retirar, así que va sin confirmación y sin
+                // depender de la verificación: puede que quieras aprobar y que mergee otro.
+                OutlinedButton(
+                    enabled = !aprobando,
+                    onClick = {
+                        aprobando = true
+                        ctx.appScope.launch {
+                            runCatching {
+                                kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                                    Forges.of(repo.provider).approve(repo, prId)
+                                }
+                            }
+                                .onSuccess { snackbar.showSnackbar(io.acr.i18n.t2("approve.done")) }
+                                .onFailure {
+                                    snackbar.showSnackbar(
+                                        io.acr.i18n.t2("approve.failed") + ": " + it.message?.take(160),
+                                    )
+                                }
+                            aprobando = false
+                        }
+                    },
+                ) { Text(if (aprobando) io.acr.i18n.t("approve.running") else io.acr.i18n.t("approve.action")) }
+                Spacer(Modifier.width(8.dp))
+                OutlinedButton(onClick = { confirmarDeclinar = true }) {
+                    Text(io.acr.i18n.t("decline.action"), color = MaterialTheme.colorScheme.error)
+                }
+                Spacer(Modifier.width(8.dp))
+                Button(
+                    enabled = bloqueo == null && !mergeando,
+                    onClick = { confirmarMerge = true },
+                ) { Text(if (mergeando) io.acr.i18n.t("merge.merging") else io.acr.i18n.t("merge.action")) }
+                Spacer(Modifier.width(10.dp))
+                Text(
+                    bloqueo?.let { io.acr.i18n.t(it) } ?: io.acr.i18n.t("merge.ready"),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = if (bloqueo == null) MaterialTheme.colorScheme.primary
+                    else MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+
+            review?.resolutionSummary?.takeIf { it.isNotBlank() }?.let { resumen ->
+                Spacer(Modifier.height(8.dp))
+                Card {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(io.acr.i18n.t("verify.title"), style = MaterialTheme.typography.titleSmall)
+                        // Una verificación vieja es peor que ninguna: dice "corregido" sobre un
+                        // código que ya cambió. Si llegaron commits después, se avisa.
+                        val vieja = review!!.resolutionHead != null &&
+                            pr != null && pr!!.headSha.isNotBlank() &&
+                            review!!.resolutionHead != pr!!.headSha
+                        if (vieja) {
+                            Spacer(Modifier.width(8.dp))
+                            Text(
+                                io.acr.i18n.t("verify.stale"),
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.error,
+                            )
+                        }
+                    }
+                    Spacer(Modifier.height(4.dp))
+                    SelectionContainer {
+                        Text(resumen, style = MaterialTheme.typography.bodySmall)
+                    }
+                }
+            }
         }
 
         Spacer(Modifier.height(12.dp))
@@ -203,11 +357,14 @@ fun ReviewPanel(
             )
             FilterChip(tab == Tab.Commits, { tab = Tab.Commits }, { Text(io.acr.i18n.t("tab.commits")) })
             FilterChip(
-                tab == Tab.Respuestas,
-                { tab = Tab.Respuestas },
+                tab == Tab.Conversacion,
+                { tab = Tab.Conversacion },
                 {
-                    val open = replies.count { it.status != io.acr.data.ReplyStatus.PUBLISHED }
-                    Text(if (open == 0) io.acr.i18n.t("tab.replies") else io.acr.i18n.t("tab.replies") + " ($open)")
+                    val abiertos = hilos.count { it.open }
+                    Text(
+                        if (abiertos == 0) io.acr.i18n.t("tab.conversation")
+                        else io.acr.i18n.t("tab.conversation") + " ($abiertos)",
+                    )
                 },
             )
             FilterChip(
@@ -220,8 +377,196 @@ fun ReviewPanel(
         HorizontalDivider()
         Spacer(Modifier.height(12.dp))
 
+        // Recordatorio: se publica en el PR de otra persona, así que el texto se muestra y se
+        // puede editar antes de mandarlo. La app nunca lo manda sola.
+        seguimientoDe?.let { hilo ->
+            val plantilla = io.acr.i18n.t("followup.message", hilo.waitingDays ?: 0)
+            var texto by remember(hilo.findingId) { mutableStateOf(plantilla) }
+            androidx.compose.material3.AlertDialog(
+                onDismissRequest = { seguimientoDe = null },
+                title = { Text(io.acr.i18n.t("followup.title")) },
+                text = {
+                    Column {
+                        Text(
+                            (hilo.filePath?.substringAfterLast('/') ?: "") +
+                                (hilo.lineNo?.let { ":$it" } ?: "") + " · " + hilo.title,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        Spacer(Modifier.height(8.dp))
+                        OutlinedTextField(
+                            value = texto,
+                            onValueChange = { texto = it },
+                            modifier = Modifier.fillMaxWidth().heightIn(min = 120.dp),
+                            supportingText = { Text(io.acr.i18n.t("followup.note")) },
+                        )
+                    }
+                },
+                confirmButton = {
+                    TextButton(
+                        enabled = texto.isNotBlank(),
+                        onClick = {
+                            val f = findings.firstOrNull { it.id == hilo.findingId }
+                            seguimientoDe = null
+                            if (f != null) {
+                                ctx.appScope.launch {
+                                    ctx.engine.postFollowUp(repo, prId, f, texto.trim())
+                                        .onSuccess { snackbar.showSnackbar(io.acr.i18n.t2("followup.done")) }
+                                        .onFailure {
+                                            snackbar.showSnackbar(
+                                                io.acr.i18n.t2("followup.failed") + ": " + it.message?.take(160),
+                                            )
+                                        }
+                                    reload++
+                                }
+                            }
+                        },
+                    ) { Text(io.acr.i18n.t("followup.send")) }
+                },
+                dismissButton = {
+                    TextButton(onClick = { seguimientoDe = null }) {
+                        Text(io.acr.i18n.t("common.cancel"))
+                    }
+                },
+            )
+        }
+
+        // Declinar cierra el PR del otro lado. Se pide el motivo en el mismo paso: un rechazo sin
+        // explicación obliga a quien lo recibe a adivinar, y una vez cerrado el hilo queda menos
+        // a la vista.
+        if (confirmarDeclinar) {
+            var motivo by remember { mutableStateOf("") }
+            androidx.compose.material3.AlertDialog(
+                onDismissRequest = { confirmarDeclinar = false },
+                title = { Text(io.acr.i18n.t("decline.confirmTitle", prId)) },
+                text = {
+                    Column {
+                        Text(io.acr.i18n.t("decline.confirmBody"))
+                        Spacer(Modifier.height(8.dp))
+                        OutlinedTextField(
+                            value = motivo,
+                            onValueChange = { motivo = it },
+                            label = { Text(io.acr.i18n.t("decline.reason")) },
+                            supportingText = { Text(io.acr.i18n.t("decline.reasonNote")) },
+                            modifier = Modifier.fillMaxWidth().heightIn(min = 90.dp),
+                        )
+                    }
+                },
+                confirmButton = {
+                    TextButton(
+                        enabled = motivo.isNotBlank(),
+                        onClick = {
+                            confirmarDeclinar = false
+                            ctx.appScope.launch {
+                                runCatching {
+                                    kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                                        Forges.of(repo.provider).decline(repo, prId, motivo.trim())
+                                    }
+                                }
+                                    .onSuccess {
+                                        snackbar.showSnackbar(io.acr.i18n.t2("decline.done"))
+                                        reload++
+                                    }
+                                    .onFailure {
+                                        snackbar.showSnackbar(
+                                            io.acr.i18n.t2("decline.failed") + ": " + it.message?.take(160),
+                                        )
+                                    }
+                            }
+                        },
+                    ) {
+                        Text(io.acr.i18n.t("decline.confirm"), color = MaterialTheme.colorScheme.error)
+                    }
+                },
+                dismissButton = {
+                    TextButton(onClick = { confirmarDeclinar = false }) {
+                        Text(io.acr.i18n.t("common.cancel"))
+                    }
+                },
+            )
+        }
+
+        // Confirmación: mergear es irreversible y hacia afuera. Es el caso donde un modal
+        // corresponde, porque interrumpe a propósito.
+        if (confirmarMerge && pr != null) {
+            val objetivo = pr!!
+            var borrarRama by remember { mutableStateOf(false) }
+            androidx.compose.material3.AlertDialog(
+                onDismissRequest = { confirmarMerge = false },
+                title = { Text(io.acr.i18n.t("merge.confirmTitle", prId)) },
+                text = {
+                    Column {
+                        Text(
+                            io.acr.i18n.t(
+                                "merge.confirmBody", objetivo.sourceBranch, objetivo.targetBranch,
+                            ),
+                        )
+                        Spacer(Modifier.height(8.dp))
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            androidx.compose.material3.Checkbox(
+                                checked = borrarRama,
+                                onCheckedChange = { borrarRama = it },
+                            )
+                            Text(
+                                io.acr.i18n.t("merge.closeBranch"),
+                                style = MaterialTheme.typography.bodySmall,
+                            )
+                        }
+                    }
+                },
+                confirmButton = {
+                    TextButton(onClick = {
+                        confirmarMerge = false
+                        mergeando = true
+                        ctx.appScope.launch {
+                            runCatching {
+                                kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                                    Forges.of(repo.provider).merge(
+                                        repo, prId,
+                                        "Merge pull request #$prId: ${objetivo.title}",
+                                        borrarRama,
+                                    )
+                                }
+                            }
+                                .onSuccess {
+                                    snackbar.showSnackbar(io.acr.i18n.t2("merge.done"))
+                                    reload++
+                                }
+                                .onFailure {
+                                    snackbar.showSnackbar(
+                                        io.acr.i18n.t2("merge.failed") + ": " + it.message?.take(160),
+                                    )
+                                }
+                            mergeando = false
+                        }
+                    }) { Text(io.acr.i18n.t("merge.confirm")) }
+                },
+                dismissButton = {
+                    TextButton(onClick = { confirmarMerge = false }) {
+                        Text(io.acr.i18n.t("common.cancel"))
+                    }
+                },
+            )
+        }
+
         if (tab == Tab.Codigo) {
-            io.acr.ui.code.CodePanel(ctx, repo, pr, prId, snackbar)
+            // Volver: el salto desde la conversación era de ida y la única forma de regresar era
+            // la pestaña, que además te dejaba al principio de la lista.
+            volverAlHilo?.let { origen ->
+                TextButton(onClick = {
+                    hiloDestacado = origen
+                    volverAlHilo = null
+                    tab = Tab.Conversacion
+                }) { Text(io.acr.i18n.t("thread.backToConversation")) }
+                Spacer(Modifier.height(4.dp))
+            }
+            io.acr.ui.code.CodePanel(
+                ctx, repo, pr, prId, snackbar,
+                focus = codeFocus,
+                // Se limpia al aplicarlo: si no, volver a la pestaña saltaría de nuevo al mismo
+                // lugar y perdería dónde estabas leyendo.
+                onFocusConsumed = { codeFocus = null },
+            )
             return@Column
         }
 
@@ -230,41 +575,26 @@ fun ReviewPanel(
             return@Column
         }
 
-        if (tab == Tab.Respuestas) {
-            // Lanzar una redacción: se puede llamar para una sola o para todas las pendientes.
-            fun draft(d: io.acr.data.ReplyDraft, target: io.acr.forge.PullRequest) {
-                if (d.id in replyBusy) return
-                replyBusy = replyBusy + d.id
-                // appScope y no el de la pantalla: la redacción sobrevive a navegar a otro lado.
-                ctx.appScope.launch {
-                    ctx.engine.draftReply(repo, target, d)
-                        .onFailure { e -> snackbar.showSnackbar("No pude redactar: ${e.message?.take(140)}") }
-                    replyBusy = replyBusy - d.id
-                    reload++
-                }
-            }
-
-            RepliesList(
-                replies = replies,
+        if (tab == Tab.Conversacion) {
+            ConversationList(
+                threads = hilos,
                 busy = replyBusy,
+                onDraft = { d ->
+                    val target = pr
+                    if (target == null) {
+                        scope.launch { snackbar.showSnackbar("Necesito los datos del PR para analizar.") }
+                    } else {
+                        draft(d, target)
+                    }
+                },
                 onDraftAll = {
                     val target = pr
                     if (target == null) {
                         scope.launch { snackbar.showSnackbar("Necesito los datos del PR para analizar.") }
                     } else {
-                        // Se lanzan todas juntas; el motor las encola de a tres para no abrir un
-                        // subproceso por respuesta.
                         replies.filter { it.status != io.acr.data.ReplyStatus.PUBLISHED && it.body.isNullOrBlank() }
                             .forEach { draft(it, target) }
                     }
-                },
-                onDraft = { d ->
-                    val target = pr
-                    if (target == null) {
-                        scope.launch { snackbar.showSnackbar("Necesito los datos del PR para analizar.") }
-                        return@RepliesList
-                    }
-                    draft(d, target)
                 },
                 onPublish = { d, body ->
                     if (d.id !in replyBusy) {
@@ -287,6 +617,56 @@ fun ReviewPanel(
                     }
                 },
                 onOpen = ::openInBrowser,
+                onShowCode = { path, line, threadId ->
+                    codeFocus = io.acr.ui.code.CodeFocus(path, line)
+                    volverAlHilo = threadId
+                    tab = Tab.Codigo
+                },
+                focusId = hiloDestacado,
+                onFocusConsumed = { hiloDestacado = null },
+                followUpAfterDays = diasParaRecordar,
+                onFollowUp = { seguimientoDe = it },
+                onCloseThread = { id, cerrar ->
+                    scope.launch {
+                        kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                            ctx.findings.close(id, cerrar)
+                            findings.firstOrNull { it.id == id }?.let {
+                                ctx.reviews.markPublishedIfComplete(it.reviewId, null)
+                            }
+                        }
+                        reload++
+                    }
+                },
+                onPublishFinding = { id ->
+                    val head = pr?.headSha
+                    val f = findings.firstOrNull { it.id == id }
+                    if (head == null || f == null) {
+                        scope.launch { snackbar.showSnackbar("Necesito los datos del PR para publicar.") }
+                    } else {
+                        publishing = true
+                        ctx.appScope.launch {
+                            ctx.engine.publishFinding(repo, prId, f, head)
+                                .onSuccess { snackbar.showSnackbar("Comentario publicado.") }
+                                .onFailure { e ->
+                                    snackbar.showSnackbar("No pude publicar: ${e.message?.take(140)}")
+                                }
+                            publishing = false
+                            reload++
+                        }
+                    }
+                },
+                onDismissFinding = { id ->
+                    scope.launch {
+                        kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                            ctx.findings.dismiss(id)
+                            findings.firstOrNull { it.id == id }?.let {
+                                ctx.reviews.markPublishedIfComplete(it.reviewId, null)
+                            }
+                        }
+                        reload++
+                    }
+                },
+                publishing = publishing,
             )
             return@Column
         }
@@ -368,6 +748,25 @@ fun ReviewPanel(
                     findings = findings,
                     notes = localNotes,
                     publishing = publishing,
+                    onDismiss = { f ->
+                        scope.launch {
+                            kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                                ctx.findings.dismiss(f.id)
+                                // Puede haber sido el último pendiente: si lo era, la review pasa
+                                // a resuelta y el PR deja de figurar en el panel.
+                                ctx.reviews.markPublishedIfComplete(f.reviewId, null)
+                            }
+                            reload++
+                        }
+                    },
+                    onRestore = { f ->
+                        scope.launch {
+                            kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                                ctx.findings.restore(f.id)
+                            }
+                            reload++
+                        }
+                    },
                     onPublishAll = {
                         val head = pr?.headSha ?: return@FindingsSummary
                         publishing = true
@@ -375,7 +774,7 @@ fun ReviewPanel(
                             var ok = 0
                             var failed = 0
                             try {
-                                findings.filter { it.publishedId == null }.forEach { f ->
+                                findings.filter { !it.settled }.forEach { f ->
                                     ctx.engine.publishFinding(repo, prId, f, head)
                                         .onSuccess { ok++ }
                                         .onFailure { failed++ }
@@ -767,11 +1166,14 @@ private fun FindingsSummary(
     notes: List<io.acr.data.LocalNote>,
     publishing: Boolean,
     onPublishAll: () -> Unit,
+    onDismiss: (io.acr.data.Finding) -> Unit,
+    onRestore: (io.acr.data.Finding) -> Unit,
 ) {
     // Las notas propias cuentan igual que los hallazgos: son comentarios anclados a archivo y
     // línea que también hay que publicar. Antes vivían sólo en la vista de código, así que desde
     // acá no había forma de saber que quedaban pendientes.
-    val pending = findings.count { it.publishedId == null } + notes.count { it.publishedId == null }
+    val pending = findings.count { !it.settled } + notes.count { it.publishedId == null }
+    val fallidos = findings.filter { it.publishError != null && !it.settled }
     Column(
         Modifier.fillMaxWidth()
             .clip(RoundedCornerShape(8.dp))
@@ -796,8 +1198,17 @@ private fun FindingsSummary(
             }
         }
         Spacer(Modifier.height(6.dp))
+        if (fallidos.isNotEmpty()) {
+            Text(
+                io.acr.i18n.t("review.publishFailed", fallidos.size) + ": " +
+                    fallidos.first().publishError.orEmpty().take(160),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.error,
+                modifier = Modifier.padding(bottom = 4.dp),
+            )
+        }
         findings.take(12).forEach { f ->
-            Row(Modifier.padding(vertical = 2.dp)) {
+            Row(Modifier.padding(vertical = 2.dp), verticalAlignment = Alignment.CenterVertically) {
                 Text(
                     f.severity.take(3).uppercase(),
                     style = MaterialTheme.typography.labelSmall,
@@ -814,14 +1225,44 @@ private fun FindingsSummary(
                     modifier = Modifier.width(220.dp),
                     maxLines = 1,
                 )
-                Text(f.title, style = MaterialTheme.typography.bodySmall, maxLines = 1)
-                if (f.publishedId != null) {
-                    Text(
-                        "  ✓",
+                Text(
+                    f.title,
+                    style = MaterialTheme.typography.bodySmall,
+                    maxLines = 1,
+                    modifier = Modifier.weight(1f),
+                )
+                when {
+                    // Publicado: lo que importa ya no es que se mandó sino si lo arreglaron.
+                    f.publishedId != null -> Text(
+                        when (f.resolution) {
+                            io.acr.data.Resolution.RESOLVED -> "✓ " + io.acr.i18n.t("verify.RESOLVED")
+                            io.acr.data.Resolution.PARTIAL -> "~ " + io.acr.i18n.t("verify.PARTIAL")
+                            io.acr.data.Resolution.UNRESOLVED -> "✗ " + io.acr.i18n.t("verify.UNRESOLVED")
+                            null -> "✓ " + io.acr.i18n.t("verify.pending")
+                        },
                         style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.primary,
+                        color = when (f.resolution) {
+                            io.acr.data.Resolution.RESOLVED -> MaterialTheme.colorScheme.primary
+                            io.acr.data.Resolution.UNRESOLVED -> MaterialTheme.colorScheme.error
+                            else -> MaterialTheme.colorScheme.onSurfaceVariant
+                        },
                     )
+                    f.dismissedAt != null -> TextButton(onClick = { onRestore(f) }) {
+                        Text(io.acr.i18n.t("review.dismissed"), style = MaterialTheme.typography.labelSmall)
+                    }
+                    else -> TextButton(onClick = { onDismiss(f) }) {
+                        Text(io.acr.i18n.t("review.dismiss"), style = MaterialTheme.typography.labelSmall)
+                    }
                 }
+            }
+            // La evidencia es lo que permite discutir el veredicto en vez de creerlo.
+            f.resolutionNote?.takeIf { it.isNotBlank() }?.let {
+                Text(
+                    it,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(start = 36.dp, bottom = 4.dp),
+                )
             }
         }
         notes.take(12).forEach { n ->
@@ -849,6 +1290,247 @@ private fun FindingsSummary(
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.primary,
                     )
+                }
+            }
+        }
+    }
+}
+
+/**
+ * La conversación del PR: cada pregunta con su historia y su estado.
+ *
+ * Ordenada por lo que espera algo tuyo: arriba lo que hay que contestar, abajo lo cerrado. Es la
+ * vista con la que se decide si el PR está listo, así que muestra las cuatro cosas juntas —qué
+ * preguntamos, qué contestaron, qué se preparó para responder, y si el código quedó arreglado—
+ * en vez de repartirlas en pestañas.
+ */
+@Composable
+private fun ConversationList(
+    threads: List<ConversationThread>,
+    busy: Set<String>,
+    onDraft: (io.acr.data.ReplyDraft) -> Unit,
+    onDraftAll: () -> Unit,
+    onPublish: (io.acr.data.ReplyDraft, String) -> Unit,
+    onEdit: (io.acr.data.ReplyDraft, String) -> Unit,
+    onOpen: (String) -> Unit,
+    onShowCode: (String, Int?, String?) -> Unit,
+    onPublishFinding: (String) -> Unit,
+    onDismissFinding: (String) -> Unit,
+    publishing: Boolean,
+    /** Hilo al que hay que llevar la lista al volver del código. */
+    focusId: String?,
+    onFocusConsumed: () -> Unit,
+    followUpAfterDays: Long,
+    onFollowUp: (ConversationThread) -> Unit,
+    onCloseThread: (String, Boolean) -> Unit,
+) {
+    if (threads.isEmpty()) {
+        Box(Modifier.fillMaxSize()) {
+            Text(
+                io.acr.i18n.t("thread.none"),
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.align(Alignment.Center),
+            )
+        }
+        return
+    }
+    val abiertos = threads.count { it.open }
+    val porContestar = threads.count { it.state == ThreadState.NEEDS_ANSWER }
+    val listState = rememberLazyListState()
+    // Al volver del código, la lista baja hasta la tarjeta de donde se salió. Sin esto uno vuelve
+    // al principio y tiene que buscar de nuevo dónde estaba.
+    LaunchedEffect(focusId, threads) {
+        val id = focusId ?: return@LaunchedEffect
+        val i = threads.indexOfFirst { it.findingId == id }
+        if (i >= 0) listState.scrollToItem(i + 1) // +1: el encabezado es el primer item
+        onFocusConsumed()
+    }
+    LazyColumn(
+        Modifier.fillMaxSize(),
+        state = listState,
+        verticalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        item {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    if (abiertos == 0) io.acr.i18n.t("thread.allSettled")
+                    else io.acr.i18n.t("thread.openCount", abiertos, threads.size),
+                    style = MaterialTheme.typography.titleSmall,
+                    color = if (abiertos == 0) MaterialTheme.colorScheme.primary
+                    else MaterialTheme.colorScheme.onSurface,
+                )
+                if (porContestar > 1) {
+                    Spacer(Modifier.width(10.dp))
+                    Button(onClick = onDraftAll) {
+                        Text(io.acr.i18n.t("replies.analyzeAll", porContestar))
+                    }
+                }
+            }
+        }
+        items(threads, key = { it.findingId ?: it.title }) { h ->
+            Card {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    // El ancla es un link: leer la discusión sin ver el código al lado obliga a
+                    // buscarlo a mano en la otra pestaña.
+                    val ancla = (h.filePath?.substringAfterLast('/') ?: "") +
+                        (h.lineNo?.let { ":$it" } ?: "")
+                    Text(
+                        ancla,
+                        style = MaterialTheme.typography.labelSmall
+                            .copy(fontFamily = FontFamily.Monospace),
+                        color = if (h.filePath != null) MaterialTheme.colorScheme.primary
+                        else MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = if (h.filePath == null) Modifier
+                        else Modifier.clickableText { onShowCode(h.filePath, h.lineNo, h.findingId) },
+                    )
+                    h.filePath?.let {
+                        Spacer(Modifier.width(6.dp))
+                        TextButton(onClick = { onShowCode(it, h.lineNo, h.findingId) }) {
+                            Text(
+                                io.acr.i18n.t("thread.showCode"),
+                                style = MaterialTheme.typography.labelSmall,
+                            )
+                        }
+                    }
+                    Spacer(Modifier.weight(1f))
+                    Text(
+                        io.acr.i18n.t(h.state.labelKey),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = h.state.color(),
+                    )
+                }
+                Text(h.title, style = MaterialTheme.typography.titleSmall)
+
+                Spacer(Modifier.height(6.dp))
+                Text(
+                    io.acr.i18n.t("thread.ourQuestion"),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.primary,
+                )
+                SelectionContainer {
+                    Text(h.question.take(600), style = MaterialTheme.typography.bodySmall)
+                }
+
+                // El ida y vuelta, en orden. Es "por dónde arranqué y qué me contestaron".
+                h.entries.forEach { e ->
+                    Spacer(Modifier.height(6.dp))
+                    Text(
+                        e.author + if (e.ours) " (nosotros)" else "",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = if (e.ours) MaterialTheme.colorScheme.primary
+                        else MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    SelectionContainer {
+                        Text(e.body.take(600), style = MaterialTheme.typography.bodySmall)
+                    }
+                }
+
+                // El veredicto sobre el código, con su evidencia.
+                h.resolutionNote?.takeIf { it.isNotBlank() }?.let {
+                    Spacer(Modifier.height(6.dp))
+                    Text(
+                        io.acr.i18n.t("verify.title") + ": " + it,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+
+                // Y lo que hay para hacer, acá mismo.
+                // Hace cuánto esperamos, y la opción de insistir. Sólo aparece cuando la pelota
+                // está del otro lado y pasó el plazo: recordar algo de ayer sería molestar.
+                h.waitingDays?.let { dias ->
+                    Spacer(Modifier.height(6.dp))
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            if (h.followedUpAt != null) io.acr.i18n.t("followup.sent", dias)
+                            else io.acr.i18n.t("followup.waiting", dias),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = if (h.needsFollowUp(followUpAfterDays)) {
+                                MaterialTheme.colorScheme.error
+                            } else {
+                                MaterialTheme.colorScheme.onSurfaceVariant
+                            },
+                        )
+                        if (h.needsFollowUp(followUpAfterDays)) {
+                            Spacer(Modifier.width(8.dp))
+                            OutlinedButton(onClick = { onFollowUp(h) }) {
+                                Text(
+                                    io.acr.i18n.t("followup.action"),
+                                    style = MaterialTheme.typography.labelSmall,
+                                )
+                            }
+                        }
+                    }
+                }
+
+                // Una pregunta que todavía no se hizo: se puede publicar o descartar desde acá,
+                // que es donde uno se da cuenta de que faltaba.
+                if (h.state == ThreadState.UNPUBLISHED && h.findingId != null) {
+                    Spacer(Modifier.height(8.dp))
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Button(
+                            enabled = !publishing,
+                            onClick = { onPublishFinding(h.findingId) },
+                        ) { Text(io.acr.i18n.t("review.publishInline")) }
+                        OutlinedButton(onClick = { onDismissFinding(h.findingId) }) {
+                            Text(io.acr.i18n.t("review.dismiss"))
+                        }
+                    }
+                }
+
+                // Cerrar sin esperar cambios: para el comentario que sólo validaba una respuesta
+                // o que ya quedó saldado hablando. Sin esto quedaba esperando una corrección que
+                // nunca iba a llegar, y el PR no podía darse por listo.
+                if (h.open && h.state != ThreadState.UNPUBLISHED && h.findingId != null) {
+                    Spacer(Modifier.height(6.dp))
+                    TextButton(onClick = { onCloseThread(h.findingId, true) }) {
+                        Text(io.acr.i18n.t("thread.close"), style = MaterialTheme.typography.labelSmall)
+                    }
+                } else if (h.findingId != null && h.state == ThreadState.OK) {
+                    Spacer(Modifier.height(4.dp))
+                    TextButton(onClick = { onCloseThread(h.findingId, false) }) {
+                        Text(io.acr.i18n.t("thread.reopen"), style = MaterialTheme.typography.labelSmall)
+                    }
+                }
+
+                val d = h.draft
+                if (d != null && d.status != io.acr.data.ReplyStatus.PUBLISHED) {
+                    Spacer(Modifier.height(8.dp))
+                    if (d.body.isNullOrBlank()) {
+                        Button(enabled = d.id !in busy, onClick = { onDraft(d) }) {
+                            Text(
+                                if (d.id in busy) io.acr.i18n.t("replies.analyzing")
+                                else io.acr.i18n.t("replies.analyze"),
+                            )
+                        }
+                    } else {
+                        var texto by remember(d.id, d.body) { mutableStateOf(d.body.orEmpty()) }
+                        OutlinedTextField(
+                            value = texto,
+                            onValueChange = { texto = it },
+                            modifier = Modifier.fillMaxWidth().heightIn(min = 100.dp, max = 220.dp),
+                            label = { Text(io.acr.i18n.t("replies.draftLabel")) },
+                            textStyle = MaterialTheme.typography.bodySmall,
+                        )
+                        Spacer(Modifier.height(6.dp))
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Button(
+                                enabled = d.id !in busy && texto.isNotBlank(),
+                                onClick = { onPublish(d, texto) },
+                            ) { Text(io.acr.i18n.t("replies.publishReply")) }
+                            OutlinedButton(onClick = { onEdit(d, texto) }) {
+                                Text(io.acr.i18n.t("common.saveDraft"))
+                            }
+                            OutlinedButton(enabled = d.id !in busy, onClick = { onDraft(d) }) {
+                                Text(io.acr.i18n.t("replies.redraft"))
+                            }
+                        }
+                    }
+                } else if (d?.publishedUrl?.isNotBlank() == true) {
+                    Spacer(Modifier.height(4.dp))
+                    TextButton(onClick = { onOpen(d.publishedUrl!!) }) {
+                        Text(io.acr.i18n.t("common.openBrowser"))
+                    }
                 }
             }
         }
@@ -982,4 +1664,70 @@ private fun openInBrowser(url: String) {
     runCatching {
         if (Desktop.isDesktopSupported()) Desktop.getDesktop().browse(URI.create(url))
     }
+}
+
+/**
+ * Por qué NO se puede mergear todavía, o null si se puede.
+ *
+ * Mergear es la única acción de la app que cambia el repositorio y no tiene vuelta atrás, así que
+ * las condiciones son explícitas y se muestran: no alcanza con deshabilitar un botón sin decir por
+ * qué. Se exige que no quede nada esperando —hallazgos sin resolver, notas sin publicar, respuestas
+ * sin contestar— y, además, que el autor haya subido código DESPUÉS de la review: si el head del PR
+ * sigue siendo el que se revisó, nadie corrigió nada y mergear sería aprobar sin verificar.
+ */
+internal fun mergeBlocker(
+    pr: PullRequest?,
+    review: ReviewRecord?,
+    findings: List<io.acr.data.Finding>,
+    notes: List<io.acr.data.LocalNote>,
+    replies: List<io.acr.data.ReplyDraft>,
+): String? = mergeBlocker(
+    prHeadSha = pr?.headSha,
+    reviewHeadSha = review?.headSha,
+    hayReview = review != null,
+    hallazgosPendientes = findings.count { !it.settled },
+    notasPendientes = notes.count { it.publishedId == null },
+    respuestasPendientes = replies.count { it.status != io.acr.data.ReplyStatus.PUBLISHED },
+    // `settled` cubre los tres cierres —publicado, descartado y cerrado en la conversación—; acá
+    // hay que excluir explícitamente los dos últimos, porque un hilo cerrado hablando no espera
+    // ninguna verificación contra el código.
+    sinVerificar = findings.count {
+        it.publishedId != null && it.dismissedAt == null && it.closedAt == null &&
+            it.resolution == null
+    },
+    noResueltos = findings.count {
+        it.publishedId != null && it.dismissedAt == null && it.closedAt == null &&
+            it.resolution != null && it.resolution != io.acr.data.Resolution.RESOLVED
+    },
+)
+
+/**
+ * La misma regla, sobre contadores.
+ *
+ * La lista de PRs no carga los hallazgos de cada fila —sería una consulta por fila— pero sí tiene
+ * los conteos. Es la misma función a propósito: dos criterios distintos para habilitar un merge
+ * terminarían divergiendo, y el que se relaje de más no se puede deshacer.
+ */
+internal fun mergeBlocker(
+    prHeadSha: String?,
+    reviewHeadSha: String?,
+    hayReview: Boolean,
+    hallazgosPendientes: Int,
+    notasPendientes: Int,
+    respuestasPendientes: Int,
+    sinVerificar: Int = 0,
+    noResueltos: Int = 0,
+): String? = when {
+    prHeadSha == null -> "merge.noPr"
+    !hayReview -> "merge.noReview"
+    hallazgosPendientes > 0 -> "merge.pendingFindings"
+    notasPendientes > 0 -> "merge.pendingNotes"
+    respuestasPendientes > 0 -> "merge.pendingReplies"
+    // El head del PR es el mismo que se revisó: no hubo cambios después de los comentarios.
+    !reviewHeadSha.isNullOrBlank() && reviewHeadSha == prHeadSha -> "merge.noNewCommits"
+    // Publicado no es resuelto. Sin verificar contra el código, mergear es confiar en que
+    // alguien lo arregló porque lo dijo.
+    noResueltos > 0 -> "merge.notResolved"
+    sinVerificar > 0 -> "merge.notVerified"
+    else -> null
 }

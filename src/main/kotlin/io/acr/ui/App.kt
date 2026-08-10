@@ -67,6 +67,9 @@ fun App(ctx: AppContext) {
     var lang by remember {
         mutableStateOf(io.acr.i18n.Lang.fromCode(ctx.prefs.get(AppContext.PREF_UI_LANG)))
     }
+    // Espejo del idioma para los textos que se arman fuera de la composición (snackbars que salen
+    // después de una llamada de red, donde no se puede leer el CompositionLocal).
+    androidx.compose.runtime.SideEffect { io.acr.i18n.uiLang = lang }
     // Cuántas reviews corren por repo, para verlo en la barra sin entrar a cada uno.
     val progressMap by ctx.engine.progress.collectAsState()
     val runningByRepo = progressMap.values.groupingBy { it.repoId }.eachCount()

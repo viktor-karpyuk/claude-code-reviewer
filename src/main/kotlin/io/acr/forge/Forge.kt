@@ -53,6 +53,40 @@ interface Forge {
     suspend fun postComment(repo: RepoRecord, prId: Long, body: String): PostedComment
 
     /**
+     * Mergea el pull request. Es la única operación de la app que cambia el repositorio de verdad
+     * y no se puede deshacer, así que nunca se llama sin una confirmación explícita del usuario.
+     *
+     * No se reintenta: a diferencia de un GET, repetir un merge que el servidor ya procesó pero
+     * cuya respuesta se perdió no es inofensivo.
+     */
+    suspend fun merge(
+        repo: RepoRecord,
+        prId: Long,
+        message: String,
+        closeSourceBranch: Boolean,
+    ): String
+
+    /**
+     * Aprueba el pull request en nombre del usuario del token.
+     *
+     * Se puede deshacer con [unapprove], así que no necesita confirmación: es una opinión, no un
+     * cambio en el repositorio.
+     */
+    suspend fun approve(repo: RepoRecord, prId: Long)
+
+    /** Retira la aprobación. */
+    suspend fun unapprove(repo: RepoRecord, prId: Long)
+
+    /**
+     * Rechaza el pull request y lo cierra.
+     *
+     * [reason] se publica como comentario ANTES de cerrar: un rechazo sin motivo escrito obliga a
+     * quien lo recibe a adivinar, y una vez cerrado el hilo queda menos a la vista. Si el cierre
+     * falla, el comentario queda igual — es preferible a perder la explicación.
+     */
+    suspend fun decline(repo: RepoRecord, prId: Long, reason: String?)
+
+    /**
      * Un PR puntual. Existe para no pedir la lista entera cuando sólo hace falta uno: además de
      * ser una llamada en vez de N páginas, bajo rate limiting la lista falla y dejaba la pantalla
      * del PR sin datos (y con ella el visor de código y el de commits).
@@ -376,6 +410,59 @@ class BitbucketForge : Forge {
         return PrListResult(prs, res.etag, notModified = false)
     }
 
+    override suspend fun merge(
+        repo: RepoRecord,
+        prId: Long,
+        message: String,
+        closeSourceBranch: Boolean,
+    ): String {
+        val url = "$API/repositories/${repo.owner}/${repo.slug}/pullrequests/$prId/merge"
+        val payload = JsonObject(
+            mapOf(
+                "message" to kotlinx.serialization.json.JsonPrimitive(message),
+                "close_source_branch" to kotlinx.serialization.json.JsonPrimitive(closeSourceBranch),
+                "merge_strategy" to kotlinx.serialization.json.JsonPrimitive("merge_commit"),
+            ),
+        )
+        val body = send(
+            request(url, repo.token)
+                .header("Content-Type", "application/json")
+                .POST(HttpRequest.BodyPublishers.ofString(payload.toString()))
+                .build(),
+            idempotent = false,
+            context = ctx(repo),
+        )
+        val json = lenientJson.parseToJsonElement(body).jsonObject
+        return json.str("links", "html", "href") ?: json.str("merge_commit", "hash") ?: ""
+    }
+
+    override suspend fun approve(repo: RepoRecord, prId: Long) {
+        send(
+            request("$API/repositories/${repo.owner}/${repo.slug}/pullrequests/$prId/approve", repo.token)
+                .POST(HttpRequest.BodyPublishers.noBody()).build(),
+            idempotent = false, context = ctx(repo),
+        )
+    }
+
+    override suspend fun unapprove(repo: RepoRecord, prId: Long) {
+        send(
+            request("$API/repositories/${repo.owner}/${repo.slug}/pullrequests/$prId/approve", repo.token)
+                .DELETE().build(),
+            idempotent = false, context = ctx(repo),
+        )
+    }
+
+    override suspend fun decline(repo: RepoRecord, prId: Long, reason: String?) {
+        // El motivo va primero y como comentario propio: Bitbucket no lo guarda en el rechazo, y
+        // cerrar sin explicación deja a la otra persona adivinando.
+        reason?.takeIf { it.isNotBlank() }?.let { postComment(repo, prId, it) }
+        send(
+            request("$API/repositories/${repo.owner}/${repo.slug}/pullrequests/$prId/decline", repo.token)
+                .POST(HttpRequest.BodyPublishers.noBody()).build(),
+            idempotent = false, context = ctx(repo),
+        )
+    }
+
     override suspend fun getPullRequest(repo: RepoRecord, prId: Long): PullRequest? {
         val url = "$API/repositories/${repo.owner}/${repo.slug}/pullrequests/$prId"
         val pr = lenientJson.parseToJsonElement(
@@ -583,6 +670,75 @@ class GitHubForge : Forge {
                 isDraft = pr.str("draft") == "true",
             )
         }
+    }
+
+    override suspend fun merge(
+        repo: RepoRecord,
+        prId: Long,
+        message: String,
+        closeSourceBranch: Boolean,
+    ): String {
+        // GitHub no borra la rama al mergear: es una llamada aparte que no hacemos. Borrar una
+        // rama ajena sin pedirlo sería pasarse de lo que el usuario aceptó.
+        val url = "$API/repos/${repo.owner}/${repo.slug}/pulls/$prId/merge"
+        val payload = JsonObject(
+            mapOf(
+                "commit_title" to kotlinx.serialization.json.JsonPrimitive(message),
+                "merge_method" to kotlinx.serialization.json.JsonPrimitive("merge"),
+            ),
+        )
+        val body = send(
+            request(url, repo.token)
+                .header("Content-Type", "application/json")
+                .PUT(HttpRequest.BodyPublishers.ofString(payload.toString()))
+                .build(),
+            idempotent = false,
+            context = ctx(repo),
+        )
+        return lenientJson.parseToJsonElement(body).jsonObject.str("sha").orEmpty()
+    }
+
+    override suspend fun approve(repo: RepoRecord, prId: Long) {
+        val payload = JsonObject(
+            mapOf("event" to kotlinx.serialization.json.JsonPrimitive("APPROVE")),
+        )
+        send(
+            request("$API/repos/${repo.owner}/${repo.slug}/pulls/$prId/reviews", repo.token)
+                .header("Content-Type", "application/json")
+                .POST(HttpRequest.BodyPublishers.ofString(payload.toString())).build(),
+            idempotent = false, context = ctx(repo),
+        )
+    }
+
+    override suspend fun unapprove(repo: RepoRecord, prId: Long) {
+        // GitHub no tiene "desaprobar": una review enviada no se borra, se reemplaza por otra.
+        // Se manda un COMMENT vacío de veredicto, que es lo más cercano a retirar la aprobación
+        // sin pedir cambios que nadie pidió.
+        val payload = JsonObject(
+            mapOf(
+                "event" to kotlinx.serialization.json.JsonPrimitive("COMMENT"),
+                "body" to kotlinx.serialization.json.JsonPrimitive("Retiro la aprobación anterior."),
+            ),
+        )
+        send(
+            request("$API/repos/${repo.owner}/${repo.slug}/pulls/$prId/reviews", repo.token)
+                .header("Content-Type", "application/json")
+                .POST(HttpRequest.BodyPublishers.ofString(payload.toString())).build(),
+            idempotent = false, context = ctx(repo),
+        )
+    }
+
+    override suspend fun decline(repo: RepoRecord, prId: Long, reason: String?) {
+        reason?.takeIf { it.isNotBlank() }?.let { postComment(repo, prId, it) }
+        val payload = JsonObject(
+            mapOf("state" to kotlinx.serialization.json.JsonPrimitive("closed")),
+        )
+        send(
+            request("$API/repos/${repo.owner}/${repo.slug}/pulls/$prId", repo.token)
+                .header("Content-Type", "application/json")
+                .method("PATCH", HttpRequest.BodyPublishers.ofString(payload.toString())).build(),
+            idempotent = false, context = ctx(repo),
+        )
     }
 
     override suspend fun getPullRequest(repo: RepoRecord, prId: Long): PullRequest? {

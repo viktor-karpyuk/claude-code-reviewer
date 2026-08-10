@@ -157,6 +157,114 @@ class ReviewEngine(
         }.onFailure { replies.fail(draft.id, it.message ?: it::class.java.simpleName) }
     }
 
+    /**
+     * Verifica si lo que señalamos se corrigió, mirando lo que cambió desde la review.
+     *
+     * Publicar un comentario no es lo mismo que que lo hayan resuelto. Sin esto, decidir si el PR
+     * está listo era leer a mano cada hallazgo contra los commits nuevos. Guarda un veredicto por
+     * hallazgo con su evidencia, y un resumen global.
+     *
+     * @return el resumen, o el error si no se pudo verificar.
+     */
+    suspend fun verifyResolution(
+        repo: RepoRecord,
+        pr: PullRequest,
+        review: ReviewRecord,
+    ): Result<String> {
+        val workDir = File(repo.localPath)
+        if (!Git.isRepo(workDir)) {
+            return Result.failure(IllegalStateException("«${repo.localPath}» no es un working copy de git."))
+        }
+        val binary = ClaudeCli.resolveBinary(prefs.get(io.acr.AppContext.PREF_CLAUDE_BINARY))
+            ?: return Result.failure(IllegalStateException("No encuentro el ejecutable de Claude Code."))
+
+        val pendientes = findings.forReview(review.id).filter { it.publishedId != null && it.dismissedAt == null }
+        if (pendientes.isEmpty()) {
+            return Result.failure(IllegalStateException("No hay comentarios publicados para verificar."))
+        }
+
+        Git.fetch(workDir, pr.targetBranch, pr.sourceBranch)
+        // El rango es lo que cambió DESDE la review: es exactamente la pregunta que se hace.
+        val rango = if (review.headSha.isNotBlank() && review.headSha != pr.headSha) {
+            "${review.headSha}..origin/${pr.sourceBranch}"
+        } else {
+            "origin/${pr.targetBranch}...origin/${pr.sourceBranch}"
+        }
+
+        val items = pendientes.joinToString("\n") { f ->
+            "- id=${f.id} [${f.filePath}${f.lineNo?.let { ":$it" } ?: ""}] (${f.severity}) " +
+                "${f.title}: ${f.body.replace('\n', ' ').take(400)}"
+        }
+        val hilo = comments.forPr(repo.id, pr.id).filter { !it.ours }.takeIf { it.isNotEmpty() }
+            ?.joinToString("\n") { "- ${it.author}: ${it.body.replace('\n', ' ').take(300)}" }
+            ?.let { "LO QUE RESPONDIERON EN EL HILO (contexto, no evidencia)\n$it" }
+            .orEmpty()
+
+        val prompt = ReviewPrompt.resolutionPrompt(
+            language = prefs.get(io.acr.AppContext.PREF_LANGUAGE) ?: "español",
+            prTitle = pr.title,
+            rangeSinceReview = rango,
+            items = items,
+            thread = hilo,
+        )
+
+        return runCatching {
+            val result = ClaudeCli.run(
+                binary = binary,
+                workDir = workDir,
+                prompt = prompt,
+                model = repo.defaultModel.ifBlank { ReviewDepth.INTERMEDIATE.defaultModel },
+                allowedTools = ReviewDepth.HEAVY.allowedTools(),
+                disallowedTools = ReviewPrompt.DISALLOWED_TOOLS,
+                jsonSchema = ReviewPrompt.RESOLUTION_SCHEMA,
+            )
+            if (!result.ok) error(result.stderr.ifBlank { "Claude Code no devolvió un veredicto." })
+            // Sin una sola herramienta usada no miró el diff: el veredicto no vale nada, y acá
+            // creerle habilitaría un merge.
+            if (result.toolUses == 0) {
+                error("El modelo no abrió el diff, así que su veredicto no se apoya en el código.")
+            }
+            aplicarVeredicto(review, pendientes, result.structured ?: result.text, pr.headSha)
+        }
+    }
+
+    /** Parsea el veredicto y lo persiste. Un id que no reconocemos se ignora en vez de romper. */
+    private fun aplicarVeredicto(
+        review: ReviewRecord,
+        pendientes: List<io.acr.data.Finding>,
+        payload: String,
+        head: String,
+    ): String {
+        val json = kotlinx.serialization.json.Json { ignoreUnknownKeys = true; isLenient = true }
+            .parseToJsonElement(payload).jsonObject
+        val validos = pendientes.associateBy { it.id }
+        var vistos = 0
+        (json["items"] as? JsonArray)?.forEach { nodo ->
+            val o = nodo.jsonObject
+            val id = o["id"]?.jsonPrimitive?.contentOrNull ?: return@forEach
+            val f = validos[id] ?: return@forEach
+            val veredicto = runCatching {
+                io.acr.data.Resolution.valueOf(
+                    o["resolution"]?.jsonPrimitive?.contentOrNull.orEmpty().uppercase(),
+                )
+            }.getOrNull() ?: return@forEach
+            findings.setResolution(f.id, veredicto, o["evidence"]?.jsonPrimitive?.contentOrNull)
+            vistos++
+        }
+        val resumen = json["summary"]?.jsonPrimitive?.contentOrNull.orEmpty()
+        // Si el modelo dejó hallazgos sin veredicto, se dice: quedan sin verificar, y sin
+        // veredicto no habilitan el merge.
+        val faltantes = pendientes.size - vistos
+        val texto = buildString {
+            append(resumen)
+            if (faltantes > 0) {
+                append("\n\n⚠️ Quedaron $faltantes observación(es) sin veredicto: siguen sin verificar.")
+            }
+        }
+        reviews.setResolutionSummary(review.id, texto, head)
+        return texto
+    }
+
     /** Publica la contestación colgada del comentario al que responde. */
     suspend fun publishReply(
         repo: RepoRecord,
@@ -167,6 +275,27 @@ class ReviewEngine(
         val parent = draft.theirCommentId
         val posted = io.acr.forge.Forges.of(repo.provider).postReply(repo, prId, parent, body)
         replies.markPublished(draft.id, posted.id, posted.url)
+        syncComments(repo, prId)
+        posted.url
+    }
+
+    /**
+     * Publica un recordatorio colgado de nuestro propio comentario.
+     *
+     * No lo redacta el modelo: el texto sale de una plantilla traducida y el usuario lo edita
+     * antes de mandarlo. Pagar una corrida para escribir "¿lo podés mirar?" no tiene sentido, y
+     * un recordatorio generado suena peor que uno escrito.
+     */
+    suspend fun postFollowUp(
+        repo: RepoRecord,
+        prId: Long,
+        finding: io.acr.data.Finding,
+        body: String,
+    ): Result<String> = runCatching {
+        val parent = finding.publishedId
+            ?: error("Ese comentario todavía no se publicó, así que no hay hilo donde recordar.")
+        val posted = io.acr.forge.Forges.of(repo.provider).postReply(repo, prId, parent, body)
+        findings.markFollowedUp(finding.id)
         syncComments(repo, prId)
         posted.url
     }
@@ -187,6 +316,11 @@ class ReviewEngine(
         reviews.markPublishedIfComplete(finding.reviewId, posted.url)
         syncComments(repo, prId)
         posted.url
+    }.onFailure {
+        // El error se guarda en el hallazgo: antes vivía en un snackbar que se iba solo, así que
+        // uno quedaba pendiente sin que nadie supiera por qué y el PR seguía contando como
+        // "listo para publicar" para siempre.
+        findings.failPublish(finding.id, it.message ?: it::class.java.simpleName)
     }
 
     /**

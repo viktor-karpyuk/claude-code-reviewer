@@ -413,6 +413,55 @@ class Store(private val dbPath: Path) : AutoCloseable {
             // último. Queda vacío hasta el primer refresco, y el orden trata el vacío como
             // desconocido en vez de como "muy viejo".
             "ALTER TABLE pr_cache ADD COLUMN created_on TEXT NOT NULL DEFAULT ''",
+
+            // v22 — un hallazgo puede quedar resuelto sin publicarse, y un fallo al publicar tiene
+            // que sobrevivir a la pantalla.
+            //
+            // Antes había un solo estado posible: publicado o pendiente. Un nitpick que uno decide
+            // no mandar dejaba el PR contando como "listo para publicar" para siempre, y si el
+            // proveedor rechazaba un comentario el error vivía en un snackbar que se iba solo: el
+            // hallazgo quedaba pendiente sin que nadie supiera por qué.
+            """
+            ALTER TABLE finding ADD COLUMN dismissed_at TEXT;--split--
+            ALTER TABLE finding ADD COLUMN publish_error TEXT
+            """.trimIndent(),
+
+            // v23 — verificación de que lo señalado efectivamente se corrigió.
+            //
+            // Publicar un comentario no es lo mismo que que lo hayan resuelto. Sin esto, decidir
+            // si el PR está listo era leer a mano cada hallazgo contra los commits nuevos y el
+            // hilo. `resolution` guarda el veredicto por hallazgo y `resolution_note` la evidencia
+            // concreta —qué commit o qué línea lo arregla—, que es lo que permite discutirlo.
+            """
+            ALTER TABLE finding ADD COLUMN resolution TEXT;--split--
+            ALTER TABLE finding ADD COLUMN resolution_note TEXT;--split--
+            ALTER TABLE review ADD COLUMN resolution_summary TEXT;--split--
+            ALTER TABLE review ADD COLUMN resolution_at TEXT
+            """.trimIndent(),
+
+            // v24 — contra qué commit se verificó.
+            //
+            // Sin esto no hay forma de saber si una verificación sigue valiendo: al llegar un
+            // commit nuevo la anterior queda vieja, y sin el dato el barrido automático la
+            // repetiría en cada vuelta —cada una cuesta una corrida del modelo— o no la repetiría
+            // nunca. Guardar el head convierte "¿hace falta?" en una comparación.
+            "ALTER TABLE review ADD COLUMN resolution_head TEXT",
+
+            // v25 — cuándo se mandó el último recordatorio de un comentario sin responder.
+            //
+            // Sin esto el reloj de "hace N días que no me contestás" arrancaría siempre desde el
+            // comentario original, y la app te ofrecería insistir todos los días sobre algo que ya
+            // insististe ayer. Insistir de más es peor que no insistir.
+            "ALTER TABLE finding ADD COLUMN followed_up_at TEXT",
+
+            // v26 — un comentario puede cerrarse en la conversación, sin cambios en el código.
+            //
+            // Faltaba un caso: comentarios que no piden que cambien nada —una validación, un
+            // "dale, tenés razón", una pregunta ya contestada—. Sin esto quedaban esperando una
+            // corrección que nunca iba a llegar, y el PR no podía darse por listo. Distinto de
+            // `dismissed_at`, que es "decidí no publicarlo": esto es "se publicó, se habló y se
+            // cerró".
+            "ALTER TABLE finding ADD COLUMN closed_at TEXT",
         )
     }
 }

@@ -29,7 +29,55 @@ class AutoReviewer(
     private val replies: io.acr.data.ReplyRepository,
     private val seenPrs: io.acr.data.SeenPrRepository,
     private val prLoader: io.acr.forge.PrLoader,
+    private val findings: io.acr.data.FindingRepository,
 ) {
+
+    /**
+     * Verifica los PRs a los que les llegaron commits después de nuestros comentarios.
+     *
+     * Es la contracara del aviso "no hay commits desde la review": cuando por fin aparecen los
+     * fixes, alguien tiene que mirar si cada comentario fue atendido. Hacerlo a mano en cada PR
+     * es el trabajo que la app existe para evitar.
+     *
+     * Sólo corre donde hace falta —[verificationNeed] decide— y cuenta contra el tope del ciclo,
+     * porque cada verificación es una corrida del modelo igual que una review.
+     */
+    private suspend fun verifyUpdated(
+        repo: io.acr.forge.RepoRecord,
+        prs: List<io.acr.forge.PullRequest>,
+        budget: Int,
+    ): Pair<Int, List<String>> {
+        var usados = 0
+        val notas = mutableListOf<String>()
+        for (pr in prs) {
+            if (usados >= budget) break
+            val review = reviews.latestUsableFor(repo.id, pr.id) ?: continue
+            val need = verificationNeed(pr, review, findings.forReview(review.id))
+            if (need !is VerificationNeed.Needed) continue
+            usados++
+            engine.verifyResolution(repo, pr, review)
+                .onSuccess { resumen ->
+                    val despues = findings.forReview(review.id)
+                        .filter { it.publishedId != null && it.dismissedAt == null }
+                    val sinCorregir = despues.count {
+                        it.resolution != null && it.resolution != io.acr.data.Resolution.RESOLVED
+                    }
+                    val todo = despues.isNotEmpty() && despues.all {
+                        it.resolution == io.acr.data.Resolution.RESOLVED
+                    }
+                    notas += "${repo.name} #${pr.id}: verificado (${need.pending} pendiente(s))"
+                    notifier.notify(
+                        if (todo) "Todo corregido · ${repo.name} #${pr.id}"
+                        else "Verificado · ${repo.name} #${pr.id}",
+                        if (todo) "Los comentarios fueron atendidos; se puede mergear."
+                        else if (sinCorregir > 0) "$sinCorregir comentario(s) siguen sin resolverse."
+                        else resumen.take(140),
+                    )
+                }
+                .onFailure { notas += "${repo.name} #${pr.id}: no pude verificar (${it.message?.take(60)})" }
+        }
+        return usados to notas
+    }
 
     /**
      * Procesa las respuestas que dejó el desarrollador, según el modo de cada repositorio.
@@ -162,6 +210,12 @@ class AutoReviewer(
                         if (fresh.size == 1) "${first.author}: ${first.title}" else first.title,
                     )
                 }
+                // Verificar va antes de revisar PRs nuevos: cerrar un PR que ya está casi listo
+                // vale más que empezar uno desde cero, y las dos cosas comparten el mismo tope.
+                val (usados, notasVerif) = verifyUpdated(repo, prs, maxPerCycle() - done)
+                done += usados
+                notes += notasVerif
+
                 for (pr in prs) {
                     if (done >= maxPerCycle()) {
                         notes += "corte por límite de $done por ciclo"

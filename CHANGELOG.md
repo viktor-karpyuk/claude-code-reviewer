@@ -3,6 +3,217 @@
 Reglas de numeración en [CLAUDE.md](CLAUDE.md): un requerimiento **nuevo** incrementa *major*;
 cambiar uno **existente** incrementa *patch*.
 
+## 19.0.0
+
+Requerimientos nuevos: **"esperando respuesta de ellos"** y **cerrar un hilo sin esperar cambios**.
+
+- El panel separa dos cosas que estaban juntas: **"Te respondieron"** (falta que contestes vos) y
+  **"Esperando respuesta de ellos"** (contestaste todo y la pelota está del otro lado). Un PR donde
+  ya habías contestado seguía apareciendo como si te tocara mover algo.
+- Un hilo se puede **cerrar sin esperar cambios**: es el caso del comentario que sólo validaba una
+  respuesta, o que quedó saldado hablando. Antes esos quedaban esperando una corrección que nunca
+  iba a llegar, y el PR no podía darse por listo. Se puede reabrir.
+- Es distinto de descartar: descartar es "decidí no publicarlo"; cerrar es "se publicó, se habló y
+  quedó saldado". Ninguno de los dos borra nada.
+- Un hilo cerrado así deja de pedir seguimiento y deja de contar como "sin verificar" para el
+  merge, que era la incoherencia que lo hacía inútil.
+
+## 18.0.0
+
+Requerimiento nuevo: **seguimiento de comentarios sin respuesta**.
+
+- Cada hilo muestra hace cuántos días espera respuesta, y pasado el plazo —tres días por defecto—
+  aparece "Hacer seguimiento": publica un recordatorio colgado de nuestro propio comentario.
+- El mensaje sale de una plantilla **traducida al idioma elegido** y se muestra editable antes de
+  mandarlo. No lo redacta el modelo: pagar una corrida para escribir "¿lo podés mirar?" no tiene
+  sentido, y un recordatorio generado suena peor que uno escrito.
+- **La app nunca lo manda sola.** Se publica en el PR de otra persona; insistir automáticamente
+  sería el tipo de cosa que uno no quiere descubrir después.
+- El reloj se reinicia al mandar un recordatorio: sin eso, la app ofrecería insistir todos los
+  días sobre algo que ya insististe ayer.
+- Si lo último del hilo es de ellos, no se ofrece recordar nada: ahí quien debe una respuesta
+  somos nosotros, y recordarles sería exactamente al revés.
+
+## 17.0.1
+
+- El salto de la conversación al código era de ida: la única vuelta era la pestaña, y te dejaba al
+  principio de la lista buscando de nuevo dónde estabas. Ahora hay un "← Volver a la conversación"
+  que aparece sólo cuando llegaste por un salto, y que baja la lista hasta la tarjeta de la que
+  saliste.
+- Si te vas del código por tu cuenta —tocando otra pestaña— el "volver" desaparece: apuntaría a un
+  hilo del que ya saliste.
+
+## 17.0.0
+
+Requerimiento nuevo: **ver el código desde la conversación**.
+
+- El `archivo:línea` de cada hilo es un link, y hay un botón "Ver el código": abre la pestaña
+  Código en ese archivo, baja hasta la línea y la resalta. Leer la discusión sin el código al lado
+  obligaba a buscarlo a mano en la otra pestaña.
+- El salto además mueve el cursor del recorrido al hallazgo correspondiente, así "Siguiente"
+  continúa desde donde estabas mirando y no desde el principio.
+- El pedido de salto se limpia al aplicarse: si no, volver a la pestaña Código saltaría otra vez
+  al mismo lugar y perdería dónde estabas leyendo.
+- Una pregunta todavía sin publicar ahora se puede **publicar o descartar desde la propia
+  conversación**, que es donde uno se da cuenta de que faltaba. Publicar una respuesta ya
+  redactada ya se podía desde la tarjeta, y sigue igual.
+
+Arreglo:
+
+- Un borrador de respuesta preparado para una respuesta **anterior** del hilo no se veía: sólo se
+  miraba el de la última. Existía en la base y no aparecía en ningún lado.
+
+## 16.0.0
+
+Requerimientos nuevos: **la conversación por pregunta** y **el atributo "listo para mergear"**.
+
+- Nueva pestaña **Conversación**, que reemplaza a Respuestas. Cada pregunta es una tarjeta con su
+  historia completa: qué señalamos, qué contestaron, qué redactó la IA para responder, el veredicto
+  sobre el código con su evidencia, y qué falta hacer. Esa historia estaba repartida en cuatro
+  pestañas y había que reconstruirla de memoria en cada PR.
+- Seis estados por hilo, ordenados por lo que espera algo tuyo: te contestaron y falta responder,
+  respuesta redactada para publicar, no se corrigió, sin verificar, sin publicar, resuelto. Lo
+  accionable queda arriba.
+- Una respuesta a **nuestra** respuesta reabre el hilo: la cadena se recorre entera por `parentId`,
+  no sólo los hijos directos, así que la segunda vuelta de una discusión no se pierde.
+- Las acciones están en la misma tarjeta: redactar, editar, publicar. No hay que saltar de pestaña
+  para contestar lo que se está leyendo.
+- **"Listo para mergear" es ahora un atributo visible del PR** en la lista, y gana sobre cualquier
+  otro estado: es la conclusión, y es lo que uno busca de un vistazo. Sale de las mismas seis
+  condiciones que habilitan el botón de mergear.
+- Un hallazgo sin publicar cuenta como hilo abierto: esconderlo sería fingir que el PR está más
+  cerrado de lo que está. Y un PR sin ningún hilo no se declara resuelto.
+
+## 15.0.0
+
+Requerimiento nuevo: **cuando llegan los fixes, se verifican solos**.
+
+- Es la contracara del aviso "no hay commits desde la review". Cuando el autor por fin sube los
+  arreglos, el barrido automático analiza los commits nuevos y decide, comentario por comentario,
+  si fue atendido. Antes había que apretar "Verificar" en cada PR a mano.
+- **Sólo corre donde hace falta**, y el motivo de cada salteo es explícito: el PR no está abierto,
+  no hay review terminada, no queda nada por verificar, no hay commits desde la review, o ya se
+  verificó contra ese commit exacto.
+- Ese último caso es el que hace viable lo automático: se guarda **contra qué commit** se
+  verificó, así el barrido no repite el análisis cada pocos minutos sobre un PR que no cambió.
+  Cada verificación cuesta una corrida del modelo igual que una review.
+- Un veredicto "a medias" o "sin corregir" sí se vuelve a mirar cuando llega un commit nuevo: son
+  preguntas todavía abiertas. Lo descartado no se mira nunca, porque nunca se publicó.
+- La verificación comparte el tope de reviews por ciclo, y va **antes** de revisar PRs nuevos:
+  cerrar un PR que ya está casi listo vale más que empezar uno desde cero.
+- Notifica al terminar, distinguiendo "todo corregido, se puede mergear" de "N siguen sin
+  resolverse".
+- En la pantalla del PR, si llegaron commits después de la última verificación, se avisa que quedó
+  vieja: una verificación vieja es peor que ninguna, porque dice "corregido" sobre código que ya
+  cambió.
+
+## 14.0.0
+
+Requerimiento nuevo: **aprobar y declinar pull requests**.
+
+- Botones "Aprobar" y "Declinar" en la pantalla del PR, junto a verificar y mergear.
+- **Aprobar va sin confirmación y sin condiciones**: es una opinión, se puede retirar, y no
+  depende de la verificación —puede que quieras aprobar y que mergee otro.
+- **Declinar pide el motivo en el mismo paso, y es obligatorio.** Se publica como comentario
+  *antes* de cerrar: un rechazo sin explicación obliga a quien lo recibe a adivinar, y una vez
+  cerrado el hilo queda menos a la vista. Si el cierre falla, el comentario queda igual — es
+  preferible a perder la explicación.
+- El diálogo dice lo que va a pasar: se cierra en el servidor y se puede reabrir, pero el autor lo
+  va a ver rechazado.
+- Ninguna de las tres se reintenta ante un error de red, sólo ante el 401 previo a la
+  autorización: repetir una acción que el servidor ya procesó no es inofensivo.
+- En GitHub "retirar la aprobación" no existe como tal —una review enviada no se borra— así que se
+  publica una review de tipo COMMENT, que es lo más cercano sin pedir cambios que nadie pidió.
+
+## 13.0.0
+
+Requerimiento nuevo: **la urgencia crece con los días abiertos**.
+
+- Cinco escalones en vez de un umbral único: reciente, no perderlo de vista (3 días), más de una
+  semana (7), frenado (14) y abandonado (90). Cada uno con su color y su marca —`•`, `▲`, `▲▲`,
+  `▲▲▲`— para distinguirlos de reojo sin leer el número.
+- El motivo es concreto: en esta instalación conviven PRs de 2 días con dos de **1290 y 1269**
+  días. Un solo umbral los mostraba igual.
+- La urgencia no cambia ninguna regla: no bloquea, no reordena, no notifica. Sólo se ve. El orden
+  de la lista sigue siendo el que elegís vos.
+- Hay un test que recorre 400 días y exige que el nivel nunca baje: que un PR más viejo apure
+  menos sería absurdo, y es el error fácil al insertar un escalón nuevo en el medio.
+
+## 12.0.0
+
+Requerimiento nuevo: **hace cuántos días está abierto el PR**.
+
+- Cada fila de la lista y la cabecera del PR muestran "abierto hace N días", contado **desde el
+  día en que se creó el PR** —no desde el último commit—: lo que se quiere saber es cuánto lleva
+  esperando, y un commit nuevo no reinicia esa espera.
+- A partir de una semana el número se muestra en rojo. No cambia ninguna regla; sólo hace saltar
+  a la vista lo que se está durmiendo.
+- Un PR sin fecha de creación conocida —cacheado antes de que se guardara— no muestra nada, en vez
+  de inventar que se abrió hoy.
+- Una fecha futura, por relojes desfasados entre el servidor y esta máquina, se muestra como
+  "abierto hoy" y no como un número negativo.
+
+## 11.0.0
+
+Requerimiento nuevo: **verificar si los comentarios fueron atendidos, y recién ahí mergear**.
+
+- Botón "Verificar si se corrigió": corre Claude Code sobre lo que cambió **desde la review**
+  —`<commit revisado>..<head actual>`, que es exactamente la pregunta— y da un veredicto por cada
+  comentario publicado: corregido, a medias o sin corregir.
+- Cada veredicto viene con su evidencia concreta —archivo y línea, o el commit—, que es lo que
+  permite discutirlo en vez de creerlo. Más un resumen global.
+- El prompt es explícito en que juzgue por el código y no por lo que alguien haya dicho: que el
+  autor conteste "ya está arreglado" no es evidencia. Ese es justo el error que haría mergear algo
+  sin corregir.
+- Un veredicto que no abrió el diff se rechaza: sin haber mirado el código no vale nada, y creerle
+  habilitaría un merge.
+- Si el modelo deja comentarios sin veredicto, se dice y esos siguen contando como sin verificar.
+- **Mergear ahora exige la verificación.** Dos condiciones nuevas: no puede haber comentarios sin
+  verificar, ni ninguno que haya dado "a medias" o "sin corregir". Un comentario descartado no
+  necesita verificación, porque nunca se publicó.
+- La lista de PRs aplica exactamente las mismas condiciones, con una consulta de conteos en vez de
+  cargar los hallazgos por fila.
+
+## 10.0.0
+
+Requerimiento nuevo: **mergear desde la lista de pull requests**.
+
+- El botón de mergear aparece también en cada fila de la lista, sin tener que entrar al PR. Sólo
+  aparece cuando de verdad se puede: un botón apagado en cada fila sería ruido, y el motivo por el
+  que no se puede ya se explica en la pantalla del PR.
+- La condición es **la misma función** que usa la pantalla del PR, evaluada sobre los conteos que
+  la lista ya tiene en memoria: no se carga un hallazgo por fila. Hay un test que compara las dos
+  formas de invocarla caso por caso, porque si divergen, la que se relaje de más habilita un merge
+  que no se puede deshacer.
+- Después de mergear, la lista se refresca forzando el caché: el PR mergeado tiene que desaparecer
+  de los abiertos, y el caché vive 60 segundos.
+- La confirmación es la misma: modal, con las ramas nombradas y la opción de borrar la de origen.
+
+## 9.0.0
+
+Requerimientos nuevos: **descartar hallazgos** y **mergear el PR desde la app**.
+
+- Un hallazgo se puede **descartar**: deja de contar como pendiente sin borrarse, y se puede
+  deshacer. Antes sólo existía publicado o pendiente, así que un nitpick que uno decide no mandar
+  dejaba el PR contando como "listo para publicar" para siempre. En la base real quedaron tres PRs
+  así, cada uno con un `minor` sin publicar.
+- El panel deja de contar una review cuyos hallazgos están todos resueltos —publicados o
+  descartados—, aunque nunca se haya mandado el comentario resumen.
+- **Mergear el pull request**, con condiciones explícitas: no puede quedar ningún hallazgo sin
+  resolver, ninguna nota propia sin publicar, ninguna respuesta sin contestar, y tiene que haber
+  commits nuevos desde la review —si el head es el mismo que se revisó, nadie corrigió nada y
+  mergear sería aprobar sin verificar—. Cuando no se puede, el botón dice cuál de esas condiciones
+  falta, en vez de estar apagado sin explicación.
+- El merge pide confirmación en un modal que nombra las ramas y ofrece borrar la de origen. Es la
+  única acción de la app que cambia el repositorio y no tiene vuelta atrás; no se reintenta sola,
+  porque repetir un merge que el servidor ya procesó no es inofensivo.
+
+Arreglo:
+
+- **Un fallo al publicar ya no se pierde.** El error vivía en un snackbar que se iba solo, así que
+  el hallazgo quedaba pendiente sin que nadie supiera por qué. Ahora se guarda en el hallazgo, se
+  muestra y se puede reintentar o descartar.
+
 ## 8.0.0
 
 Requerimiento nuevo: **las notas propias aparecen en la vista de Review**.

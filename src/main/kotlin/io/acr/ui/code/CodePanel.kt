@@ -69,6 +69,9 @@ internal val ADDED_BG = Color(0x3327C08A)
 internal val REMOVED_BG = Color(0x33E4685F)
 internal val HUNK_BG = Color(0x228FBEFF)
 
+/** A dónde saltar en el visor de código: el archivo y, si la hay, la línea. */
+data class CodeFocus(val filePath: String, val lineNo: Int?)
+
 @Composable
 fun CodePanel(
     ctx: AppContext,
@@ -76,6 +79,9 @@ fun CodePanel(
     pr: PullRequest?,
     prId: Long,
     snackbar: SnackbarHostState,
+    /** Pedido de salto desde otra pantalla —la conversación— o null si se entró de frente. */
+    focus: CodeFocus? = null,
+    onFocusConsumed: () -> Unit = {},
 ) {
     val scope = rememberCoroutineScope()
     val workDir = remember(repo.localPath) { File(repo.localPath) }
@@ -136,6 +142,22 @@ fun CodePanel(
             // Sin línea (hallazgo de archivo entero) no hay adónde bajar: alcanza con abrirlo.
             pendingLine = null
         }
+    }
+
+    // Salto pedido desde la conversación: abre el archivo, baja a la línea y la resalta. El
+    // cursor del recorrido se mueve al hallazgo correspondiente, si hay uno, para que "Siguiente"
+    // siga desde donde uno estaba mirando y no desde el principio.
+    LaunchedEffect(focus, files) {
+        val destino = focus ?: return@LaunchedEffect
+        if (files.isEmpty()) return@LaunchedEffect
+        selected = destino.filePath
+        pendingLine = destino.lineNo
+        highlight = destino.lineNo?.let { destino.filePath to it }
+        val i = anchors.indexOfFirst {
+            it.filePath == destino.filePath && it.lineNo == destino.lineNo
+        }
+        if (i >= 0) cursor = i
+        onFocusConsumed()
     }
 
     // El scroll espera a que el archivo cargue: al cambiar de archivo, `lines` llega después.

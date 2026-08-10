@@ -23,6 +23,62 @@ object ReviewPrompt {
     },"required":["summary","findings"]}
     """.trimIndent()
 
+    /** Veredicto por hallazgo, más el global. Los ids vuelven tal cual para poder anclar cada uno. */
+    val RESOLUTION_SCHEMA = """
+    {"type":"object","properties":{
+      "summary":{"type":"string"},
+      "mergeable":{"type":"boolean"},
+      "items":{"type":"array","items":{"type":"object","properties":{
+        "id":{"type":"string"},
+        "resolution":{"type":"string","enum":["RESOLVED","PARTIAL","UNRESOLVED"]},
+        "evidence":{"type":"string"}
+      },"required":["id","resolution","evidence"]}}
+    },"required":["summary","mergeable","items"]}
+    """.trimIndent()
+
+    /**
+     * Prompt para verificar si lo que señalamos se corrigió.
+     *
+     * El trabajo es de evidencia, no de opinión: hay que mirar qué cambió entre el commit que se
+     * revisó y el actual, y decir para cada hallazgo si eso lo arregla. Se le pide explícitamente
+     * que no acepte una respuesta del autor como prueba —"ya lo arreglé" no es el código— porque
+     * ese es el error que haría mergear algo sin corregir.
+     */
+    fun resolutionPrompt(
+        language: String,
+        prTitle: String,
+        rangeSinceReview: String,
+        items: String,
+        thread: String,
+    ): String = """
+        Sos un revisor senior verificando si las observaciones de una review anterior fueron
+        atendidas. Devolvé ÚNICAMENTE el JSON que se describe al final.
+
+        PULL REQUEST: $prTitle
+        CAMBIOS DESDE LA REVIEW: $rangeSinceReview
+
+        Empezá por `git diff --stat $rangeSinceReview` para ver qué se tocó desde entonces, y
+        después mirá el diff de los archivos que importan. Los comandos de git de sólo lectura ya
+        están autorizados.
+
+        OBSERVACIONES A VERIFICAR
+        $items
+
+        $thread
+
+        REGLAS
+        - Juzgá por el código, no por lo que alguien haya dicho. Que el autor conteste "ya está
+          arreglado" no es evidencia; el diff sí lo es.
+        - RESOLVED sólo si el cambio arregla lo señalado de verdad. Si atiende una parte, o lo
+          mueve de lugar sin resolverlo, es PARTIAL.
+        - UNRESOLVED si el código sigue igual o el cambio no tiene que ver.
+        - En `evidence` citá lo concreto: archivo y línea, o el commit. Una frase, no un ensayo.
+          Si es UNRESOLVED, decí qué falta hacer.
+        - `mergeable` es true sólo si TODAS son RESOLVED y no encontrás nada nuevo que frene el
+          merge. Ante la duda, false: mergear de más no se puede deshacer.
+        - Escribí en $language.
+    """.trimIndent()
+
     /** Escribir en el árbol o salir a la red está fuera de alcance en cualquier nivel. */
     val DISALLOWED_TOOLS = listOf("Edit", "Write", "WebFetch", "WebSearch")
 

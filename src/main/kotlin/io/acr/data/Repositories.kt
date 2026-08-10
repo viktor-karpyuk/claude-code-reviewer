@@ -185,6 +185,11 @@ data class ReviewRecord(
     val auto: Boolean,
     /** Diagnóstico interno: NO se publica, sólo se muestra en la app. */
     val deniedTools: String?,
+    /** Veredicto global de la última verificación de resolución, si se corrió. */
+    val resolutionSummary: String? = null,
+    val resolutionAt: String? = null,
+    /** El commit contra el que se verificó. Si el PR avanzó, la verificación quedó vieja. */
+    val resolutionHead: String? = null,
 )
 
 class ReviewRepository(private val store: Store) {
@@ -265,6 +270,19 @@ class ReviewRepository(private val store: Store) {
         }
     }
 
+    /** Resumen de la verificación: el veredicto global sobre si el PR quedó listo. */
+    fun setResolutionSummary(id: String, summary: String, head: String) {
+        store.stmt(
+            "UPDATE review SET resolution_summary = ?, resolution_at = ?, resolution_head = ? WHERE id = ?",
+        ) { ps ->
+            ps.setString(1, summary.take(4_000))
+            ps.setString(2, Instant.now().toString())
+            ps.setString(3, head)
+            ps.setString(4, id)
+            ps.executeUpdate()
+        }
+    }
+
     fun markPublished(id: String, url: String) {
         store.stmt("UPDATE review SET published_url = ? WHERE id = ?") { ps ->
             ps.setString(1, url)
@@ -294,7 +312,8 @@ class ReviewRepository(private val store: Store) {
                   AND EXISTS (SELECT 1 FROM finding f WHERE f.review_id = review.id)
                   AND NOT EXISTS (
                       SELECT 1 FROM finding f
-                       WHERE f.review_id = review.id AND f.published_id IS NULL
+                       WHERE f.review_id = review.id
+                         AND f.published_id IS NULL AND f.dismissed_at IS NULL AND f.closed_at IS NULL
                   )""",
         ) { ps ->
             ps.setString(1, url?.takeIf { it.isNotBlank() })
@@ -303,12 +322,41 @@ class ReviewRepository(private val store: Store) {
         }
 
     /**
+     * Por PR: cuántos comentarios publicados están sin verificar y cuántos dieron "no resuelto".
+     *
+     * La lista necesita los mismos números que la pantalla del PR para decidir si se puede
+     * mergear, pero sin cargar los hallazgos fila por fila.
+     */
+    fun resolutionCountsByPr(repoId: String): Map<Long, Pair<Int, Int>> =
+        store.stmt(
+            """SELECT f.pr_id,
+                      SUM(CASE WHEN f.resolution IS NULL THEN 1 ELSE 0 END),
+                      SUM(CASE WHEN f.resolution IS NOT NULL AND f.resolution <> 'RESOLVED'
+                               THEN 1 ELSE 0 END)
+                 FROM finding f
+                WHERE f.repo_id = ? AND f.published_id IS NOT NULL AND f.dismissed_at IS NULL AND f.closed_at IS NULL
+                  AND f.review_id = (
+                      SELECT id FROM review r
+                       WHERE r.repo_id = f.repo_id AND r.pr_id = f.pr_id AND r.status = 'DONE'
+                       ORDER BY r.created_at DESC LIMIT 1
+                  )
+                GROUP BY f.pr_id""",
+        ) { ps ->
+            ps.setString(1, repoId)
+            ps.executeQuery().use { rs ->
+                buildMap { while (rs.next()) put(rs.getLong(1), rs.getInt(2) to rs.getInt(3)) }
+            }
+        }
+
+    /**
      * Por PR: cuántos hallazgos tiene la última review y cuántos ya se publicaron. Sirve para
      * distinguir "sin publicar" de "publicada a medias", que antes se veían igual.
      */
     fun findingProgressByPr(repoId: String): Map<Long, Pair<Int, Int>> =
         store.stmt(
-            """SELECT f.pr_id, COUNT(*), SUM(CASE WHEN f.published_id IS NOT NULL THEN 1 ELSE 0 END)
+            """SELECT f.pr_id, COUNT(*),
+                      SUM(CASE WHEN f.published_id IS NOT NULL OR f.dismissed_at IS NOT NULL OR f.closed_at IS NOT NULL
+                               THEN 1 ELSE 0 END)
                  FROM finding f
                 WHERE f.repo_id = ?
                   AND f.review_id = (
@@ -384,7 +432,13 @@ class ReviewRepository(private val store: Store) {
             ps.executeUpdate()
         }
 
-    /** Reviews terminadas que todavía no se publicaron: lo accionable del dashboard. */
+    /**
+     * Reviews terminadas que todavía esperan algo: lo accionable del dashboard.
+     *
+     * "Espera algo" no es sólo "sin publicar". Una review cuyos hallazgos están todos resueltos
+     * —publicados o descartados a propósito— ya no tiene nada pendiente aunque nunca se haya
+     * mandado el comentario resumen; contarla ahí dejaba PRs terminados en la lista para siempre.
+     */
     fun readyToPublish(limit: Int = 50): List<ReviewRecord> =
         query(
             """WHERE status = 'DONE' AND published_url IS NULL
@@ -392,6 +446,51 @@ class ReviewRepository(private val store: Store) {
                    SELECT MAX(created_at) FROM review r2
                    WHERE r2.repo_id = review.repo_id AND r2.pr_id = review.pr_id
                      AND r2.status = 'DONE'
+               )
+               AND (
+                   NOT EXISTS (SELECT 1 FROM finding f WHERE f.review_id = review.id)
+                   OR EXISTS (
+                       SELECT 1 FROM finding f
+                        WHERE f.review_id = review.id
+                          AND f.published_id IS NULL AND f.dismissed_at IS NULL AND f.closed_at IS NULL
+                   )
+               )
+               ORDER BY created_at DESC LIMIT $limit""",
+        ) {}
+
+    /**
+     * PRs donde la pelota está del otro lado: publicamos, no queda ninguna respuesta por
+     * contestar, y todavía no está todo verificado como corregido.
+     *
+     * Es la contraparte de "te respondieron". Sin separarlas, un PR donde ya contestaste todo
+     * seguía apareciendo como si te tocara mover algo, cuando lo único que falta es que el otro
+     * conteste o corrija.
+     */
+    fun awaitingThem(limit: Int = 50): List<ReviewRecord> =
+        query(
+            """WHERE status = 'DONE'
+               AND created_at = (
+                   SELECT MAX(created_at) FROM review r2
+                   WHERE r2.repo_id = review.repo_id AND r2.pr_id = review.pr_id
+                     AND r2.status = 'DONE'
+               )
+               -- Hay algo publicado esperando que lo corrijan o lo contesten…
+               AND EXISTS (
+                   SELECT 1 FROM finding f
+                    WHERE f.review_id = review.id AND f.published_id IS NOT NULL
+                      AND f.dismissed_at IS NULL AND f.closed_at IS NULL
+                      AND (f.resolution IS NULL OR f.resolution <> 'RESOLVED')
+               )
+               -- …y nada esperando de nuestro lado.
+               AND NOT EXISTS (
+                   SELECT 1 FROM reply_draft d
+                    WHERE d.repo_id = review.repo_id AND d.pr_id = review.pr_id
+                      AND d.status <> 'PUBLISHED'
+               )
+               AND NOT EXISTS (
+                   SELECT 1 FROM finding f
+                    WHERE f.review_id = review.id AND f.published_id IS NULL
+                      AND f.dismissed_at IS NULL AND f.closed_at IS NULL
                )
                ORDER BY created_at DESC LIMIT $limit""",
         ) {}
@@ -523,7 +622,8 @@ class ReviewRepository(private val store: Store) {
         store.stmt(
             """SELECT id, repo_id, pr_id, pr_title, head_sha, status, body, error,
                       session_id, cost_usd, published_url, created_at, depth, project_kind, model,
-                      trigger_kind, denied_tools
+                      trigger_kind, denied_tools, resolution_summary, resolution_at,
+                      resolution_head
                FROM review $tail""",
         ) { ps ->
             bind(ps)
@@ -552,6 +652,9 @@ class ReviewRepository(private val store: Store) {
                             model = rs.getString(15),
                             auto = rs.getString(16) == "AUTO",
                             deniedTools = rs.getString(17),
+                            resolutionSummary = rs.getString(18),
+                            resolutionAt = rs.getString(19),
+                            resolutionHead = rs.getString(20),
                         ),
                     )
                 }
@@ -763,6 +866,16 @@ class LocalNoteRepository(private val store: Store) {
         }
     }
 
+    /** Cuántas notas propias quedan sin publicar, por PR. Para la lista, sin una consulta por fila. */
+    fun unpublishedCountsByPr(repoId: String): Map<Long, Int> =
+        store.stmt(
+            """SELECT pr_id, COUNT(*) FROM local_note
+               WHERE repo_id = ? AND published_id IS NULL GROUP BY pr_id""",
+        ) { ps ->
+            ps.setString(1, repoId)
+            ps.executeQuery().use { rs -> buildMap { while (rs.next()) put(rs.getLong(1), rs.getInt(2)) } }
+        }
+
     fun forPr(repoId: String, prId: Long): List<LocalNote> =
         store.stmt(
             """SELECT id, pr_id, file_path, line_no, body, published_id, created_at, published_url
@@ -800,7 +913,29 @@ data class Finding(
     val body: String,
     val publishedId: String?,
     val publishedUrl: String?,
-)
+    /** Cuándo se decidió no publicarlo. Descartado cuenta como resuelto, igual que publicado. */
+    val dismissedAt: String? = null,
+    /** Último error al intentar publicarlo. Se guarda para que no se pierda con la pantalla. */
+    val publishError: String? = null,
+    /** Veredicto de la verificación: si lo señalado se corrigió. Null = todavía no se analizó. */
+    val resolution: Resolution? = null,
+    /** La evidencia: qué cambió y dónde. Es lo que permite discutir el veredicto en vez de creerlo. */
+    val resolutionNote: String? = null,
+    /** Cuándo se mandó el último recordatorio por falta de respuesta. */
+    val followedUpAt: String? = null,
+    /** Cerrado en la conversación: se habló y no espera ningún cambio en el código. */
+    val closedAt: String? = null,
+) {
+    /** Ya no espera nada: se publicó o se descartó a propósito. */
+    val settled: Boolean get() = publishedId != null || dismissedAt != null || closedAt != null
+
+    /** Cerrado del todo: descartado, cerrado en la conversación, o verificado como corregido. */
+    val closed: Boolean get() = dismissedAt != null || closedAt != null ||
+        (publishedId != null && resolution == Resolution.RESOLVED)
+}
+
+/** Qué pasó con un hallazgo después de publicarlo. */
+enum class Resolution { RESOLVED, PARTIAL, UNRESOLVED }
 
 /** Hallazgos de una review, cada uno anclado a su archivo y, cuando aplica, a su línea. */
 class FindingRepository(private val store: Store) {
@@ -833,8 +968,63 @@ class FindingRepository(private val store: Store) {
         }
     }
 
+    /** Por qué no se pudo publicar. Se guarda para que el hallazgo lo diga y se pueda reintentar. */
+    fun failPublish(id: String, error: String) {
+        store.stmt("UPDATE finding SET publish_error = ? WHERE id = ?") { ps ->
+            ps.setString(1, error.take(500))
+            ps.setString(2, id)
+            ps.executeUpdate()
+        }
+    }
+
+    /** Cierra el hilo sin esperar cambios: se habló y quedó saldado. Se puede reabrir. */
+    fun close(id: String, closed: Boolean) {
+        store.stmt("UPDATE finding SET closed_at = ? WHERE id = ?") { ps ->
+            ps.setString(1, if (closed) Instant.now().toString() else null)
+            ps.setString(2, id)
+            ps.executeUpdate()
+        }
+    }
+
+    /** Deja registrado que se mandó un recordatorio, para no volver a insistir al día siguiente. */
+    fun markFollowedUp(id: String) {
+        store.stmt("UPDATE finding SET followed_up_at = ? WHERE id = ?") { ps ->
+            ps.setString(1, Instant.now().toString())
+            ps.setString(2, id)
+            ps.executeUpdate()
+        }
+    }
+
+    /** Guarda el veredicto de la verificación y su evidencia. */
+    fun setResolution(id: String, resolution: Resolution, note: String?) {
+        store.stmt("UPDATE finding SET resolution = ?, resolution_note = ? WHERE id = ?") { ps ->
+            ps.setString(1, resolution.name)
+            ps.setString(2, note?.take(1_000))
+            ps.setString(3, id)
+            ps.executeUpdate()
+        }
+    }
+
+    /** Descartar: se decidió no publicarlo. Deja de contar como pendiente sin borrar nada. */
+    fun dismiss(id: String) {
+        store.stmt("UPDATE finding SET dismissed_at = ? WHERE id = ?") { ps ->
+            ps.setString(1, Instant.now().toString())
+            ps.setString(2, id)
+            ps.executeUpdate()
+        }
+    }
+
+    fun restore(id: String) {
+        store.stmt("UPDATE finding SET dismissed_at = NULL WHERE id = ?") { ps ->
+            ps.setString(1, id)
+            ps.executeUpdate()
+        }
+    }
+
     fun markPublished(id: String, commentId: String, url: String?) {
-        store.stmt("UPDATE finding SET published_id = ?, published_url = ? WHERE id = ?") { ps ->
+        store.stmt(
+            "UPDATE finding SET published_id = ?, published_url = ?, publish_error = NULL WHERE id = ?",
+        ) { ps ->
             ps.setString(1, commentId)
             ps.setString(2, url)
             ps.setString(3, id)
@@ -878,7 +1068,8 @@ class FindingRepository(private val store: Store) {
     private fun query(tail: String, bind: (java.sql.PreparedStatement) -> Unit): List<Finding> =
         store.stmt(
             """SELECT id, review_id, pr_id, file_path, line_no, severity, title, body, published_id,
-                      published_url
+                      published_url, dismissed_at, publish_error, resolution, resolution_note,
+                      followed_up_at, closed_at
                FROM finding $tail ORDER BY file_path, line_no""",
         ) { ps ->
             bind(ps)
@@ -896,6 +1087,14 @@ class FindingRepository(private val store: Store) {
                             body = rs.getString(8),
                             publishedId = rs.getString(9),
                             publishedUrl = rs.getString(10),
+                            dismissedAt = rs.getString(11),
+                            publishError = rs.getString(12),
+                            resolution = rs.getString(13)?.let {
+                                runCatching { Resolution.valueOf(it) }.getOrNull()
+                            },
+                            resolutionNote = rs.getString(14),
+                            followedUpAt = rs.getString(15),
+                            closedAt = rs.getString(16),
                         ),
                     )
                 }

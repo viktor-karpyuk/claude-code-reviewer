@@ -75,6 +75,13 @@ fun PrsPanel(
     var historicos by remember(repo.id) { mutableStateOf<List<PullRequest>>(emptyList()) }
     var buscandoHistorico by remember(repo.id) { mutableStateOf(false) }
     var errorHistorico by remember(repo.id) { mutableStateOf<String?>(null) }
+    // Notas propias sin publicar por PR: entra en la condición para poder mergear.
+    var notasPendientes by remember(repo.id) { mutableStateOf<Map<Long, Int>>(emptyMap()) }
+    // (sin verificar, no resueltos) por PR: la lista aplica la misma condición que la pantalla.
+    var verificacion by remember(repo.id) { mutableStateOf<Map<Long, Pair<Int, Int>>>(emptyMap()) }
+    // El PR que se está por mergear, cuando hay una confirmación abierta.
+    var aMergear by remember(repo.id) { mutableStateOf<PullRequest?>(null) }
+    var mergeando by remember(repo.id) { mutableStateOf<Long?>(null) }
     val allProgress by ctx.engine.progress.collectAsState()
     // Filtrado por repo: el mapa se indexa por número de PR, y el #18 de un repo no tiene nada
     // que ver con el #18 de otro. Sin esto, un PR ajeno se marcaba como "revisando" acá.
@@ -110,6 +117,8 @@ fun PrsPanel(
                     openReplies = ctx.replies.openCountsByPr(repo.id)
                     answered = ctx.replies.answeredPrs(repo.id)
                     findingProgress = ctx.reviews.findingProgressByPr(repo.id)
+                    notasPendientes = ctx.notes.unpublishedCountsByPr(repo.id)
+                    verificacion = ctx.reviews.resolutionCountsByPr(repo.id)
                 }
             }
             .onFailure {
@@ -224,6 +233,72 @@ fun PrsPanel(
             io.acr.ui.components.ErrorBox(io.acr.i18n.t("prs.searchError"), it)
         }
 
+        // Confirmación del merge. Modal a propósito: es la única acción de la app que cambia el
+        // repositorio y no se puede deshacer desde acá.
+        aMergear?.let { objetivo ->
+            var borrarRama by remember(objetivo.id) { mutableStateOf(false) }
+            androidx.compose.material3.AlertDialog(
+                onDismissRequest = { aMergear = null },
+                title = { Text(io.acr.i18n.t("merge.confirmTitle", objetivo.id)) },
+                text = {
+                    Column {
+                        Text(objetivo.title, style = MaterialTheme.typography.bodyMedium)
+                        Spacer(Modifier.height(6.dp))
+                        Text(
+                            io.acr.i18n.t(
+                                "merge.confirmBody", objetivo.sourceBranch, objetivo.targetBranch,
+                            ),
+                        )
+                        Spacer(Modifier.height(8.dp))
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            androidx.compose.material3.Checkbox(
+                                checked = borrarRama,
+                                onCheckedChange = { borrarRama = it },
+                            )
+                            Text(
+                                io.acr.i18n.t("merge.closeBranch"),
+                                style = MaterialTheme.typography.bodySmall,
+                            )
+                        }
+                    }
+                },
+                confirmButton = {
+                    androidx.compose.material3.TextButton(onClick = {
+                        aMergear = null
+                        mergeando = objetivo.id
+                        ctx.appScope.launch {
+                            runCatching {
+                                kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                                    Forges.of(repo.provider).merge(
+                                        repo, objetivo.id,
+                                        "Merge pull request #${objetivo.id}: ${objetivo.title}",
+                                        borrarRama,
+                                    )
+                                }
+                            }
+                                .onSuccess {
+                                    snackbar.showSnackbar(io.acr.i18n.t2("merge.done"))
+                                    // Forzado: el PR mergeado tiene que desaparecer de la lista de
+                                    // abiertos, y el caché tiene 60s de vida.
+                                    load(force = true)
+                                }
+                                .onFailure {
+                                    snackbar.showSnackbar(
+                                        io.acr.i18n.t2("merge.failed") + ": " + it.message?.take(160),
+                                    )
+                                }
+                            mergeando = null
+                        }
+                    }) { Text(io.acr.i18n.t("merge.confirm")) }
+                },
+                dismissButton = {
+                    androidx.compose.material3.TextButton(onClick = { aMergear = null }) {
+                        Text(io.acr.i18n.t("common.cancel"))
+                    }
+                },
+            )
+        }
+
         Spacer(Modifier.height(10.dp))
         HorizontalDivider()
 
@@ -269,8 +344,22 @@ fun PrsPanel(
                         tick = tick,
                         running = progress[pr.id],
                         // Prioridad por lo accionable: primero lo que espera algo de vos.
+                        // "Listo para mergear" gana sobre cualquier otro estado: es la
+                        // conclusión, y lo que uno busca de un vistazo en la lista.
                         badge = when {
                             progress.containsKey(pr.id) -> null
+                            pr.state == io.acr.forge.PrState.OPEN &&
+                                io.acr.ui.review.mergeBlocker(
+                                    prHeadSha = pr.headSha,
+                                    reviewHeadSha = last?.headSha,
+                                    hayReview = last?.status == ReviewStatus.DONE,
+                                    hallazgosPendientes = (findingProgress[pr.id]
+                                        ?.let { (total, resueltos) -> total - resueltos } ?: 0),
+                                    notasPendientes = notasPendientes[pr.id] ?: 0,
+                                    respuestasPendientes = openReplies[pr.id] ?: 0,
+                                    sinVerificar = verificacion[pr.id]?.first ?: 0,
+                                    noResueltos = verificacion[pr.id]?.second ?: 0,
+                                ) == null -> io.acr.i18n.t("prs.readyToMerge")
                             (openReplies[pr.id] ?: 0) > 0 ->
                                 io.acr.i18n.t("prs.repliedCount", openReplies[pr.id] ?: 0)
                             last?.status == ReviewStatus.DONE && last.publishedUrl == null -> {
@@ -292,6 +381,22 @@ fun PrsPanel(
                             else -> null
                         },
                         onOpen = { onOpenReview(pr.id) },
+                        // Misma regla que en la pantalla del PR, sobre los conteos que la lista
+                        // ya tiene: no se carga un hallazgo por fila.
+                        mergeBlocker = if (pr.state != io.acr.forge.PrState.OPEN) "merge.notOpen"
+                        else io.acr.ui.review.mergeBlocker(
+                            prHeadSha = pr.headSha,
+                            reviewHeadSha = last?.headSha,
+                            hayReview = last?.status == ReviewStatus.DONE,
+                            hallazgosPendientes = (findingProgress[pr.id]
+                                ?.let { (total, resueltos) -> total - resueltos } ?: 0),
+                            notasPendientes = notasPendientes[pr.id] ?: 0,
+                            respuestasPendientes = openReplies[pr.id] ?: 0,
+                            sinVerificar = verificacion[pr.id]?.first ?: 0,
+                            noResueltos = verificacion[pr.id]?.second ?: 0,
+                        ),
+                        merging = mergeando == pr.id,
+                        onMerge = { aMergear = pr },
                     )
                     HorizontalDivider()
                 }
@@ -307,6 +412,9 @@ private fun PrRow(
     running: io.acr.claude.RunProgress?,
     tick: Int,
     onOpen: () -> Unit,
+    mergeBlocker: String?,
+    merging: Boolean,
+    onMerge: () -> Unit,
 ) {
     Row(
         Modifier.fillMaxWidth().clickableText(onOpen).padding(vertical = 12.dp),
@@ -332,23 +440,28 @@ private fun PrRow(
         }
         Column(Modifier.weight(1f)) {
             Text(pr.title, style = MaterialTheme.typography.bodyLarge)
-            // Se muestra cuándo se abrió, no sólo la última actividad: es el dato por el que se
-            // ordena por defecto, y sin verlo el orden parece arbitrario.
-            val fechas = buildString {
-                pr.createdOn.takeIf { it.isNotBlank() }?.let {
-                    append(io.acr.i18n.t("prs.opened")).append(' ').append(it)
-                }
-                if (pr.updatedOn.isNotBlank() && pr.updatedOn != pr.createdOn) {
-                    if (isNotEmpty()) append(" · ")
-                    append("↻ ").append(pr.updatedOn)
-                }
-            }
             Text(
                 "${pr.author} · ${pr.sourceBranch} → ${pr.targetBranch}" +
-                    if (fechas.isBlank()) "" else " · $fechas",
+                    (pr.updatedOn.takeIf { it.isNotBlank() }?.let { " · ↻ $it" } ?: ""),
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
+            // La antigüedad va en su propia línea y con color: es el dato que dice si algo se
+            // está durmiendo, y la fecha cruda obliga a calcularlo de cabeza en cada fila.
+            val dias = ageInDays(pr.createdOn, java.time.LocalDate.now())
+            val nivel = Urgency.fromDays(dias)
+            if (dias != null && nivel != null) {
+                Text(
+                    when (dias) {
+                        0L -> io.acr.i18n.t("prs.openedToday")
+                        1L -> io.acr.i18n.t("prs.openedOneDay")
+                        else -> io.acr.i18n.t("prs.openedDays", dias)
+                    } + nivel.mark().let { if (it.isBlank()) "" else "  $it " } +
+                        (if (nivel == Urgency.FRESCO) "" else io.acr.i18n.t(nivel.labelKey)),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = nivel.color(),
+                )
+            }
         }
         running?.let { p ->
             // Estado explícito, no una palabra al pasar: qué está haciendo y desde cuándo.
@@ -373,6 +486,20 @@ private fun PrRow(
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     maxLines = 1,
+                )
+            }
+        }
+        // Sólo aparece cuando de verdad se puede: un botón apagado en cada fila sería ruido, y
+        // el motivo por el que no se puede ya se ve en la pantalla del PR.
+        if (mergeBlocker == null) {
+            OutlinedButton(
+                enabled = !merging,
+                onClick = onMerge,
+                modifier = Modifier.padding(end = 8.dp),
+            ) {
+                Text(
+                    if (merging) io.acr.i18n.t("merge.merging") else io.acr.i18n.t("merge.short"),
+                    style = MaterialTheme.typography.labelSmall,
                 )
             }
         }
