@@ -462,6 +462,18 @@ class Store(private val dbPath: Path) : AutoCloseable {
             // `dismissed_at`, que es "decidí no publicarlo": esto es "se publicó, se habló y se
             // cerró".
             "ALTER TABLE finding ADD COLUMN closed_at TEXT",
+
+            // v27 — la pasada final: una última mirada al código completo antes de mergear.
+            //
+            // Es distinta de la verificación: aquélla pregunta "¿arreglaron lo que dije?", ésta
+            // "¿hay algo que frene el merge, mirando el PR como está ahora?". Se guarda contra qué
+            // commit corrió, por lo mismo que la verificación: si el PR avanza, la pasada quedó
+            // vieja y no puede seguir contando como hecha.
+            """
+            ALTER TABLE review ADD COLUMN final_pass_head TEXT;--split--
+            ALTER TABLE review ADD COLUMN final_pass_summary TEXT;--split--
+            ALTER TABLE review ADD COLUMN final_pass_blockers INTEGER NOT NULL DEFAULT 0
+            """.trimIndent(),
         )
     }
 }

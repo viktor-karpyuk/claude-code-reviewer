@@ -31,7 +31,6 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-import androidx.compose.material3.VerticalDivider
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -55,6 +54,7 @@ import io.acr.data.LocalNote
 import io.acr.forge.PullRequest
 import io.acr.forge.RepoRecord
 import io.acr.ui.clickableText
+import io.acr.ui.color
 import kotlinx.coroutines.launch
 import java.awt.Desktop
 import java.io.File
@@ -183,9 +183,10 @@ fun CodePanel(
         return
     }
 
+    val anchoPanel = io.acr.ui.rememberPaneWidth(ctx.prefs, "code", 330.dp)
     Row(Modifier.fillMaxSize()) {
         // Lista de archivos
-        Column(Modifier.width(330.dp).fillMaxHeight()) {
+        Column(Modifier.width(anchoPanel.value).fillMaxHeight()) {
             Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 FilterChip(
                     sidebar == Sidebar.ARCHIVOS,
@@ -208,6 +209,9 @@ fun CodePanel(
                             active = selected == f.path,
                             notes = notes.count { it.filePath == f.path },
                             findings = findings.count { it.filePath == f.path },
+                            worst = findings.filter { it.filePath == f.path }
+                                .minByOrNull { io.acr.ui.Severity.of(it.severity).ordinal }
+                                ?.severity,
                         ) { selected = f.path }
                     }
                 }
@@ -244,7 +248,7 @@ fun CodePanel(
             }
         }
 
-        VerticalDivider(Modifier.fillMaxHeight().padding(horizontal = 8.dp))
+        io.acr.ui.VerticalSplitter(anchoPanel, ctx.prefs, "code", min = 200.dp, max = 700.dp)
 
         // Diff del archivo elegido
         Column(Modifier.weight(1f).fillMaxHeight()) {
@@ -392,7 +396,15 @@ fun CodePanel(
 }
 
 @Composable
-private fun FileRow(f: Git.FileChange, active: Boolean, notes: Int, findings: Int, onClick: () -> Unit) {
+private fun FileRow(
+    f: Git.FileChange,
+    active: Boolean,
+    notes: Int,
+    findings: Int,
+    /** La gravedad más alta del archivo: el color del contador tiene que ser el del peor. */
+    worst: String?,
+    onClick: () -> Unit,
+) {
     val bg = if (active) MaterialTheme.colorScheme.surfaceVariant else Color.Transparent
     Column(
         Modifier.fillMaxWidth().background(bg).clickableText(onClick).padding(8.dp),
@@ -415,7 +427,11 @@ private fun FileRow(f: Git.FileChange, active: Boolean, notes: Int, findings: In
             Text("−${f.deleted}", style = MaterialTheme.typography.labelSmall, color = Color(0xFFCB5A50))
             if (findings > 0) {
                 Spacer(Modifier.width(6.dp))
-                Text("$findings ▲", style = MaterialTheme.typography.labelSmall, color = Color(0xFFD08A2C))
+                Text(
+                    "$findings ▲",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = io.acr.ui.Severity.of(worst).color(),
+                )
             }
             if (notes > 0) {
                 Spacer(Modifier.width(6.dp))
@@ -483,11 +499,7 @@ internal fun DiffRow(
 
 @Composable
 private fun FindingCard(finding: io.acr.data.Finding, busy: Boolean, onPublish: () -> Unit) {
-    val accent = when (finding.severity) {
-        "blocker" -> Color(0xFFCB5A50)
-        "major" -> Color(0xFFD08A2C)
-        else -> Color(0xFF7A879C)
-    }
+    val accent = io.acr.ui.Severity.of(finding.severity).color()
     Column(
         Modifier.fillMaxWidth().padding(start = 110.dp, top = 4.dp, bottom = 4.dp, end = 8.dp)
             .clip(RoundedCornerShape(6.dp))
@@ -495,7 +507,7 @@ private fun FindingCard(finding: io.acr.data.Finding, busy: Boolean, onPublish: 
             .padding(8.dp),
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            Text(finding.severity.uppercase(), style = MaterialTheme.typography.labelSmall, color = accent)
+            io.acr.ui.SeverityBadge(finding.severity)
             Spacer(Modifier.width(8.dp))
             Text(finding.title, style = MaterialTheme.typography.bodySmall)
         }
@@ -644,12 +656,15 @@ private fun AnchorRow(a: Anchor, active: Boolean, onClick: () -> Unit) {
         Column(Modifier.weight(1f)) {
             Text(a.title, style = MaterialTheme.typography.bodySmall, maxLines = 2)
             Row {
-                Text(
-                    if (a.kind == Anchor.Kind.HALLAZGO) "▲ " + (a.severity ?: "") else "✎",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = if (a.kind == Anchor.Kind.HALLAZGO) Color(0xFFD08A2C)
-                    else MaterialTheme.colorScheme.onSurfaceVariant,
-                )
+                if (a.kind == Anchor.Kind.HALLAZGO) {
+                    io.acr.ui.SeverityBadge(a.severity)
+                } else {
+                    Text(
+                        "✎",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
                 if (a.published) {
                     Text(
                         "  " + io.acr.i18n.t("common.published"),

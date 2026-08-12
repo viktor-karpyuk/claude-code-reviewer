@@ -267,6 +267,39 @@ class ConversationTest {
     }
 
     @Test
+    fun theOrderPutsWhatDependsOnYouFirst() {
+        // El orden del enum es el de la lista. Publicar depende sólo de vos; verificar espera a
+        // que el otro suba algo. Y con este orden, al publicar la tarjeta baja en vez de subir:
+        // antes saltaba hacia arriba y las de abajo se corrían mientras seguías publicando.
+        assertEquals(
+            listOf(
+                ThreadState.NEEDS_ANSWER,
+                ThreadState.DRAFT_READY,
+                ThreadState.NOT_FIXED,
+                ThreadState.UNPUBLISHED,
+                ThreadState.UNVERIFIED,
+                ThreadState.OK,
+            ),
+            ThreadState.entries.toList(),
+        )
+    }
+
+    @Test
+    fun publishingMovesTheCardDownNotUp() {
+        // Dos hallazgos: el "1" en la línea 1 y el "2" en la 9. Mientras el 2 sigue sin publicar,
+        // tiene que quedar por encima del 1 ya publicado, aunque por archivo y línea iría después.
+        val hilos = buildConversation(
+            listOf(finding("1", publicado = "c1"), finding("2", publicado = null, linea = 9)),
+            listOf(comment("c1", "yo", true, null, "2026-08-01T10:00")),
+            emptyList(),
+            today = hoy,
+        )
+        assertEquals(ThreadState.UNPUBLISHED, hilos.first().state)
+        assertEquals("2", hilos.first().findingId, "lo ya publicado quedó por encima de lo que falta")
+        assertEquals(ThreadState.UNVERIFIED, hilos.last().state)
+    }
+
+    @Test
     fun readyToMergeMeansEveryThreadIsClosed() {
         val cerrados = buildConversation(
             listOf(finding("1", resolucion = Resolution.RESOLVED), finding("2", descartado = true, linea = 4)),

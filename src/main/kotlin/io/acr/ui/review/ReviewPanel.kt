@@ -94,6 +94,11 @@ fun ReviewPanel(
     var hiloDestacado by remember(repo.id, prId) { mutableStateOf<String?>(null) }
     // Hilo sobre el que se está por mandar un recordatorio.
     var seguimientoDe by remember(repo.id, prId) { mutableStateOf<ConversationThread?>(null) }
+    // Conjunto y no un booleano global: publicar un comentario no puede apagar los botones de los
+    // otros. Con un solo flag, apretar uno dejaba el resto deshabilitado —y un botón deshabilitado
+    // de Material tiene tan poco contraste que parece que desapareció.
+    var publicandoIds by remember(repo.id, prId) { mutableStateOf<Set<String>>(emptySet()) }
+    var pasadaFinal by remember(repo.id, prId) { mutableStateOf(false) }
     val diasParaRecordar = remember {
         ctx.prefs.get(AppContext.PREF_FOLLOWUP_DAYS)?.toLongOrNull()?.coerceAtLeast(1) ?: 3L
     }
@@ -248,6 +253,15 @@ fun ReviewPanel(
         // Se habilita sólo cuando no queda nada esperando y el autor subió código después de la
         // review; en cualquier otro caso el botón dice por qué no.
         val bloqueo = mergeBlocker(pr, review, findings, localNotes, replies)
+        // La pasada final sólo vale para el commit sobre el que corrió: si el PR avanzó, quedó
+        // vieja y vuelve a faltar.
+        val finalHecha = review?.finalPassHead != null && pr != null &&
+            review!!.finalPassHead == pr!!.headSha
+        val listo = mergeReadiness(
+            pr, review, hilos, findings,
+            finalPassDone = finalHecha,
+            finalPassBlockers = if (finalHecha) review!!.finalPassBlockers else 0,
+        )
         if (pr != null && pr!!.state == io.acr.forge.PrState.OPEN && review != null) {
             Spacer(Modifier.height(10.dp))
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -307,6 +321,29 @@ fun ReviewPanel(
                     Text(io.acr.i18n.t("decline.action"), color = MaterialTheme.colorScheme.error)
                 }
                 Spacer(Modifier.width(8.dp))
+                OutlinedButton(
+                    enabled = !pasadaFinal && pr != null && review != null,
+                    onClick = {
+                        val objetivo = pr ?: return@OutlinedButton
+                        val rev = review ?: return@OutlinedButton
+                        pasadaFinal = true
+                        ctx.appScope.launch {
+                            ctx.engine.finalPass(repo, objetivo, rev)
+                                .onFailure {
+                                    snackbar.showSnackbar(
+                                        io.acr.i18n.t2("final.failed") + ": " + it.message?.take(160),
+                                    )
+                                }
+                            pasadaFinal = false
+                            reload++
+                        }
+                    },
+                ) {
+                    Text(
+                        if (pasadaFinal) io.acr.i18n.t("final.running") else io.acr.i18n.t("final.action"),
+                    )
+                }
+                Spacer(Modifier.width(8.dp))
                 Button(
                     enabled = bloqueo == null && !mergeando,
                     onClick = { confirmarMerge = true },
@@ -318,6 +355,28 @@ fun ReviewPanel(
                     color = if (bloqueo == null) MaterialTheme.colorScheme.primary
                     else MaterialTheme.colorScheme.onSurfaceVariant,
                 )
+            }
+
+            Spacer(Modifier.height(8.dp))
+            ReadinessCard(listo)
+
+            review?.finalPassSummary?.takeIf { it.isNotBlank() && finalHecha }?.let { resumen ->
+                Spacer(Modifier.height(8.dp))
+                Card {
+                    Text(
+                        io.acr.i18n.t("final.title") +
+                            if (review!!.finalPassBlockers > 0) {
+                                " · " + io.acr.i18n.t("final.blockers", review!!.finalPassBlockers)
+                            } else " · " + io.acr.i18n.t("final.clean"),
+                        style = MaterialTheme.typography.titleSmall,
+                        color = if (review!!.finalPassBlockers > 0) MaterialTheme.colorScheme.error
+                        else MaterialTheme.colorScheme.primary,
+                    )
+                    Spacer(Modifier.height(4.dp))
+                    SelectionContainer {
+                        Text(resumen, style = MaterialTheme.typography.bodySmall)
+                    }
+                }
             }
 
             review?.resolutionSummary?.takeIf { it.isNotBlank() }?.let { resumen ->
@@ -571,7 +630,7 @@ fun ReviewPanel(
         }
 
         if (tab == Tab.Commits) {
-            io.acr.ui.code.CommitsPanel(repo, pr)
+            io.acr.ui.code.CommitsPanel(repo, pr, ctx.prefs, reviewHeadSha = review?.headSha)
             return@Column
         }
 
@@ -626,6 +685,7 @@ fun ReviewPanel(
                 onFocusConsumed = { hiloDestacado = null },
                 followUpAfterDays = diasParaRecordar,
                 onFollowUp = { seguimientoDe = it },
+                publishingIds = publicandoIds,
                 onCloseThread = { id, cerrar ->
                     scope.launch {
                         kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
@@ -642,15 +702,16 @@ fun ReviewPanel(
                     val f = findings.firstOrNull { it.id == id }
                     if (head == null || f == null) {
                         scope.launch { snackbar.showSnackbar("Necesito los datos del PR para publicar.") }
-                    } else {
-                        publishing = true
+                    } else if (id !in publicandoIds) {
+                        publicandoIds = publicandoIds + id
+                        // appScope: publicar sobrevive a cambiar de pestaña o de PR.
                         ctx.appScope.launch {
                             ctx.engine.publishFinding(repo, prId, f, head)
                                 .onSuccess { snackbar.showSnackbar("Comentario publicado.") }
                                 .onFailure { e ->
                                     snackbar.showSnackbar("No pude publicar: ${e.message?.take(140)}")
                                 }
-                            publishing = false
+                            publicandoIds = publicandoIds - id
                             reload++
                         }
                     }
@@ -666,7 +727,6 @@ fun ReviewPanel(
                         reload++
                     }
                 },
-                publishing = publishing,
             )
             return@Column
         }
@@ -855,111 +915,117 @@ private fun HistoryList(
 ) {
     var author by remember(thread) { mutableStateOf<String?>(null) }
 
+    val eventos = remember(reviews, publications, thread, localNotes) {
+        buildTimeline(reviews, publications, thread, localNotes)
+    }
     // Autores ordenados por cantidad: el que más comentó primero, que es a quien más se busca.
-    val authors = remember(thread) {
-        thread.groupingBy { it.author }.eachCount().entries.sortedByDescending { it.value }
+    val autores = remember(eventos) {
+        eventos.filter { it.author.isNotBlank() }
+            .groupingBy { it.author }.eachCount().entries.sortedByDescending { it.value }
     }
-    val shown = remember(thread, author) {
-        author?.let { a -> thread.filter { it.author == a } } ?: thread
+    val visibles = remember(eventos, author) {
+        author?.let { a -> eventos.filter { it.author == a } } ?: eventos
     }
 
-    LazyColumn(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-        item { SectionTitle("Reviews corridas (${reviews.size})") }
-        if (reviews.isEmpty()) item { Empty("Todavía no corriste ninguna review de este PR.") }
-        items(reviews, key = { "r-${it.id}" }) { r ->
-            Card {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(r.createdAt.take(16).replace('T', ' '), style = MaterialTheme.typography.labelMedium)
-                    Spacer(Modifier.weight(1f))
-                    Text(
-                        r.status.name,
-                        style = MaterialTheme.typography.labelSmall,
-                        color = when (r.status) {
-                            ReviewStatus.DONE -> MaterialTheme.colorScheme.primary
-                            ReviewStatus.FAILED -> MaterialTheme.colorScheme.error
-                            else -> MaterialTheme.colorScheme.onSurfaceVariant
-                        },
-                    )
-                }
-                Text(
-                    (r.depth?.label?.plus(" · ") ?: "") + (r.projectKind?.label?.plus(" · ") ?: "") +
-                        (r.model?.takeIf { it.isNotBlank() }?.plus(" · ") ?: "") +
-                        "commit ${r.headSha.take(12)}" +
-                        (r.costUsd?.let { " · US$ ${"%.4f".format(it)}" } ?: "") +
-                        (r.sessionId?.let { " · sesión ${it.take(8)}" } ?: ""),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                (r.body ?: r.error)?.let { Text(it.take(320), style = MaterialTheme.typography.bodySmall) }
-            }
-        }
-
-        item { SectionTitle("Publicadas por nosotros (${publications.size})") }
-        if (publications.isEmpty()) item { Empty("Ninguna review de este PR fue publicada todavía.") }
-        items(publications, key = { "p-${it.id}" }) { p ->
-            Card {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(p.publishedAt.take(16).replace('T', ' '), style = MaterialTheme.typography.labelMedium)
-                    Spacer(Modifier.weight(1f))
-                    p.url?.let { TextButton(onClick = { onOpen(it) }) { Text("Ver") } }
-                }
-                Text(p.body.take(320), style = MaterialTheme.typography.bodySmall)
-            }
-        }
-
+    LazyColumn(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
         item {
-            SectionTitle(
-                if (author == null) "Hilo del pull request (${thread.size})"
-                else "Hilo del pull request (${shown.size} de ${thread.size})",
-            )
-        }
-        if (authors.size > 1) {
-            item {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    io.acr.i18n.t("hist.events", visibles.size),
+                    style = MaterialTheme.typography.titleSmall,
+                )
+            }
+            if (autores.isNotEmpty()) {
+                Spacer(Modifier.height(4.dp))
                 androidx.compose.foundation.layout.FlowRow(
                     horizontalArrangement = Arrangement.spacedBy(6.dp),
-                    modifier = Modifier.fillMaxWidth().padding(bottom = 4.dp),
                 ) {
                     FilterChip(
-                        selected = author == null,
-                        onClick = { author = null },
-                        label = { Text("Todos (${thread.size})") },
+                        author == null,
+                        { author = null },
+                        { Text(io.acr.i18n.t("hist.everyone")) },
                     )
-                    authors.forEach { (name, count) ->
-                        FilterChip(
-                            // Volver a tocar el chip activo limpia el filtro, sin ir hasta «Todos».
-                            selected = author == name,
-                            onClick = { author = if (author == name) null else name },
-                            label = { Text("$name ($count)") },
-                        )
+                    autores.forEach { (a, n) ->
+                        FilterChip(author == a, { author = a }, { Text("$a ($n)") })
                     }
                 }
             }
+            Spacer(Modifier.height(6.dp))
         }
-        if (thread.isEmpty()) item { Empty("Sin comentarios en el PR, o todavía no se sincronizó.") }
-        else if (shown.isEmpty()) item { Empty("$author no dejó comentarios en este PR.") }
-        items(shown, key = { "c-${it.commentId}" }) { c ->
-            Card {
-                Row(verticalAlignment = Alignment.CenterVertically) {
+
+        if (visibles.isEmpty()) {
+            item { Empty(io.acr.i18n.t("hist.none")) }
+        }
+
+        // Agrupado por día: es como uno recuerda lo que pasó en un PR.
+        visibles.groupBy { it.day() }.forEach { (dia, delDia) ->
+            item(key = "d-$dia") {
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    dia,
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.primary,
+                )
+            }
+            items(delDia, key = { "${it.at}-${it.kind}-${it.body.take(24)}" }) { e ->
+                TimelineRow(e, onOpen)
+            }
+        }
+    }
+}
+
+/** Una fila del historial: cuándo, de qué tipo, de quién y qué dice. */
+@Composable
+private fun TimelineRow(e: TimelineEvent, onOpen: (String) -> Unit) {
+    val color = when (e.kind) {
+        EventKind.REVIEW -> MaterialTheme.colorScheme.onSurfaceVariant
+        EventKind.COMMENT_OURS -> MaterialTheme.colorScheme.primary
+        EventKind.COMMENT_THEIRS -> androidx.compose.ui.graphics.Color(0xFFD98324)
+        EventKind.NOTE -> MaterialTheme.colorScheme.onSurfaceVariant
+    }
+    Card {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                io.acr.i18n.t(e.kind.labelKey),
+                style = MaterialTheme.typography.labelSmall,
+                color = color,
+                modifier = Modifier.width(110.dp),
+            )
+            Text(
+                e.at.take(16).replace('T', ' '),
+                style = MaterialTheme.typography.labelSmall
+                    .copy(fontFamily = FontFamily.Monospace),
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            if (e.author.isNotBlank()) {
+                Spacer(Modifier.width(8.dp))
+                Text(e.author, style = MaterialTheme.typography.labelSmall)
+            }
+            e.anchor?.let {
+                Spacer(Modifier.width(8.dp))
+                Text(
+                    it,
+                    style = MaterialTheme.typography.labelSmall
+                        .copy(fontFamily = FontFamily.Monospace),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            Spacer(Modifier.weight(1f))
+            e.url?.takeIf { it.isNotBlank() }?.let { url ->
+                TextButton(onClick = { onOpen(url) }) {
                     Text(
-                        if (c.ours) "${c.author} (nosotros)" else c.author,
-                        style = MaterialTheme.typography.labelMedium,
-                        color = if (c.ours) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
-                    )
-                    Spacer(Modifier.weight(1f))
-                    Text(
-                        c.createdOn.take(16).replace('T', ' '),
+                        io.acr.i18n.t("common.inBrowser"),
                         style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
-                c.inlinePath?.let {
-                    Text(
-                        it + (c.inlineLine?.let { l -> ":$l" } ?: ""),
-                        style = MaterialTheme.typography.labelSmall.copy(fontFamily = FontFamily.Monospace),
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-                Text(c.body.take(320), style = MaterialTheme.typography.bodySmall)
+            }
+        }
+        if (e.title.isNotBlank()) {
+            Text(e.title, style = MaterialTheme.typography.labelSmall, color = color)
+        }
+        if (e.body.isNotBlank()) {
+            SelectionContainer {
+                Text(e.body.take(600), style = MaterialTheme.typography.bodySmall)
             }
         }
     }
@@ -1316,7 +1382,8 @@ private fun ConversationList(
     onShowCode: (String, Int?, String?) -> Unit,
     onPublishFinding: (String) -> Unit,
     onDismissFinding: (String) -> Unit,
-    publishing: Boolean,
+    /** Qué comentarios se están publicando ahora mismo, por id. */
+    publishingIds: Set<String>,
     /** Hilo al que hay que llevar la lista al volver del código. */
     focusId: String?,
     onFocusConsumed: () -> Unit,
@@ -1399,7 +1466,11 @@ private fun ConversationList(
                         color = h.state.color(),
                     )
                 }
-                Text(h.title, style = MaterialTheme.typography.titleSmall)
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    io.acr.ui.SeverityBadge(h.severity)
+                    Spacer(Modifier.width(8.dp))
+                    Text(h.title, style = MaterialTheme.typography.titleSmall)
+                }
 
                 Spacer(Modifier.height(6.dp))
                 Text(
@@ -1467,14 +1538,26 @@ private fun ConversationList(
                 // que es donde uno se da cuenta de que faltaba.
                 if (h.state == ThreadState.UNPUBLISHED && h.findingId != null) {
                     Spacer(Modifier.height(8.dp))
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    val publicandoEste = h.findingId in publishingIds
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
                         Button(
-                            enabled = !publishing,
+                            enabled = !publicandoEste,
                             onClick = { onPublishFinding(h.findingId) },
-                        ) { Text(io.acr.i18n.t("review.publishInline")) }
-                        OutlinedButton(onClick = { onDismissFinding(h.findingId) }) {
-                            Text(io.acr.i18n.t("review.dismiss"))
+                        ) {
+                            Text(
+                                if (publicandoEste) io.acr.i18n.t("review.publishing")
+                                else io.acr.i18n.t("review.publishInline"),
+                            )
                         }
+                        OutlinedButton(
+                            enabled = !publicandoEste,
+                            onClick = { onDismissFinding(h.findingId) },
+                        ) { Text(io.acr.i18n.t("review.dismiss")) }
+                        // Se ve cuál está trabajando, en vez de deducirlo por un botón apagado.
+                        if (publicandoEste) CircularProgressIndicator(Modifier.height(18.dp))
                     }
                 }
 
@@ -1730,4 +1813,51 @@ internal fun mergeBlocker(
     noResueltos > 0 -> "merge.notResolved"
     sinVerificar > 0 -> "merge.notVerified"
     else -> null
+}
+
+/**
+ * Cuán listo está el PR, en un número que se puede desarmar.
+ *
+ * El porcentaje solo sería decorativo: lo que sirve es ver de qué está compuesto. Debajo va lo que
+ * falta, ordenado por cuánto pesa, así se sabe qué mover para que suba.
+ */
+@Composable
+private fun ReadinessCard(r: Readiness) {
+    Card {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                "${r.percent}%",
+                style = MaterialTheme.typography.headlineSmall,
+                color = when {
+                    r.percent == 100 -> MaterialTheme.colorScheme.primary
+                    r.percent >= 70 -> androidx.compose.ui.graphics.Color(0xFFD98324)
+                    else -> MaterialTheme.colorScheme.error
+                },
+            )
+            Spacer(Modifier.width(10.dp))
+            Text(
+                if (r.ready) io.acr.i18n.t("ready.yes") else io.acr.i18n.t("ready.no"),
+                style = MaterialTheme.typography.titleSmall,
+            )
+        }
+        androidx.compose.material3.LinearProgressIndicator(
+            progress = { r.percent / 100f },
+            modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp)
+                .clip(RoundedCornerShape(4.dp)),
+        )
+        r.missing.take(6).forEach { item ->
+            Text(
+                "· " + io.acr.i18n.t(item.key) + if (item.detail.isBlank()) "" else " (${item.detail})",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        if (r.missing.size > 6) {
+            Text(
+                "· +${r.missing.size - 6}",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
 }

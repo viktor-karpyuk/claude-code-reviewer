@@ -20,7 +20,6 @@ import androidx.compose.material.icons.filled.Dashboard
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.HorizontalDivider
-import androidx.compose.material3.VerticalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationRailItem
@@ -58,6 +57,7 @@ fun App(ctx: AppContext) {
     val scope = rememberCoroutineScope()
 
     var repos by remember { mutableStateOf<List<RepoRecord>>(emptyList()) }
+    val anchoBarra = io.acr.ui.rememberPaneWidth(ctx.prefs, "sidebar", 260.dp)
     var theme by remember {
         mutableStateOf(
             runCatching { ThemePref.valueOf(ctx.prefs.get(AppContext.PREF_THEME) ?: "System") }
@@ -86,10 +86,11 @@ fun App(ctx: AppContext) {
                     repos = repos,
                     running = runningByRepo,
                     selection = selection,
+                    width = anchoBarra.value,
                     onAdd = { selection.go(Selection.RepoForm(null)) },
                     onEdit = { selection.go(Selection.RepoForm(it.id)) },
                 )
-                VerticalDivider(Modifier.fillMaxHeight())
+                io.acr.ui.VerticalSplitter(anchoBarra, ctx.prefs, "sidebar", min = 200.dp, max = 480.dp)
                 Box(Modifier.weight(1f).fillMaxHeight()) {
                     when (val sel = selection.current) {
                         is Selection.Welcome -> Welcome(hasRepos = repos.isNotEmpty())
@@ -142,7 +143,10 @@ fun App(ctx: AppContext) {
                                 repo = repo,
                                 prId = sel.prId,
                                 snackbar = snackbar,
-                                onBack = { selection.go(Selection.Repo(repo.id)) },
+                                // Vuelve a donde estabas —el panel, la lista del repo— y no
+                                // siempre a la lista: abrir un PR desde el panel y aterrizar en
+                                // otro lado te hace perder lo que estabas mirando.
+                                onBack = { selection.back(Selection.Repo(repo.id)) },
                             )
                         }
                     }
@@ -170,11 +174,12 @@ private fun RepoSidebar(
     repos: List<RepoRecord>,
     running: Map<String, Int>,
     selection: SelectionStore,
+    width: androidx.compose.ui.unit.Dp,
     onAdd: () -> Unit,
     onEdit: (RepoRecord) -> Unit,
 ) {
     Column(
-        Modifier.width(260.dp).fillMaxHeight()
+        Modifier.width(width).fillMaxHeight()
             .background(MaterialTheme.colorScheme.surface)
             .padding(vertical = 12.dp),
     ) {

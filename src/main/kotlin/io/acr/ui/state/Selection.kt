@@ -24,12 +24,30 @@ class SelectionStore {
     private var previous: Selection = Selection.Welcome
 
     fun go(target: Selection) {
-        if (target !is Selection.RepoForm) previous = current
+        // Se recuerda de dónde venís en todos los casos menos uno: al saltar de un formulario de
+        // repositorio a otro —tocando "Editar" en otro repo mientras ya estabas en uno— hay que
+        // conservar el origen real, que es la pantalla anterior a los dos formularios.
+        val entreFormularios = current is Selection.RepoForm && target is Selection.RepoForm
+        if (!entreFormularios) previous = current
         current = target
     }
 
-    /** Vuelve a la pantalla anterior; si esa era el formulario, cae en la bienvenida. */
-    fun back() {
-        current = previous.takeIf { it !is Selection.RepoForm } ?: Selection.Welcome
+    /**
+     * Vuelve a la pantalla de la que se vino.
+     *
+     * Importa de dónde: al abrir un PR desde el panel, volver a la lista del repositorio te deja
+     * en un lugar en el que nunca estuviste y perdés lo que estabas revisando en el panel.
+     *
+     * @param fallback a dónde ir cuando no hay una pantalla anterior útil: la bienvenida no lo es,
+     *   y el formulario de repositorio tampoco —volver ahí reabriría un alta a medio hacer.
+     */
+    fun back(fallback: Selection = Selection.Welcome) {
+        val destino = previous
+        current = when {
+            destino is Selection.RepoForm -> fallback
+            destino is Selection.Welcome -> fallback
+            destino == current -> fallback
+            else -> destino
+        }
     }
 }

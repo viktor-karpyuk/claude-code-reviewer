@@ -79,6 +79,66 @@ object ReviewPrompt {
         - Escribí en $language.
     """.trimIndent()
 
+    /** Bloqueantes de la pasada final. Vacío significa que no encontró nada que frene el merge. */
+    val FINAL_PASS_SCHEMA = """
+    {"type":"object","properties":{
+      "summary":{"type":"string"},
+      "mergeable":{"type":"boolean"},
+      "blockers":{"type":"array","items":{"type":"object","properties":{
+        "file":{"type":"string"},
+        "line":{"type":["integer","null"]},
+        "title":{"type":"string"},
+        "body":{"type":"string"}
+      },"required":["file","title","body"]}}
+    },"required":["summary","mergeable","blockers"]}
+    """.trimIndent()
+
+    /**
+     * Prompt de la última mirada antes de mergear.
+     *
+     * No es otra review: es una pregunta más chica y más dura —¿hay algo acá que no deba entrar a
+     * la rama destino?—. Se le pasa lo que ya se discutió para que no lo repita, y se le pide
+     * explícitamente que devuelva vacío cuando no encuentra nada: una pasada final que siempre
+     * encuentra algo no sirve para decidir, porque nunca dejaría mergear.
+     */
+    fun finalPassPrompt(
+        language: String,
+        prTitle: String,
+        range: String,
+        yaDiscutido: String,
+    ): String = """
+        Sos un revisor senior haciendo la última mirada antes de mergear un pull request. Devolvé
+        ÚNICAMENTE el JSON que se describe al final.
+
+        PULL REQUEST: $prTitle
+        Rango del diff: $range
+
+        Los comandos de git de sólo lectura ya están autorizados. Empezá por
+        `git diff --stat $range` y después mirá lo que importe.
+
+        $yaDiscutido
+
+        QUÉ BUSCAR
+        Sólo lo que NO debería entrar a la rama destino tal como está:
+        - Bugs que se disparan en un caso concreto que puedas describir.
+        - Agujeros de seguridad o fugas de datos.
+        - Pérdida de datos, migraciones destructivas o irreversibles.
+        - Cambios incompatibles en un contrato que otros usan.
+        - Restos de depuración: credenciales, endpoints de prueba, código comentado que se coló.
+
+        QUÉ NO
+        - Nada de lo que ya se discutió arriba.
+        - Estilo, nombres, preferencias, cobertura de tests.
+        - Mejoras posibles. La pregunta no es si se puede mejorar sino si frena el merge.
+
+        REGLAS
+        - `blockers` vacío y `mergeable` true es la respuesta esperada de un PR sano. No busques
+          algo para justificar la corrida.
+        - Cada bloqueante tiene que decir el caso concreto en el que rompe, con archivo y línea.
+          Si no podés describir cómo falla, no es un bloqueante.
+        - Escribí en $language.
+    """.trimIndent()
+
     /** Escribir en el árbol o salir a la red está fuera de alcance en cualquier nivel. */
     val DISALLOWED_TOOLS = listOf("Edit", "Write", "WebFetch", "WebSearch")
 

@@ -190,6 +190,10 @@ data class ReviewRecord(
     val resolutionAt: String? = null,
     /** El commit contra el que se verificó. Si el PR avanzó, la verificación quedó vieja. */
     val resolutionHead: String? = null,
+    /** Commit sobre el que corrió la pasada final, su resumen y cuántos bloqueantes encontró. */
+    val finalPassHead: String? = null,
+    val finalPassSummary: String? = null,
+    val finalPassBlockers: Int = 0,
 )
 
 class ReviewRepository(private val store: Store) {
@@ -278,6 +282,20 @@ class ReviewRepository(private val store: Store) {
             ps.setString(1, summary.take(4_000))
             ps.setString(2, Instant.now().toString())
             ps.setString(3, head)
+            ps.setString(4, id)
+            ps.executeUpdate()
+        }
+    }
+
+    /** Resultado de la pasada final, anclado al commit sobre el que corrió. */
+    fun setFinalPass(id: String, head: String, summary: String, blockers: Int) {
+        store.stmt(
+            """UPDATE review SET final_pass_head = ?, final_pass_summary = ?, final_pass_blockers = ?
+               WHERE id = ?""",
+        ) { ps ->
+            ps.setString(1, head)
+            ps.setString(2, summary.take(4_000))
+            ps.setInt(3, blockers)
             ps.setString(4, id)
             ps.executeUpdate()
         }
@@ -623,7 +641,7 @@ class ReviewRepository(private val store: Store) {
             """SELECT id, repo_id, pr_id, pr_title, head_sha, status, body, error,
                       session_id, cost_usd, published_url, created_at, depth, project_kind, model,
                       trigger_kind, denied_tools, resolution_summary, resolution_at,
-                      resolution_head
+                      resolution_head, final_pass_head, final_pass_summary, final_pass_blockers
                FROM review $tail""",
         ) { ps ->
             bind(ps)
@@ -655,6 +673,9 @@ class ReviewRepository(private val store: Store) {
                             resolutionSummary = rs.getString(18),
                             resolutionAt = rs.getString(19),
                             resolutionHead = rs.getString(20),
+                            finalPassHead = rs.getString(21),
+                            finalPassSummary = rs.getString(22),
+                            finalPassBlockers = rs.getInt(23),
                         ),
                     )
                 }

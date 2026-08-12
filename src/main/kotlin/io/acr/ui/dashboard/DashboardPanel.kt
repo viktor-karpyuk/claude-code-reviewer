@@ -307,36 +307,50 @@ fun DashboardPanel(ctx: AppContext, onOpenPr: (repoId: String, prId: Long) -> Un
             }
 
             if (focus == null || focus == "replies") {
-            item { Section(io.acr.i18n.t("dash.repliedToYou") + " (${snapshot.replies.size})") }
+            // Agrupado por PR: con 34 respuestas sueltas, contestar dos dejaba una lista de 32
+            // visualmente idéntica. Un renglón por PR con su número hace visible que baja.
+            val porPr = snapshot.replies.groupBy { it.repoId to it.prId }
+                .toList()
+                .sortedByDescending { (_, v) -> v.size }
+            item {
+                Section(
+                    io.acr.i18n.t("dash.repliedToYou") +
+                        " (${porPr.size} PR · ${snapshot.replies.size})",
+                )
+            }
             if (snapshot.replies.isEmpty()) {
                 item { Empty(io.acr.i18n.t("dash.noReplies")) }
             }
-            items(snapshot.replies, key = { "rp-${it.id}" }) { d ->
+            items(porPr, key = { (k, _) -> "rp-${k.first}-${k.second}" }) { (clave, delPr) ->
+                val (repoId, prId) = clave
+                val redactadas = delPr.count { !it.body.isNullOrBlank() }
                 Row(
-                    Modifier.fillMaxWidth().clickableText { onOpenPr(d.repoId, d.prId) }
+                    Modifier.fillMaxWidth().clickableText { onOpenPr(repoId, prId) }
                         .padding(vertical = 6.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Text(
-                        "${snapshot.repoNames[d.repoId] ?: d.repoId} · #${d.prId}",
+                        "${snapshot.repoNames[repoId] ?: repoId} · #$prId",
                         style = MaterialTheme.typography.labelMedium,
                         modifier = Modifier.width(220.dp),
                         maxLines = 1,
                     )
                     Text(
-                        "${d.theirAuthor}: ${d.theirBody.replace('\n', ' ').take(90)}",
+                        io.acr.i18n.t("dash.repliesPending", delPr.size) + " · " +
+                            delPr.map { it.theirAuthor }.distinct().joinToString(", ").take(60),
                         style = MaterialTheme.typography.bodySmall,
                         modifier = Modifier.weight(1f),
                         maxLines = 1,
                     )
                     Text(
-                        if (d.body.isNullOrBlank()) io.acr.i18n.t("dash.notDrafted") else io.acr.i18n.t("dash.drafted"),
+                        if (redactadas == delPr.size) io.acr.i18n.t("dash.allDrafted")
+                        else io.acr.i18n.t("dash.someDrafted", redactadas, delPr.size),
                         style = MaterialTheme.typography.labelSmall,
-                        color = if (d.body.isNullOrBlank()) MaterialTheme.colorScheme.onSurfaceVariant
-                        else MaterialTheme.colorScheme.primary,
+                        color = if (redactadas == delPr.size) MaterialTheme.colorScheme.primary
+                        else MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.width(110.dp),
                     )
-                    TextButton(onClick = { onOpenPr(d.repoId, d.prId) }) { Text(io.acr.i18n.t("common.open")) }
+                    TextButton(onClick = { onOpenPr(repoId, prId) }) { Text(io.acr.i18n.t("common.open")) }
                 }
             }
             }

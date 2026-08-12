@@ -280,6 +280,74 @@ class ReviewEngine(
     }
 
     /**
+     * La última mirada antes de mergear: ¿hay algo en este PR que no deba entrar?
+     *
+     * Distinta de [verifyResolution], que pregunta si arreglaron lo que dijimos. Ésta mira el
+     * código completo como está ahora, con lo ya discutido como contexto para no repetirlo.
+     */
+    suspend fun finalPass(
+        repo: RepoRecord,
+        pr: PullRequest,
+        review: ReviewRecord,
+    ): Result<String> {
+        val workDir = File(repo.localPath)
+        if (!Git.isRepo(workDir)) {
+            return Result.failure(IllegalStateException("«${repo.localPath}» no es un working copy de git."))
+        }
+        val binary = ClaudeCli.resolveBinary(prefs.get(io.acr.AppContext.PREF_CLAUDE_BINARY))
+            ?: return Result.failure(IllegalStateException("No encuentro el ejecutable de Claude Code."))
+
+        Git.fetch(workDir, pr.targetBranch, pr.sourceBranch)
+        val range = "origin/${pr.targetBranch}...origin/${pr.sourceBranch}"
+        val discutido = findings.forReview(review.id)
+            .filter { it.publishedId != null }
+            .joinToString("\n") { "- [${it.filePath}${it.lineNo?.let { l -> ":$l" } ?: ""}] ${it.title}" }
+            .takeIf { it.isNotBlank() }
+            ?.let { "LO QUE YA SE DISCUTIO EN ESTE PR (no lo repitas)\n$it" }
+            .orEmpty()
+
+        val prompt = ReviewPrompt.finalPassPrompt(
+            language = prefs.get(io.acr.AppContext.PREF_LANGUAGE) ?: "español",
+            prTitle = pr.title,
+            range = range,
+            yaDiscutido = discutido,
+        )
+
+        return runCatching {
+            val result = ClaudeCli.run(
+                binary = binary,
+                workDir = workDir,
+                prompt = prompt,
+                // La última mirada usa el nivel más alto: es la que decide si algo entra o no.
+                model = repo.defaultModel.ifBlank { ReviewDepth.HEAVY.defaultModel },
+                allowedTools = ReviewDepth.HEAVY.allowedTools(),
+                disallowedTools = ReviewPrompt.DISALLOWED_TOOLS,
+                jsonSchema = ReviewPrompt.FINAL_PASS_SCHEMA,
+            )
+            if (!result.ok) error(result.stderr.ifBlank { "Claude Code no devolvió un veredicto." })
+            if (result.toolUses == 0) {
+                error("El modelo no abrió el diff: una pasada final que no miró el código no sirve para decidir.")
+            }
+            val json = kotlinx.serialization.json.Json { ignoreUnknownKeys = true; isLenient = true }
+                .parseToJsonElement(result.structured ?: result.text).jsonObject
+            val bloqueantes = (json["blockers"] as? JsonArray) ?: JsonArray(emptyList())
+            val resumen = buildString {
+                append(json["summary"]?.jsonPrimitive?.contentOrNull.orEmpty())
+                bloqueantes.forEach { b ->
+                    val o = b.jsonObject
+                    append("\n\n• ")
+                    append(o["file"]?.jsonPrimitive?.contentOrNull.orEmpty())
+                    o["line"]?.jsonPrimitive?.contentOrNull?.let { append(":").append(it) }
+                    append(" — ").append(o["title"]?.jsonPrimitive?.contentOrNull.orEmpty())
+                    append("\n  ").append(o["body"]?.jsonPrimitive?.contentOrNull.orEmpty())
+                }
+            }
+            reviews.setFinalPass(review.id, pr.headSha, resumen, bloqueantes.size)
+            resumen
+        }
+    }
+
+    /**
      * Publica un recordatorio colgado de nuestro propio comentario.
      *
      * No lo redacta el modelo: el texto sale de una plantilla traducida y el usuario lo edita

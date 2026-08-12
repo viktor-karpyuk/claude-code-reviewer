@@ -3,6 +3,107 @@
 Reglas de numeración en [CLAUDE.md](CLAUDE.md): un requerimiento **nuevo** incrementa *major*;
 cambiar uno **existente** incrementa *patch*.
 
+## 22.0.1
+
+- Volver desde un PR te lleva **a la pantalla de la que viniste**, no siempre a la lista del
+  repositorio. Si entraste desde el panel, volvés al panel: aterrizar en la lista te dejaba en un
+  lugar en el que nunca estuviste y perdías lo que estabas revisando.
+- Cuando no hay una pantalla anterior útil —recién abierta la app, o entrando desde el icono de la
+  barra de menú— se usa la lista del repositorio, que es el destino sensato.
+- Arreglo en el camino: al **entrar** al formulario de repositorio no se registraba de dónde venías,
+  así que "Cancelar" caía en la bienvenida. Sólo debía conservarse el origen al saltar de un
+  formulario a otro, no al abrir el primero.
+
+## 22.0.0
+
+Requerimiento nuevo: **paneles redimensionables**.
+
+- Las líneas que separan los paneles se pueden arrastrar: la lista de archivos contra el diff en la
+  vista de código, la de commits contra su detalle, y la barra lateral contra el contenido.
+- La zona sensible del arrastre es de 8 píxeles aunque la línea que se ve mida uno: acertarle a un
+  pelo de un píxel con el mouse es puntería, no una interacción. El cursor cambia al pasar por
+  encima y la línea se resalta mientras arrastrás.
+- El ancho se guarda y sobrevive al reinicio. Acomodar los paneles depende del monitor y de qué
+  estés mirando; volver a arrastrarlos en cada arranque sería tratar esa decisión como un capricho
+  del momento.
+- Hay topes mínimo y máximo: sin ellos se puede dejar un panel en cero y ahí desaparece el borde
+  del que hay que tirar para recuperarlo. Un valor corrupto en las preferencias vuelve al ancho por
+  defecto en vez de arrancar con un panel invisible.
+- La posición se guarda al soltar, no en cada píxel: serían cientos de escrituras por arrastre
+  sobre la misma conexión que usa el resto de la app.
+
+## 21.0.0
+
+Requerimiento nuevo: **el panel agrupa las respuestas por PR** y **el historial es una línea de
+tiempo**.
+
+- "Te respondieron" muestra **un renglón por PR** con su número de respuestas pendientes, en vez de
+  una lista plana de todas. Con 34 respuestas sueltas, contestar dos dejaba una lista de 32
+  visualmente idéntica: el contador bajaba pero no se notaba. Ahora se lee "kubrik-erp-be #149 · 14
+  respuestas por contestar" y al contestar dos dice 12.
+- El encabezado dice cuántos PR y cuántas respuestas en total, y cada renglón si están todas
+  redactadas o cuántas van.
+- El **historial** pasa a ser una sola línea de tiempo agrupada por día, en vez de cuatro listas
+  separadas —reviews, publicaciones, hilo y notas— cada una con su propio orden. Reconstruir qué
+  pasó y cuándo obligaba a saltar entre secciones comparando fechas a ojo.
+- Cada evento dice de qué tipo es y de quién, con el filtro por autor conservado.
+- Un comentario nuestro ya publicado deja de aparecer dos veces: la publicación y el comentario del
+  hilo son la misma cosa vista dos veces, y duplicarlos hacía parecer que habíamos comentado el
+  doble. Una publicación que todavía no se sincronizó sí se muestra, para no esconder algo que sí
+  se publicó.
+
+## 20.0.0
+
+Requerimientos nuevos: **porcentaje de listo para mergear**, **pasada final** y **commits desde la
+review**.
+
+- La pantalla del PR muestra cuán listo está, de 0 a 100, **y de qué está compuesto**: debajo del
+  número va lo que falta, ordenado por cuánto pesa. Un porcentaje que no se puede desarmar en
+  "esto sí, esto no" es decorativo, y peor si de él depende mergear.
+- Los pesos dicen qué importa más: un comentario publicado sin resolver pesa el triple que uno que
+  ni se publicó —el primero es una objeción viva, el segundo una decisión que todavía no tomaste—,
+  y diez objeciones abiertas no valen lo mismo que una.
+- Nunca muestra 100% con algo pendiente: con muchos ítems el redondeo podía llegar ahí, y esa
+  mentira rompería la confianza en el número.
+- Sin review el porcentaje es 0, que significa "no hay información", no "está muy lejos".
+- **Pasada final**: una última mirada al código completo antes de mergear, distinta de la
+  verificación. Aquélla pregunta "¿arreglaron lo que dije?"; ésta, "¿hay algo que no deba entrar a
+  la rama destino?". Se le pasa lo ya discutido para que no lo repita, y se le pide explícitamente
+  que devuelva vacío cuando no encuentra nada: una pasada que siempre encuentra algo no sirve para
+  decidir.
+- La pasada final vale sólo para el commit sobre el que corrió: si el PR avanza, vuelve a faltar.
+- La pestaña **Commits** dice el total y cuántos llegaron **después de la review**, marcándolos.
+  Si el commit revisado ya no está en la rama —un rebase lo reescribe— lo dice en vez de reportar
+  cero, que haría creer que nadie tocó nada.
+
+## 19.0.2
+
+- La gravedad de cada hallazgo se distingue de verdad: **bloqueante en rojo, importante en ámbar,
+  menor en azul**. Antes `major` usaba el azul del tema y `minor` un gris, que al lado se leían
+  igual; el ámbar aparecía suelto en el visor de código sin significar nada en particular.
+- Los tres colores son de familias distintas y no tonos del mismo, para que la diferencia se lea
+  de reojo.
+- Además del color, cada nivel lleva su marca —`●●●`, `●●`, `●`— y su etiqueta traducida. El color
+  solo no le sirve a quien no distingue rojo de ámbar, ni sobrevive a una captura en blanco y negro.
+- La severidad ahora también se muestra en la **conversación**, donde no aparecía: era la única
+  vista donde no se sabía si lo que estabas leyendo frenaba el merge o era un detalle.
+- El contador de hallazgos de cada archivo toma el color del **peor** que tenga, en vez de un ámbar
+  fijo para todos.
+- Los cuatro lugares donde se muestra la gravedad usan ahora la misma definición; antes cada uno
+  elegía su color por su cuenta.
+
+## 19.0.1
+
+- Publicar un comentario desde la conversación ya no apaga los botones de los demás. Había un solo
+  flag de "publicando" para toda la pantalla, así que apretar uno deshabilitaba el resto —y un
+  botón deshabilitado de Material tiene tan poco contraste que se lee como desaparecido. Ahora el
+  estado es por comentario, el botón dice "Publicando…" y hay un indicador al lado, así se ve cuál
+  está trabajando.
+- Al publicar, la tarjeta baja en la lista en vez de subir. "Sin publicar" ahora ordena antes que
+  "sin verificar": publicar depende sólo de vos, verificar espera a que el otro suba algo. Antes la
+  tarjeta recién publicada saltaba por encima de las que faltaban y las corría mientras seguías
+  clickeando.
+
 ## 19.0.0
 
 Requerimientos nuevos: **"esperando respuesta de ellos"** y **cerrar un hilo sin esperar cambios**.

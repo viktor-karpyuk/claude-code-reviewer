@@ -28,11 +28,18 @@ enum class ThreadState(val labelKey: String) {
     /** El veredicto sobre el código dice que no se corrigió, o se corrigió a medias. */
     NOT_FIXED("thread.notFixed"),
 
+    /**
+     * Todavía no se publicó: la pregunta no llegó a hacerse.
+     *
+     * Va antes que [UNVERIFIED] a propósito: publicar depende sólo de vos, mientras que verificar
+     * espera a que el otro suba algo. Además hace que al publicar la tarjeta baje en la lista en
+     * vez de subir, que es lo que uno espera al terminar con ella —antes saltaba hacia arriba y
+     * las de abajo se corrían mientras seguías publicando.
+     */
+    UNPUBLISHED("thread.unpublished"),
+
     /** Publicado, pero todavía nadie miró si los commits nuevos lo arreglan. */
     UNVERIFIED("thread.unverified"),
-
-    /** Todavía no se publicó: la pregunta no llegó a hacerse. */
-    UNPUBLISHED("thread.unpublished"),
 
     /** Cerrado: descartado, o corregido y verificado. */
     OK("thread.ok"),
@@ -50,6 +57,8 @@ data class ConversationThread(
     val filePath: String?,
     val lineNo: Int?,
     val title: String,
+    /** Gravedad tal como la devolvió la review: blocker, major o minor. */
+    val severity: String,
     val question: String,
     val entries: List<ThreadEntry>,
     val draft: ReplyDraft?,
@@ -148,6 +157,7 @@ fun buildConversation(
             filePath = f.filePath,
             lineNo = f.lineNo,
             title = f.title,
+            severity = f.severity,
             question = raiz?.body ?: f.body,
             entries = cadena.map { ThreadEntry(it.author, it.body, it.ours, it.createdOn) },
             draft = draft,
