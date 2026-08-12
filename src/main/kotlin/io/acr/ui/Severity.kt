@@ -78,3 +78,29 @@ fun SeverityBadge(raw: String?, modifier: Modifier = Modifier) {
             .padding(horizontal = 6.dp, vertical = 2.dp),
     )
 }
+
+/** Verde de "esto ya está". No sale del tema porque el primario es azul y se usa para navegar. */
+val VERDE_OK = Color(0xFF2E9E5B)
+
+/**
+ * Distintivo de estado: texto dentro de un recuadro del color, como el de gravedad.
+ *
+ * Un estado terminal —publicado, resuelto, listo— escrito en el mismo azul que todo lo demás se
+ * pierde entre el resto del texto. El recuadro lo separa y el verde dice "cerrado" sin leerlo.
+ */
+@Composable
+fun StatusBadge(
+    text: String,
+    color: Color = VERDE_OK,
+    modifier: Modifier = Modifier,
+) {
+    Text(
+        text,
+        style = MaterialTheme.typography.labelSmall,
+        color = color,
+        modifier = modifier
+            .clip(RoundedCornerShape(4.dp))
+            .background(color.copy(alpha = 0.16f))
+            .padding(horizontal = 8.dp, vertical = 3.dp),
+    )
+}

@@ -504,6 +504,16 @@ private fun PrRow(
             }
         }
         badge?.let {
+            // Lo que ya está cerrado va en verde y con recuadro; lo que todavía espera algo, en
+            // texto plano. Antes todo compartía el mismo azul y no se distinguía de un vistazo.
+            val terminal = it == io.acr.i18n.t("common.published") ||
+                it == io.acr.i18n.t("prs.publishedAnswered") ||
+                it == io.acr.i18n.t("prs.answered") ||
+                it == io.acr.i18n.t("prs.readyToMerge")
+            if (terminal) {
+                io.acr.ui.StatusBadge(it)
+                return@let
+            }
             Text(
                 it,
                 style = MaterialTheme.typography.labelSmall,

@@ -709,17 +709,16 @@ private fun ReviewRow(r: ReviewRecord, repoName: String, onOpen: () -> Unit) {
         r.publishedUrl?.takeIf { it.isNotBlank() }?.let { url ->
             TextButton(onClick = { openInBrowser(url) }) { Text(io.acr.i18n.t("common.inBrowser")) }
         }
-        Text(
-            when {
-                r.publishedUrl != null -> "publicada"
-                r.status == ReviewStatus.DONE -> "lista"
-                else -> r.status.name.lowercase()
-            },
+        // Publicada es un estado terminal: verde y con recuadro. El resto sigue como texto, que
+        // es lo que corresponde a algo todavía en curso.
+        if (r.publishedUrl != null) {
+            io.acr.ui.StatusBadge(io.acr.i18n.t("common.published"))
+        } else Text(
+            if (r.status == ReviewStatus.DONE) "lista" else r.status.name.lowercase(),
             style = MaterialTheme.typography.labelSmall,
-            color = when {
-                r.publishedUrl != null -> MaterialTheme.colorScheme.onSurfaceVariant
-                r.status == ReviewStatus.DONE -> MaterialTheme.colorScheme.primary
-                r.status == ReviewStatus.FAILED -> MaterialTheme.colorScheme.error
+            color = when (r.status) {
+                ReviewStatus.DONE -> MaterialTheme.colorScheme.primary
+                ReviewStatus.FAILED -> MaterialTheme.colorScheme.error
                 else -> MaterialTheme.colorScheme.onSurfaceVariant
             },
             modifier = Modifier.width(90.dp),

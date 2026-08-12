@@ -65,9 +65,12 @@ private fun openInBrowser(url: String) {
 }
 
 /** Colores del diff. Se mantienen legibles sobre fondo claro y oscuro. */
-internal val ADDED_BG = Color(0x3327C08A)
-internal val REMOVED_BG = Color(0x33E4685F)
-internal val HUNK_BG = Color(0x228FBEFF)
+// Con 0x33 sobre el fondo oscuro anterior las líneas agregadas y borradas quedaban barrosas y
+// casi del mismo tono. Más opacidad y tonos más separados: el verde y el rojo tienen que
+// distinguirse de un vistazo, que es para lo que están.
+internal val ADDED_BG = Color(0x4022C083)
+internal val REMOVED_BG = Color(0x40E05B52)
+internal val HUNK_BG = Color(0x3380B4FF)
 
 /** A dónde saltar en el visor de código: el archivo y, si la hay, la línea. */
 data class CodeFocus(val filePath: String, val lineNo: Int?)
@@ -463,7 +466,7 @@ internal fun DiffRow(
     }
     if (line.kind == DiffLine.Kind.META) return
 
-    val mono = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace, fontSize = 12.sp)
+    val mono = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace, fontSize = 13.sp)
     Row(
         Modifier.fillMaxWidth().background(bg).clickableText(onClick),
         verticalAlignment = Alignment.CenterVertically,
@@ -552,11 +555,7 @@ private fun NoteCard(note: LocalNote, busy: Boolean, onEdit: () -> Unit, onDelet
                 TextButton(onClick = onEdit) { Text("Editar") }
                 TextButton(onClick = onDelete) { Text("Borrar") }
             } else {
-                Text(
-                    "publicada",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.primary,
-                )
+                io.acr.ui.StatusBadge(io.acr.i18n.t("common.published"))
                 note.publishedUrl?.takeIf { it.isNotBlank() }?.let { url ->
                     TextButton(onClick = { openInBrowser(url) }) { Text("Ver en el navegador") }
                 }
@@ -666,11 +665,8 @@ private fun AnchorRow(a: Anchor, active: Boolean, onClick: () -> Unit) {
                     )
                 }
                 if (a.published) {
-                    Text(
-                        "  " + io.acr.i18n.t("common.published"),
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.primary,
-                    )
+                    Spacer(Modifier.width(6.dp))
+                    io.acr.ui.StatusBadge(io.acr.i18n.t("common.published"))
                 }
             }
         }

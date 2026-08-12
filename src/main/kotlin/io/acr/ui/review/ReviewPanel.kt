@@ -40,6 +40,11 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.Warning
 import io.acr.AppContext
 import io.acr.claude.ReviewOutcome
 import io.acr.data.PublicationRecord
@@ -819,6 +824,10 @@ fun ReviewPanel(
                             reload++
                         }
                     },
+                    onShowCode = { path, line ->
+                        codeFocus = io.acr.ui.code.CodeFocus(path, line)
+                        tab = Tab.Codigo
+                    },
                     onRestore = { f ->
                         scope.launch {
                             kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
@@ -977,11 +986,12 @@ private fun HistoryList(
 /** Una fila del historial: cuándo, de qué tipo, de quién y qué dice. */
 @Composable
 private fun TimelineRow(e: TimelineEvent, onOpen: (String) -> Unit) {
+    // El mismo criterio que las burbujas: nuestro es el color del tema, ajeno el violeta. El ámbar
+    // quedó reservado para la gravedad, que es otra cosa.
     val color = when (e.kind) {
-        EventKind.REVIEW -> MaterialTheme.colorScheme.onSurfaceVariant
-        EventKind.COMMENT_OURS -> MaterialTheme.colorScheme.primary
-        EventKind.COMMENT_THEIRS -> androidx.compose.ui.graphics.Color(0xFFD98324)
-        EventKind.NOTE -> MaterialTheme.colorScheme.onSurfaceVariant
+        EventKind.COMMENT_OURS -> io.acr.ui.authorColor(ours = true)
+        EventKind.COMMENT_THEIRS -> io.acr.ui.authorColor(ours = false)
+        else -> MaterialTheme.colorScheme.onSurfaceVariant
     }
     Card {
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -1024,8 +1034,19 @@ private fun TimelineRow(e: TimelineEvent, onOpen: (String) -> Unit) {
             Text(e.title, style = MaterialTheme.typography.labelSmall, color = color)
         }
         if (e.body.isNotBlank()) {
-            SelectionContainer {
-                Text(e.body.take(600), style = MaterialTheme.typography.bodySmall)
+            // Los comentarios van como burbuja con la identidad de quien los escribió; una review
+            // o una nota local no son de nadie en ese sentido y se leen como texto.
+            val esComentario = e.kind == EventKind.COMMENT_OURS || e.kind == EventKind.COMMENT_THEIRS
+            if (esComentario) {
+                io.acr.ui.MessageBubble(
+                    author = e.author,
+                    body = e.body,
+                    ours = e.kind == EventKind.COMMENT_OURS,
+                )
+            } else {
+                SelectionContainer {
+                    Text(e.body.take(600), style = MaterialTheme.typography.bodySmall)
+                }
             }
         }
     }
@@ -1234,6 +1255,7 @@ private fun FindingsSummary(
     onPublishAll: () -> Unit,
     onDismiss: (io.acr.data.Finding) -> Unit,
     onRestore: (io.acr.data.Finding) -> Unit,
+    onShowCode: (String, Int?) -> Unit,
 ) {
     // Las notas propias cuentan igual que los hallazgos: son comentarios anclados a archivo y
     // línea que también hay que publicar. Antes vivían sólo en la vista de código, así que desde
@@ -1285,10 +1307,13 @@ private fun FindingsSummary(
                     },
                     modifier = Modifier.width(36.dp),
                 )
+                // Link al código, como en la conversación: leer un hallazgo sin poder ver la
+                // línea que señala obliga a buscarla a mano en la otra pestaña.
                 Text(
                     f.filePath.substringAfterLast('/') + (f.lineNo?.let { ":$it" } ?: ""),
                     style = MaterialTheme.typography.labelSmall.copy(fontFamily = FontFamily.Monospace),
-                    modifier = Modifier.width(220.dp),
+                    color = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.width(220.dp).clickableText { onShowCode(f.filePath, f.lineNo) },
                     maxLines = 1,
                 )
                 Text(
@@ -1299,20 +1324,8 @@ private fun FindingsSummary(
                 )
                 when {
                     // Publicado: lo que importa ya no es que se mandó sino si lo arreglaron.
-                    f.publishedId != null -> Text(
-                        when (f.resolution) {
-                            io.acr.data.Resolution.RESOLVED -> "✓ " + io.acr.i18n.t("verify.RESOLVED")
-                            io.acr.data.Resolution.PARTIAL -> "~ " + io.acr.i18n.t("verify.PARTIAL")
-                            io.acr.data.Resolution.UNRESOLVED -> "✗ " + io.acr.i18n.t("verify.UNRESOLVED")
-                            null -> "✓ " + io.acr.i18n.t("verify.pending")
-                        },
-                        style = MaterialTheme.typography.labelSmall,
-                        color = when (f.resolution) {
-                            io.acr.data.Resolution.RESOLVED -> MaterialTheme.colorScheme.primary
-                            io.acr.data.Resolution.UNRESOLVED -> MaterialTheme.colorScheme.error
-                            else -> MaterialTheme.colorScheme.onSurfaceVariant
-                        },
-                    )
+                    // Corregido es terminal y va con recuadro verde; lo demás sigue esperando.
+                    f.publishedId != null -> VerificationMark(f.resolution)
                     f.dismissedAt != null -> TextButton(onClick = { onRestore(f) }) {
                         Text(io.acr.i18n.t("review.dismissed"), style = MaterialTheme.typography.labelSmall)
                     }
@@ -1460,11 +1473,17 @@ private fun ConversationList(
                         }
                     }
                     Spacer(Modifier.weight(1f))
-                    Text(
-                        io.acr.i18n.t(h.state.labelKey),
-                        style = MaterialTheme.typography.labelSmall,
-                        color = h.state.color(),
-                    )
+                    // Resuelto es el único estado terminal del hilo: recuadro verde. Los otros
+                    // cinco esperan algo y se leen como texto.
+                    if (h.state == ThreadState.OK) {
+                        io.acr.ui.StatusBadge(io.acr.i18n.t(h.state.labelKey))
+                    } else {
+                        Text(
+                            io.acr.i18n.t(h.state.labelKey),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = h.state.color(),
+                        )
+                    }
                 }
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     io.acr.ui.SeverityBadge(h.severity)
@@ -1473,27 +1492,20 @@ private fun ConversationList(
                 }
 
                 Spacer(Modifier.height(6.dp))
-                Text(
-                    io.acr.i18n.t("thread.ourQuestion"),
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.primary,
+                io.acr.ui.MessageBubble(
+                    author = io.acr.i18n.t("thread.ourQuestion"),
+                    body = h.question,
+                    ours = true,
                 )
-                SelectionContainer {
-                    Text(h.question.take(600), style = MaterialTheme.typography.bodySmall)
-                }
 
                 // El ida y vuelta, en orden. Es "por dónde arranqué y qué me contestaron".
                 h.entries.forEach { e ->
-                    Spacer(Modifier.height(6.dp))
-                    Text(
-                        e.author + if (e.ours) " (nosotros)" else "",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = if (e.ours) MaterialTheme.colorScheme.primary
-                        else MaterialTheme.colorScheme.onSurfaceVariant,
+                    io.acr.ui.MessageBubble(
+                        author = e.author,
+                        body = e.body,
+                        ours = e.ours,
+                        at = e.at,
                     )
-                    SelectionContainer {
-                        Text(e.body.take(600), style = MaterialTheme.typography.bodySmall)
-                    }
                 }
 
                 // El veredicto sobre el código, con su evidencia.
@@ -1859,5 +1871,57 @@ private fun ReadinessCard(r: Readiness) {
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
+    }
+}
+
+/**
+ * Si el hallazgo se verificó contra el código, y con qué resultado.
+ *
+ * Cada estado tiene su ícono además del color. "Sin verificar" llevaba un ✓ —el mismo símbolo que
+ * "corregido"— así que se leía como hecho cuando en realidad nadie lo había mirado todavía.
+ */
+@Composable
+private fun VerificationMark(resolution: io.acr.data.Resolution?) {
+    val icono: androidx.compose.ui.graphics.vector.ImageVector
+    val color: androidx.compose.ui.graphics.Color
+    val clave: String
+    when (resolution) {
+        io.acr.data.Resolution.RESOLVED -> {
+            icono = Icons.Default.CheckCircle
+            color = io.acr.ui.VERDE_OK
+            clave = "verify.RESOLVED"
+        }
+        io.acr.data.Resolution.PARTIAL -> {
+            icono = Icons.Default.Warning
+            color = androidx.compose.ui.graphics.Color(0xFFD98324)
+            clave = "verify.PARTIAL"
+        }
+        io.acr.data.Resolution.UNRESOLVED -> {
+            icono = Icons.Default.Close
+            color = MaterialTheme.colorScheme.error
+            clave = "verify.UNRESOLVED"
+        }
+        // Sin veredicto: nadie lo miró. El ícono es neutro a propósito, ni éxito ni fracaso.
+        null -> {
+            icono = Icons.Default.Info
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+            clave = "verify.pending"
+        }
+    }
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier
+            .clip(RoundedCornerShape(4.dp))
+            .background(color.copy(alpha = 0.16f))
+            .padding(horizontal = 6.dp, vertical = 3.dp),
+    ) {
+        androidx.compose.material3.Icon(
+            icono,
+            contentDescription = null,
+            tint = color,
+            modifier = Modifier.height(13.dp).width(13.dp),
+        )
+        Spacer(Modifier.width(4.dp))
+        Text(io.acr.i18n.t(clave), style = MaterialTheme.typography.labelSmall, color = color)
     }
 }

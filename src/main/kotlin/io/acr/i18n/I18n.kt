@@ -154,6 +154,9 @@ object I18n {
         "hist.ourComment" to "comentario nuestro",
         "hist.theirComment" to "comentario suyo",
         "hist.note" to "nota local",
+        "msg.us" to "nosotros",
+        "msg.them" to "ellos",
+        "msg.usTag" to "· nosotros",
 
         // Review
         "review.run" to "Revisar",
@@ -550,6 +553,9 @@ object I18n {
         "hist.ourComment" to "our comment",
         "hist.theirComment" to "their comment",
         "hist.note" to "local note",
+        "msg.us" to "us",
+        "msg.them" to "them",
+        "msg.usTag" to "· us",
 
         "review.run" to "Review",
         "review.rerun" to "Review again",

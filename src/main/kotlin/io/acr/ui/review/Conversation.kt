@@ -188,5 +188,5 @@ fun ThreadState.color(): androidx.compose.ui.graphics.Color = when (this) {
     ThreadState.NOT_FIXED -> androidx.compose.material3.MaterialTheme.colorScheme.error
     ThreadState.UNVERIFIED -> androidx.compose.ui.graphics.Color(0xFFD08A2C)
     ThreadState.UNPUBLISHED -> androidx.compose.material3.MaterialTheme.colorScheme.onSurfaceVariant
-    ThreadState.OK -> androidx.compose.material3.MaterialTheme.colorScheme.primary
+    ThreadState.OK -> io.acr.ui.VERDE_OK
 }

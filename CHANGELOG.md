@@ -3,6 +3,49 @@
 Reglas de numeración en [CLAUDE.md](CLAUDE.md): un requerimiento **nuevo** incrementa *major*;
 cambiar uno **existente** incrementa *patch*.
 
+## 22.0.4
+
+- En el resumen de hallazgos de la review, el `archivo:línea` de cada uno es ahora un **link al
+  código**: abre la pestaña Código en ese archivo, baja hasta la línea y la resalta. Leer un
+  hallazgo sin poder ver la línea que señala obligaba a buscarla a mano en la otra pestaña. Es el
+  mismo salto que ya tenía la conversación.
+- El estado de verificación de cada hallazgo pasa a tener **ícono además de color**: tilde para
+  corregido, advertencia para a medias, cruz para sin corregir, e información para sin verificar.
+- Arreglo de iconografía: "sin verificar" llevaba un **✓**, el mismo símbolo que "corregido", así
+  que se leía como hecho cuando en realidad nadie lo había mirado todavía. Ahora el ícono es
+  neutro: ni éxito ni fracaso.
+
+## 22.0.3
+
+- Lo que ya está cerrado —publicado, resuelto, listo para mergear— se muestra en **verde y dentro
+  de un recuadro**, no en el mismo azul que el resto del texto. Un estado terminal escrito igual
+  que todo lo demás se pierde entre el texto; el recuadro lo separa y el verde dice "cerrado" sin
+  leerlo. Vale en la lista de PRs, la conversación, el resumen de la review, el visor de código y
+  el panel.
+- Lo que todavía espera algo se sigue leyendo como texto: el recuadro tiene que significar algo.
+- **Más contraste en el tema oscuro.** Los tres niveles —fondo, superficie y superficie variante—
+  estaban muy juntos y muy abajo: las tarjetas no se despegaban del fondo y todo se leía como una
+  masa oscura. Ahora cada nivel sube un escalón visible respecto del anterior.
+- El texto secundario —autores, fechas, rutas de archivo— pasa de `#B4BDCE` a `#C5CEDE`: estaba al
+  borde de lo legible y es justo donde vive la información de los PRs.
+- Se definen `outline` y `outlineVariant` en los dos temas, que hasta ahora quedaban en el default
+  de Material y por eso los separadores casi no se veían.
+- **El diff se lee mejor**: las líneas agregadas y borradas tenían tan poca opacidad que sobre el
+  fondo oscuro quedaban barrosas y casi del mismo tono. Y el código pasa de 12 a 13 puntos.
+
+## 22.0.2
+
+- Los comentarios del desarrollador se distinguen de los nuestros de un vistazo: cada mensaje va
+  como burbuja con **fondo propio y una barra de color a la izquierda** —el color del tema para lo
+  nuestro, violeta para lo suyo—. Antes lo único distinto era el color del nombre, tres palabras
+  arriba de un bloque de texto idéntico, y en una discusión larga había que subir la vista para
+  saber quién estaba hablando.
+- Vale igual en la conversación y en el historial, con la misma definición: la barra de color es lo
+  que se ve de reojo al scrollear, y el fondo diluido separa un mensaje del siguiente sin líneas.
+- El ámbar del historial se retiró de los comentarios: quedó reservado para la gravedad, que es
+  otra cosa y se estaba pisando.
+- Las reviews y las notas locales se siguen leyendo como texto: no son de nadie en ese sentido.
+
 ## 22.0.1
 
 - Volver desde un PR te lleva **a la pantalla de la que viniste**, no siempre a la lista del
