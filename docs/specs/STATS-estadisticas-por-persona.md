@@ -420,8 +420,16 @@ se marca como tal, para que no se lea como caída.
    **M3a (commits de corrección) y M3c (vueltas de conversación) quedan pendientes**: la primera
    necesita cruzar commits con el sha revisado por PR, y la segunda depende de la misma
    atribución de autoría que hoy cubre poco.
-4. **Ficha individual** (UC-6) y exportación.
-5. **Histórico bajo demanda** (UC-7).
+5. **Histórico bajo demanda** (UC-7) — **hecho en v42.0.0** para los pull requests: botón
+   explícito, un estado por vez para que un 401 cueste un estado y no la corrida, y relleno de
+   `review.pr_author` con lo que trae. Con eso quedan **M1** (PRs abiertos) y **M4** (tiempo de
+   ciclo, mediana y percentil 90), que la fase 2 había tenido que dejar afuera.
+
+   Falta la parte de git de UC-7: hoy la recolección de commits trae los últimos 12 meses y no
+   todo el historial. Y `stats_run` guarda hasta dónde se procesó pero todavía no se usa para
+   recolectar sólo lo nuevo (CA-7.4/CA-7.6).
+
+4. **Ficha individual** (UC-6) y exportación — pendiente.
 
 Cada fase es usable por sí sola. La 1 no muestra estadísticas y aun así hay que hacerla primero.
 

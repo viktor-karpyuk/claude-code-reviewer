@@ -3,6 +3,30 @@
 Reglas de numeración en [CLAUDE.md](CLAUDE.md): un requerimiento **nuevo** incrementa *major*;
 cambiar uno **existente** incrementa *patch*.
 
+## 42.0.0
+
+Requerimiento nuevo: **estadísticas por persona — fase 4: histórico de pull requests**.
+
+Botón para traer el histórico del proveedor, incluidos los cerrados y mergeados que sólo devuelve
+si se los pide: son cientos por repositorio —148 contra 4 abiertos en uno de éstos— y por eso no
+se descargan solos.
+
+- **Cuántos PRs abrió cada uno** y en qué terminaron: mergeados, rechazados, abiertos.
+- **Cuánto tardaron en cerrarse**, con mediana y percentil 90 y nunca promedio: un PR olvidado
+  tres meses corre el promedio hasta que deja de describir a ninguno.
+- **Tapa el agujero de la fase anterior.** La review no guardaba de quién era el PR y las métricas
+  se calculaban sobre 7 de 12; el histórico completa esa autoría. Lo que ya se había guardado al
+  correr la review no se pisa: es de primera mano, el histórico es una reconstrucción.
+- Se pide un estado por vez y no los tres juntos: Bitbucket devuelve 401 al azar en cerca del 40%
+  de las llamadas, y así un fallo cuesta un estado en vez de la corrida entera. Lo ya traído queda
+  guardado.
+- Un PR abierto no tiene fecha de cierre. Tomar su última actividad como cierre daría tiempos de
+  ciclo de PRs que siguen vivos.
+
+**Arreglo encontrado por un test**: el percentil 90 truncaba el índice, así que sobre cinco valores
+devolvía el cuarto y el peor PR nunca aparecía — justo lo que ese número viene a mostrar, y con
+equipos chicos fallaba siempre.
+
 ## 41.0.0
 
 Requerimiento nuevo: **estadísticas por persona — fase 3: participación y hallazgos recibidos**.

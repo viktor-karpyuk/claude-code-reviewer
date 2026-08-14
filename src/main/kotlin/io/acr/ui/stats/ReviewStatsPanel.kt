@@ -35,6 +35,7 @@ import io.acr.stats.Person
 import io.acr.stats.personForDisplayName
 import io.acr.stats.resolvePreset
 import io.acr.ui.PersonAvatar
+import kotlinx.coroutines.launch
 
 /**
  * Lo que sale de nuestras reviews: quién participó revisando y qué se le señaló a cada uno.
@@ -50,16 +51,28 @@ import io.acr.ui.PersonAvatar
 @Composable
 fun ReviewStatsPanel(ctx: AppContext) {
     var preset by remember { mutableStateOf(PeriodPreset.ALL) }
+    var version by remember { mutableStateOf(0) }
+    var trayendo by remember { mutableStateOf(false) }
+    var avance by remember { mutableStateOf<io.acr.stats.CollectProgress?>(null) }
+    val scope = androidx.compose.runtime.rememberCoroutineScope()
     val periodo = remember(preset) { resolvePreset(preset) }
 
-    val personas = io.acr.ui.dbState(initial = emptyList<Person>()) { ctx.persons.all() }
-    val comentarios = io.acr.ui.dbState(periodo, initial = emptyMap<String, Participation>()) {
+    val personas = io.acr.ui.dbState(version, initial = emptyList<Person>()) { ctx.persons.all() }
+    val repos = io.acr.ui.dbState(initial = emptyList<io.acr.forge.RepoRecord>()) { ctx.repos.list() }
+    val prsGuardados = io.acr.ui.dbState(version, initial = 0) { ctx.prStats.count() }
+    val abiertos = io.acr.ui.dbState(periodo, version, initial = emptyMap<String, io.acr.data.PrCount>()) {
+        ctx.prStats.openedByAuthor(periodo.from, periodo.to)
+    }
+    val duraciones = io.acr.ui.dbState(periodo, version, initial = emptyMap<String, List<Double>>()) {
+        ctx.prStats.mergedDurationsByAuthor(periodo.from, periodo.to)
+    }
+    val comentarios = io.acr.ui.dbState(periodo, version, initial = emptyMap<String, Participation>()) {
         ctx.reviewStats.commentsByAuthor(periodo.from, periodo.to)
     }
-    val hallazgos = io.acr.ui.dbState(periodo, initial = emptyMap<String, SeverityCount>()) {
+    val hallazgos = io.acr.ui.dbState(periodo, version, initial = emptyMap<String, SeverityCount>()) {
         ctx.reviewStats.findingsByPrAuthor(periodo.from, periodo.to)
     }
-    val cobertura = io.acr.ui.dbState(periodo, initial = 0 to 0) {
+    val cobertura = io.acr.ui.dbState(periodo, version, initial = 0 to 0) {
         ctx.reviewStats.coverage(periodo.from, periodo.to)
     }
 
@@ -97,6 +110,82 @@ fun ReviewStatsPanel(ctx: AppContext) {
         )
 
         Spacer(Modifier.height(14.dp))
+        // --- Pull requests: sólo aparece si se trajo el histórico ---
+        Text(t("rstats.prsSection"), style = MaterialTheme.typography.titleSmall)
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            androidx.compose.material3.OutlinedButton(
+                enabled = !trayendo && repos.isNotEmpty(),
+                onClick = {
+                    trayendo = true
+                    scope.launch {
+                        // Se trae repositorio por repositorio y se va guardando: si el pedido
+                        // falla a mitad —Bitbucket devuelve 401 al azar en cerca del 40% de las
+                        // llamadas— lo ya traído queda y se retoma pidiéndolo de nuevo.
+                        repos.forEach { r -> avance = ctx.prHistory.collect(r) { avance = it } }
+                        trayendo = false
+                        version++
+                    }
+                },
+            ) { Text(t("rstats.fetchHistory")) }
+            Spacer(Modifier.width(8.dp))
+            if (trayendo) {
+                androidx.compose.material3.CircularProgressIndicator(Modifier.height(18.dp).width(18.dp))
+                Spacer(Modifier.width(6.dp))
+            }
+            Text(
+                avance?.error ?: t("rstats.prsStored", prsGuardados),
+                style = MaterialTheme.typography.labelSmall,
+                color = if (avance?.error != null) MaterialTheme.colorScheme.error
+                else MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        Text(
+            t("rstats.fetchNote"),
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+
+        if (abiertos.isNotEmpty()) {
+            Spacer(Modifier.height(8.dp))
+            Row(Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
+                Col(t("team.person"), 240.dp)
+                Col(t("rstats.opened"), 90.dp)
+                Col(t("rstats.merged"), 90.dp)
+                Col(t("rstats.declined"), 90.dp)
+                Col(t("rstats.median"), 110.dp)
+                Col(t("rstats.p90"), 110.dp)
+            }
+            HorizontalDivider()
+            abiertos.entries.sortedByDescending { it.value.opened }.forEach { (nombre, c) ->
+                val (mostrar, _) = etiqueta(nombre)
+                // Mediana y percentil 90, nunca el promedio: un PR olvidado tres meses corre el
+                // promedio y deja de describir a ninguno de los otros.
+                val p = io.acr.data.percentiles(duraciones[nombre].orEmpty())
+                Row(
+                    Modifier.fillMaxWidth().padding(vertical = 5.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Row(Modifier.width(240.dp), verticalAlignment = Alignment.CenterVertically) {
+                        PersonAvatar(mostrar, size = 26.dp)
+                        Spacer(Modifier.width(8.dp))
+                        Text(mostrar, style = MaterialTheme.typography.bodySmall)
+                    }
+                    Num(c.opened.toString(), 90.dp)
+                    Num(c.merged.toString(), 90.dp)
+                    Num(if (c.declined > 0) c.declined.toString() else "—", 90.dp)
+                    Num(p?.let { "%.1f d".format(it.first) } ?: "—", 110.dp)
+                    Num(p?.let { "%.1f d".format(it.second) } ?: "—", 110.dp)
+                }
+                HorizontalDivider()
+            }
+            Text(
+                t("rstats.cycleNote"),
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+
+        Spacer(Modifier.height(18.dp))
         Text(t("rstats.participation"), style = MaterialTheme.typography.titleSmall)
         Text(
             t("rstats.participationNote"),

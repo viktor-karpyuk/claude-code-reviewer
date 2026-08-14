@@ -690,6 +690,33 @@ class Store(private val dbPath: Path) : AutoCloseable {
                  WHERE p.repo_id = review.repo_id AND p.pr_id = review.pr_id
             ) WHERE pr_author IS NULL
             """.trimIndent(),
+
+            // v39 — el histórico de pull requests, para poder contar los que ya se cerraron.
+            //
+            // `pr_cache` sirve a la pantalla de PRs abiertos y se reemplaza en cada sincronización;
+            // esto es otra cosa: una fila por PR que se queda, incluidos los mergeados y
+            // rechazados. Sin ella no se puede decir cuántos abrió cada uno ni cuánto tardaron en
+            // cerrarse, porque el proveedor devuelve los cerrados sólo si se los pide y son
+            // cientos —148 contra 4 abiertos en un repositorio de esta instalación—.
+            //
+            // `closed_on` es cuándo dejó de estar abierto. En Bitbucket sale de `updated_on`, que
+            // para un PR cerrado es la última actividad y coincide con el cierre; no hay una fecha
+            // de merge propiamente dicha en el listado. La pantalla lo aclara en vez de presentar
+            // una precisión que el dato no tiene.
+            """
+            CREATE TABLE pr_stat (
+                repo_id    TEXT NOT NULL REFERENCES repo(id) ON DELETE CASCADE,
+                pr_id      INTEGER NOT NULL,
+                author     TEXT NOT NULL,
+                title      TEXT,
+                state      TEXT NOT NULL,
+                created_on TEXT NOT NULL,
+                closed_on  TEXT,
+                synced_at  TEXT NOT NULL,
+                PRIMARY KEY (repo_id, pr_id)
+            );--split--
+            CREATE INDEX ix_pr_stat_author ON pr_stat(author, created_on)
+            """.trimIndent(),
         )
     }
 }

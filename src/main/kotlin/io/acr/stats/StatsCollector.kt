@@ -79,6 +79,53 @@ class StatsCollector(
 }
 
 /**
+ * Trae el histórico de pull requests de un repositorio y lo guarda.
+ *
+ * Aparte de la recolección de git y bajo confirmación explícita: son cientos por repositorio
+ * —148 contra 4 abiertos en uno de esta instalación— y el proveedor los devuelve paginados. No se
+ * descarga solo.
+ *
+ * Lo que trae desbloquea dos cosas: contar cuántos PRs abrió cada uno y cuánto tardaron en
+ * cerrarse, y rellenar de quién era cada PR revisado, que es el agujero que dejaba a las métricas
+ * de review calculándose sobre 7 de 12.
+ */
+class PrHistoryCollector(private val prs: io.acr.data.PrStatRepository) {
+
+    suspend fun collect(
+        repo: RepoRecord,
+        maxPages: Int = 10,
+        onProgress: (CollectProgress) -> Unit = {},
+    ): CollectProgress {
+        val forge = io.acr.forge.Forges.of(repo.provider)
+        var guardados = 0
+        // Uno por estado y no los tres juntos: si un pedido falla —Bitbucket devuelve 401 en
+        // cerca del 40% de las llamadas, al azar— se pierde ese estado y no la corrida entera.
+        for (estado in io.acr.forge.PrState.entries) {
+            val intento = runCatching {
+                forge.searchPullRequests(repo, setOf(estado), maxPages = maxPages)
+            }
+            val traidos = intento.getOrNull()
+            if (traidos == null) {
+                onProgress(
+                    CollectProgress(
+                        repo.name, guardados,
+                        error = intento.exceptionOrNull()?.message?.take(200),
+                    ),
+                )
+            } else {
+                for (pr in traidos) {
+                    prs.upsert(repo.id, pr)
+                    guardados++
+                }
+                onProgress(CollectProgress(repo.name, guardados))
+            }
+        }
+        val rellenadas = prs.backfillReviewAuthors()
+        return CollectProgress(repo.name, guardados, people = rellenadas, done = true)
+    }
+}
+
+/**
  * Los patrones de archivo generado que aplican a este repositorio.
  *
  * Hoy son los mismos para todos. Queda como punto de extensión porque la lista correcta depende

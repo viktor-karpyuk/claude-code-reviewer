@@ -371,6 +371,127 @@ class ReviewStatsRepository(private val store: Store) {
         }
 }
 
+/**
+ * El histórico de pull requests, incluidos los que ya se cerraron.
+ *
+ * Se guarda aparte de `pr_cache` porque son cosas distintas: aquélla es el listado de lo que está
+ * abierto y se reemplaza en cada sincronización; esto es un registro que se queda, y es lo único
+ * que permite contar hacia atrás.
+ */
+class PrStatRepository(private val store: Store) {
+
+    fun upsert(repoId: String, pr: io.acr.forge.PullRequest) {
+        // El estado y la fecha de cierre cambian cuando el PR se mergea, así que se reemplaza la
+        // fila en vez de ignorarla si ya existe.
+        store.stmt(
+            """INSERT OR REPLACE INTO pr_stat(repo_id, pr_id, author, title, state, created_on,
+                                              closed_on, synced_at)
+               VALUES (?,?,?,?,?,?,?,?)""",
+        ) { ps ->
+            ps.setString(1, repoId)
+            ps.setLong(2, pr.id)
+            ps.setString(3, pr.author)
+            ps.setString(4, pr.title)
+            ps.setString(5, pr.state.name)
+            ps.setString(6, pr.createdOn)
+            // Sólo para los que ya no están abiertos: en uno abierto `updated_on` es el último
+            // commit, y tomarlo como cierre daría tiempos de ciclo de PRs que siguen vivos.
+            ps.setString(7, if (pr.state == io.acr.forge.PrState.OPEN) null else pr.updatedOn)
+            ps.setString(8, Instant.now().toString())
+            ps.executeUpdate()
+        }
+    }
+
+    fun count(repoId: String? = null): Int =
+        store.stmt("SELECT COUNT(*) FROM pr_stat WHERE (? IS NULL OR repo_id = ?)") { ps ->
+            ps.setString(1, repoId)
+            ps.setString(2, repoId)
+            ps.executeQuery().use { if (it.next()) it.getInt(1) else 0 }
+        }
+
+    /** Cuántos PRs abrió cada persona en el período, y cuántos de ésos ya se cerraron. */
+    fun openedByAuthor(desde: String, hasta: String): Map<String, PrCount> =
+        store.stmt(
+            """SELECT author, COUNT(*),
+                      SUM(CASE WHEN state = 'MERGED' THEN 1 ELSE 0 END),
+                      SUM(CASE WHEN state = 'DECLINED' THEN 1 ELSE 0 END)
+                 FROM pr_stat
+                WHERE created_on >= ? AND created_on <= ?
+                GROUP BY author""",
+        ) { ps ->
+            ps.setString(1, desde)
+            ps.setString(2, hasta)
+            ps.executeQuery().use { rs ->
+                buildMap {
+                    while (rs.next()) put(rs.getString(1), PrCount(rs.getInt(2), rs.getInt(3), rs.getInt(4)))
+                }
+            }
+        }
+
+    /**
+     * Días que estuvo abierto cada PR mergeado, por autor.
+     *
+     * Devuelve la lista cruda y no un promedio: el promedio lo corre un PR abandonado tres meses,
+     * y lo que describe al resto es la mediana. Quien consulta decide qué estadístico usar sobre
+     * los datos completos.
+     */
+    fun mergedDurationsByAuthor(desde: String, hasta: String): Map<String, List<Double>> =
+        store.stmt(
+            """SELECT author, julianday(closed_on) - julianday(created_on)
+                 FROM pr_stat
+                WHERE state = 'MERGED' AND closed_on IS NOT NULL
+                  AND created_on >= ? AND created_on <= ?""",
+        ) { ps ->
+            ps.setString(1, desde)
+            ps.setString(2, hasta)
+            ps.executeQuery().use { rs ->
+                buildMap<String, MutableList<Double>> {
+                    while (rs.next()) {
+                        val d = rs.getDouble(2)
+                        // Una duración negativa sale de fechas mal parseadas o relojes desfasados;
+                        // contarla arrastraría la mediana hacia abajo sin que se note.
+                        if (!rs.wasNull() && d >= 0) getOrPut(rs.getString(1)) { mutableListOf() }.add(d)
+                    }
+                }
+            }
+        }
+
+    /** Rellena el autor de las reviews viejas con lo que trajo el histórico. */
+    fun backfillReviewAuthors(): Int =
+        store.stmt(
+            """UPDATE review SET pr_author = (
+                   SELECT s.author FROM pr_stat s
+                    WHERE s.repo_id = review.repo_id AND s.pr_id = review.pr_id
+               ) WHERE pr_author IS NULL AND EXISTS (
+                   SELECT 1 FROM pr_stat s
+                    WHERE s.repo_id = review.repo_id AND s.pr_id = review.pr_id
+               )""",
+        ) { it.executeUpdate() }
+}
+
+/** PRs abiertos por alguien en un período, y en qué terminaron. */
+data class PrCount(val opened: Int, val merged: Int, val declined: Int)
+
+/**
+ * Mediana y percentil 90 de una lista de días.
+ *
+ * Los dos y no el promedio: un PR olvidado tres meses corre el promedio y deja de describir a
+ * ninguno. La mediana dice cómo es el caso típico y el percentil 90 cuán mal se pone la cola, que
+ * es donde vive el problema cuando lo hay.
+ */
+fun percentiles(dias: List<Double>): Pair<Double, Double>? {
+    if (dias.isEmpty()) return null
+    val orden = dias.sorted()
+    // Rango más cercano hacia arriba, y no truncando: con truncamiento, el percentil 90 de cinco
+    // valores devuelve el cuarto y el PR olvidado tres meses nunca aparece — que es exactamente
+    // lo que el percentil 90 viene a mostrar. Con equipos chicos eso pasa siempre.
+    fun p(q: Double): Double {
+        val rango = kotlin.math.ceil(q * orden.size).toInt().coerceIn(1, orden.size)
+        return orden[rango - 1]
+    }
+    return p(0.5) to p(0.9)
+}
+
 /** Cuánto participó alguien revisando: comentarios dejados y en cuántos PRs distintos. */
 data class Participation(val comments: Int, val prs: Int)
 
