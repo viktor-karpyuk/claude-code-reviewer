@@ -107,11 +107,16 @@ fun ReposPanel(
 }
 
 /**
- * Una tarjeta por repositorio.
+ * Una tarjeta por repositorio, ordenada por lo que exige acción.
  *
- * Muestra lo que hace falta para decidir a cuál entrar: cuántos pull requests abiertos tiene,
- * cuántas reviews están corriendo ahora y cuándo fue la última que terminó. Sin esos tres datos la
- * tarjeta sería sólo un nombre, y para eso alcanzaba la lista de antes.
+ * Lo primero es la **deuda de revisión**: respuestas sin contestar, hallazgos publicados que nadie
+ * verificó y reviews terminadas sin publicar. Son trabajo empezado que espera algo nuestro, y son
+ * la única razón por la que uno abre esta pantalla. Van juntas y sumadas porque separadas cada una
+ * parece chica: en esta instalación son 69 respuestas y 51 hallazgos repartidos de a poco entre
+ * cinco repositorios, y así nadie los ve.
+ *
+ * Después el tamaño del trabajo —PRs abiertos, el más viejo— y sólo al final la densidad de
+ * hallazgos y el costo por PR, que describen al repositorio y no urgen nada.
  */
 @Composable
 private fun RepoCard(
@@ -121,14 +126,15 @@ private fun RepoCard(
     onOpen: () -> Unit,
     onEdit: () -> Unit,
 ) {
-    val abiertos = io.acr.ui.dbState(repo.id, initial = 0) { ctx.prCache.get(repo.id).prs.size }
-    val ultima = io.acr.ui.dbState(repo.id, initial = null as String?) {
-        ctx.reviews.lastFinishedAt(repo.id)
+    val salud = io.acr.ui.dbState(repo.id, initial = null as io.acr.data.RepoHealth?) {
+        ctx.health.current(repo.id).also { ctx.health.snapshot(repo.id, it) }
     }
-    val revisados = io.acr.ui.dbState(repo.id, initial = 0) { ctx.reviews.doneCount(repo.id) }
+    val historia = io.acr.ui.dbState(repo.id, salud, initial = emptyList<io.acr.data.RepoSnapshot>()) {
+        ctx.health.history(repo.id)
+    }
 
     Column(
-        Modifier.width(300.dp)
+        Modifier.width(330.dp)
             .clip(RoundedCornerShape(10.dp))
             .background(MaterialTheme.colorScheme.surfaceVariant)
             .clickable(onClick = onOpen)
@@ -146,31 +152,98 @@ private fun RepoCard(
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
 
-        Spacer(Modifier.height(10.dp))
+        val h = salud ?: return@Column
+        Spacer(Modifier.height(12.dp))
+
+        // --- Deuda: lo que espera algo nuestro ---
+        if (h.debt > 0) {
+            Text(
+                t("repos.debt", h.debt),
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.error,
+            )
+            Spacer(Modifier.height(4.dp))
+            io.acr.ui.stats.BarRow(
+                segments = listOfNotNull(
+                    h.pendingReplies.takeIf { it > 0 }
+                        ?.let { io.acr.ui.stats.Segment(it.toDouble(), io.acr.ui.stats.ChartColors.blocker, "") },
+                    h.unverified.takeIf { it > 0 }
+                        ?.let { io.acr.ui.stats.Segment(it.toDouble(), io.acr.ui.stats.ChartColors.major, "") },
+                    h.unpublished.takeIf { it > 0 }
+                        ?.let { io.acr.ui.stats.Segment(it.toDouble(), io.acr.ui.stats.ChartColors.neutral, "") },
+                ),
+                max = h.debt.toDouble(),
+                height = 8.dp,
+            )
+            Spacer(Modifier.height(4.dp))
+            Text(
+                listOfNotNull(
+                    h.pendingReplies.takeIf { it > 0 }?.let { t("repos.debtReplies", it) },
+                    h.unverified.takeIf { it > 0 }?.let { t("repos.debtUnverified", it) },
+                    h.unpublished.takeIf { it > 0 }?.let { t("repos.debtUnpublished", it) },
+                ).joinToString(" · "),
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        } else {
+            Text(
+                t("repos.noDebt"),
+                style = MaterialTheme.typography.labelMedium,
+                color = ChartColorsOk(),
+            )
+        }
+
+        Spacer(Modifier.height(12.dp))
         Row {
-            Dato(t("repos.openPrs"), abiertos.toString())
-            Spacer(Modifier.width(18.dp))
-            Dato(t("repos.reviewed"), revisados.toString())
-            if (running > 0) {
-                Spacer(Modifier.width(18.dp))
-                Dato(t("repos.running"), running.toString(), destacado = true)
+            Dato(t("repos.openPrs"), h.openPrs.toString())
+            Spacer(Modifier.width(16.dp))
+            Dato(t("repos.reviewed"), h.reviewedPrs.toString())
+            if (h.reviewedPrs > 0) {
+                Spacer(Modifier.width(16.dp))
+                // Densidad y no total: un repositorio con más PRs revisados acumula más hallazgos
+                // sin que eso diga nada de su código.
+                Dato(t("repos.perPr"), "%.1f".format(h.findingsPerPr))
+                Spacer(Modifier.width(16.dp))
+                Dato(t("repos.costPerPr"), "$" + "%.0f".format(h.costPerPr))
             }
+        }
+
+        // La tendencia de la deuda: es lo que dice si esto se está acumulando o se está drenando,
+        // que un número solo no puede contestar. Aparece recién con dos días guardados.
+        if (historia.size > 1) {
+            Spacer(Modifier.height(10.dp))
+            Text(
+                t("repos.trend", historia.size),
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            io.acr.ui.stats.MiniBars(
+                values = historia.map { (it.pendingReplies + it.unverified + it.unpublished).toDouble() },
+                labels = emptyList(),
+                height = 26.dp,
+                modifier = Modifier.fillMaxWidth(),
+            )
         }
 
         Spacer(Modifier.height(8.dp))
         Text(
-            ultima?.let { t("repos.lastReview", it.take(10)) } ?: t("repos.neverReviewed"),
+            h.oldestPrDays?.let { t("repos.oldest", it) } ?: t("repos.neverReviewed"),
             style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            color = if ((h.oldestPrDays ?: 0) > 14) MaterialTheme.colorScheme.error
+            else MaterialTheme.colorScheme.onSurfaceVariant,
         )
 
-        Spacer(Modifier.height(6.dp))
+        Spacer(Modifier.height(4.dp))
         Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
             TextButton(onClick = onOpen) { Text(t("repos.openPrsAction")) }
             TextButton(onClick = onEdit) { Text(t("common.edit")) }
         }
     }
 }
+
+/** El verde de "no hay nada pendiente". No sale del tema porque el primario se usa para navegar. */
+@Composable
+private fun ChartColorsOk() = androidx.compose.ui.graphics.Color(0xFF2E7D5B)
 
 @Composable
 private fun Dato(etiqueta: String, valor: String, destacado: Boolean = false) {

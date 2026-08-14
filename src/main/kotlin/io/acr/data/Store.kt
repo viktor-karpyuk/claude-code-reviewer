@@ -747,6 +747,29 @@ class Store(private val dbPath: Path) : AutoCloseable {
             ALTER TABLE pr_stat ADD COLUMN commits_after_review INTEGER;--split--
             ALTER TABLE pr_stat ADD COLUMN rework_at TEXT
             """.trimIndent(),
+
+            // v42 — una foto por día y por repositorio, para poder ver tendencias.
+            //
+            // Todo lo que la app sabe hoy es un "ahora": cuántos PRs hay abiertos, cuántas
+            // respuestas esperan. Con eso no se puede contestar la pregunta que importa cuando
+            // algo se acumula —¿viene subiendo o bajando?— y en esta base hay 69 respuestas sin
+            // contestar sin forma de saber si son de esta semana o de hace dos meses.
+            //
+            // Una fila por día y no por cambio: la deuda de revisión se mira en días, guardar cada
+            // variación llenaría la tabla para dibujar exactamente la misma línea.
+            """
+            CREATE TABLE repo_snapshot (
+                repo_id         TEXT NOT NULL REFERENCES repo(id) ON DELETE CASCADE,
+                day             TEXT NOT NULL,
+                open_prs        INTEGER NOT NULL DEFAULT 0,
+                pending_replies INTEGER NOT NULL DEFAULT 0,
+                unverified      INTEGER NOT NULL DEFAULT 0,
+                unpublished     INTEGER NOT NULL DEFAULT 0,
+                open_findings   INTEGER NOT NULL DEFAULT 0,
+                cost_usd        REAL NOT NULL DEFAULT 0,
+                PRIMARY KEY (repo_id, day)
+            )
+            """.trimIndent(),
         )
     }
 }

@@ -3,6 +3,31 @@
 Reglas de numeración en [CLAUDE.md](CLAUDE.md): un requerimiento **nuevo** incrementa *major*;
 cambiar uno **existente** incrementa *patch*.
 
+## 51.0.0
+
+Requerimiento nuevo: **cada repositorio con su estado, y el histórico para ver tendencias**.
+
+Las tarjetas de Repositorios pasan de mostrar un nombre y dos contadores a responder la única
+pregunta que uno tiene al abrir esa pantalla: **¿cuál me está esperando?**
+
+**Deuda de revisión, arriba y sumada.** Respuestas sin contestar, hallazgos publicados que nadie
+verificó y reviews terminadas sin publicar. Van juntas porque separadas cada una parece chica: en
+esta instalación son **69 respuestas y 51 hallazgos sin verificar**, repartidos de a poco entre
+cinco repositorios, y así no los veía nadie. Con una barra que muestra de qué está hecha esa deuda.
+
+**Densidad, no totales.** Hallazgos por PR revisado y costo por PR, en vez de los acumulados: un
+repositorio con más PRs revisados junta más hallazgos sin que eso diga nada de su código. Los
+números reales de acá van de 23,2 hallazgos y US$ 58,59 por PR en un backend a 3,0 y US$ 0,92 en
+otro — eso describe cómo se revisa cada uno, no cómo está programado.
+
+**El PR más viejo, en días.** Nadie calcula de cabeza cuánto pasó desde una fecha, y menos con
+siete repositorios.
+
+**Y ahora se guarda historia.** Una foto por día y por repositorio, para poder contestar lo que un
+número solo no puede: ¿esto se está acumulando o se está drenando? La tarjeta dibuja la evolución
+de la deuda apenas hay dos días guardados. Una fila por día y no por cambio: dentro de una jornada
+la deuda sube y baja con cada acción, y lo que interesa es dónde quedó.
+
 ## 50.0.0
 
 Requerimiento nuevo: **escribir las convenciones directamente en la app**.
