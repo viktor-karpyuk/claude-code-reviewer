@@ -84,13 +84,47 @@ class CollectorIntegrationTest {
         conRepo(dir) { ctx, repo ->
             val primera = runBlocking { ctx.statsCollector.collect(repo, since = "6 months ago") }
             val personasPrimera = ctx.persons.all().size
-            val segunda = runBlocking { ctx.statsCollector.collect(repo, since = "6 months ago") }
+            runBlocking { ctx.statsCollector.collect(repo, since = "6 months ago") }
 
-            // Recolectar de nuevo es lo normal —hay commits nuevos— y volver a ver los viejos no
-            // puede inflar nada ni inventar personas.
-            assertEquals(primera.commits, segunda.commits)
+            // Lo que importa es el estado de la base, no cuánto devolvió la segunda corrida: desde
+            // que la lectura es incremental, la segunda no vuelve a mirar los commits viejos y
+            // devuelve cero. Lo guardado tiene que seguir igual, sin duplicados ni personas nuevas.
             assertEquals(primera.commits, ctx.commitStats.count(repo.id))
             assertEquals(personasPrimera, ctx.persons.all().size)
+        }
+    }
+
+    @Test
+    fun theSecondReadOnlyLooksAtWhatIsNew() {
+        // Releer todo cada vez son 2.283 commits sobre siete repositorios en esta instalación, y
+        // crece. La segunda corrida continúa desde el commit que anotó la primera.
+        val dir = repoPropio() ?: return
+        conRepo(dir) { ctx, repo ->
+            val primera = runBlocking { ctx.statsCollector.collect(repo, since = "24 months ago") }
+            assertTrue(!primera.incremental, "la primera no tiene desde dónde continuar")
+            assertTrue(primera.commits > 0)
+
+            val segunda = runBlocking { ctx.statsCollector.collect(repo, since = "24 months ago") }
+            assertTrue(segunda.incremental, "la segunda sí")
+            assertEquals(0, segunda.commits, "sin commits nuevos entre las dos, no hay nada que leer")
+            // Y lo ya guardado sigue estando: incremental no significa que se perdió lo anterior.
+            assertEquals(primera.commits, ctx.commitStats.count(repo.id))
+        }
+    }
+
+    @Test
+    fun aRewrittenHistoryFallsBackToReadingEverything() {
+        // Si el commit anotado ya no está —rebase, o el clon se rehizo— continuar desde ahí
+        // dejaría un agujero en el medio del historial sin que nadie se entere.
+        val dir = repoPropio() ?: return
+        conRepo(dir) { ctx, repo ->
+            runBlocking { ctx.statsCollector.collect(repo, since = "24 months ago") }
+            // Se simula la reescritura anotando un commit que no existe en este repositorio.
+            ctx.commitStats.markRun(repo.id, "0000000000000000000000000000000000000000", 0)
+
+            val out = runBlocking { ctx.statsCollector.collect(repo, since = "24 months ago") }
+            assertTrue(!out.incremental, "no puede continuar desde un commit que no está")
+            assertTrue(out.commits > 0, "así que vuelve a leer todo")
         }
     }
 

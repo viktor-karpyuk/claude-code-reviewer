@@ -146,6 +146,18 @@ object Git {
         run(dir, cmd)
     }
 
+    /**
+     * ¿Ese objeto está en el clon?
+     *
+     * Se pregunta antes de continuar desde un commit anotado en una corrida anterior: si la rama
+     * se reescribió o el clon se rehizo, ese commit ya no existe y seguir desde ahí dejaría un
+     * agujero en el medio del historial sin que nadie se entere.
+     */
+    suspend fun exists(dir: File, sha: String): Boolean = withContext(Dispatchers.IO) {
+        if (sha.isBlank()) return@withContext false
+        run(dir, listOf("git", "cat-file", "-e", "$sha^{commit}")).ok
+    }
+
     /** El commit en el que está parado el clon. Sirve para anotar hasta dónde se procesó. */
     suspend fun currentHead(dir: File): String? = withContext(Dispatchers.IO) {
         run(dir, listOf("git", "rev-parse", "HEAD")).takeIf { it.ok }?.output?.trim()

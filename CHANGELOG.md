@@ -3,6 +3,26 @@
 Reglas de numeración en [CLAUDE.md](CLAUDE.md): un requerimiento **nuevo** incrementa *major*;
 cambiar uno **existente** incrementa *patch*.
 
+## 47.0.0
+
+Requerimiento nuevo: **leer sólo lo nuevo del historial de git**.
+
+- La lectura ahora **continúa desde donde quedó**: guarda el commit hasta el que procesó cada
+  repositorio y en la siguiente corrida sólo mira lo que llegó después. Hoy son 2.283 commits
+  sobre siete repositorios en esta instalación, y releerlos enteros cada vez sólo empeora.
+- **Si la historia se reescribió, vuelve a leer todo.** Cuando el commit anotado ya no está en el
+  clon —un rebase, o el clon rehecho— continuar desde ahí dejaría un agujero en el medio del
+  historial sin que nadie se entere.
+- Botón aparte para **leer todo el historial**, que puede ser de años. No es el comportamiento por
+  defecto porque son miles de commits y esa espera tiene que ser una decisión.
+- La pantalla dice en qué modo corrió: "12 commits nuevos" y "12 commits leídos" no significan lo
+  mismo, y sin aclararlo una corrida incremental parece una recolección que perdió casi todo.
+
+**M3c (vueltas de conversación) queda descartada, con los datos a la vista.** De los 139 hilos
+sincronizados, 59 tienen un comentario, 76 tienen dos y 4 tienen tres. Una métrica de "vueltas
+promedio" sobre eso daría entre 1,4 y 1,6 para todo el mundo: no distingue nada. Se implementa el
+día que las conversaciones sean más largas, si alguna vez lo son.
+
 ## 46.0.0
 
 Requerimiento nuevo: **dónde se concentra el retrabajo**.

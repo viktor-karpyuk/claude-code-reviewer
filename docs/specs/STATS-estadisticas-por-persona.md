@@ -422,16 +422,18 @@ se marca como tal, para que no se lea como caída.
    el denominador siempre a la vista y distinguiendo "no medido" de "cero". Necesitó guardar la
    rama del PR (migración v41).
 
-   **M3c (vueltas de conversación) sigue pendiente**: depende de la misma atribución de autoría
-   que hoy cubre poco.
+   **M3c (vueltas de conversación) descartada en v47.0.0, con los datos medidos**: de los 139
+   hilos sincronizados, 59 tienen un comentario, 76 tienen dos y 4 tienen tres. Una métrica de
+   "vueltas promedio" daría entre 1,4 y 1,6 para todo el mundo y no distinguiría nada. Se
+   reconsidera si alguna vez las conversaciones se alargan.
 5. **Histórico bajo demanda** (UC-7) — **hecho en v42.0.0** para los pull requests: botón
    explícito, un estado por vez para que un 401 cueste un estado y no la corrida, y relleno de
    `review.pr_author` con lo que trae. Con eso quedan **M1** (PRs abiertos) y **M4** (tiempo de
    ciclo, mediana y percentil 90), que la fase 2 había tenido que dejar afuera.
 
-   Falta la parte de git de UC-7: hoy la recolección de commits trae los últimos 12 meses y no
-   todo el historial. Y `stats_run` guarda hasta dónde se procesó pero todavía no se usa para
-   recolectar sólo lo nuevo (CA-7.4/CA-7.6).
+   **Completado en v47.0.0**: la lectura de git continúa desde el commit anotado en `stats_run`
+   (CA-7.4), vuelve a leer todo si ese commit ya no está —historia reescrita— (CA-7.6), y hay un
+   botón aparte para traer el historial completo en vez de los últimos 12 meses.
 
 4. **Ficha individual** (UC-6) y exportación — pendiente.
 

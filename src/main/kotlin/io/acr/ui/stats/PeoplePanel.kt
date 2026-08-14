@@ -108,14 +108,14 @@ fun PeoplePanel(ctx: AppContext) {
 
         Spacer(Modifier.height(12.dp))
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+            // Leer es incremental cuando ya se leyó antes: continúa desde el commit anotado en
+            // la corrida anterior en vez de releer todo. La primera vez toma un año, que es lo
+            // que alcanza para ver si esto sirve; traer todo es una decisión aparte y explícita.
             Button(
                 enabled = !recolectando && repos.isNotEmpty(),
                 onClick = {
                     recolectando = true
                     scope.launch {
-                        // Un año y no todo el historial: la primera corrida sobre siete
-                        // repositorios de años sería de miles de commits, y para ver si esto
-                        // sirve alcanza con lo reciente. Traer todo es una decisión aparte.
                         repos.forEach { r ->
                             progreso = ctx.statsCollector.collect(r, since = "12 months ago") { progreso = it }
                         }
@@ -124,6 +124,21 @@ fun PeoplePanel(ctx: AppContext) {
                     }
                 },
             ) { Text(t("people.collect")) }
+            OutlinedButton(
+                enabled = !recolectando && repos.isNotEmpty(),
+                onClick = {
+                    recolectando = true
+                    scope.launch {
+                        // Sin `since`: el historial entero. Puede ser de años y miles de commits,
+                        // por eso es un botón aparte y no el comportamiento por defecto.
+                        repos.forEach { r ->
+                            progreso = ctx.statsCollector.collect(r, since = null) { progreso = it }
+                        }
+                        recolectando = false
+                        version++
+                    }
+                },
+            ) { Text(t("people.collectAll")) }
 
             if (recolectando) {
                 CircularProgressIndicator(Modifier.height(20.dp).width(20.dp))
@@ -145,6 +160,15 @@ fun PeoplePanel(ctx: AppContext) {
 
         progreso?.error?.let {
             Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+        }
+        // "12 commits" y "12 commits nuevos" no significan lo mismo: sin decir el modo, una
+        // corrida incremental parece una recolección que perdió casi todo.
+        progreso?.takeIf { it.done && it.error == null }?.let {
+            Text(
+                if (it.incremental) t("people.doneIncremental", it.commits) else t("people.doneFull", it.commits),
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
         }
 
         // El aviso de datos provisionales. Está acá arriba y no en un tooltip: un número con

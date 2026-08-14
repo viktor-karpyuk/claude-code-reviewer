@@ -15,6 +15,8 @@ data class CollectProgress(
     val people: Int = 0,
     val done: Boolean = false,
     val error: String? = null,
+    /** Si sólo se leyó lo nuevo. Se muestra: "12 commits" significa otra cosa que "12 commits nuevos". */
+    val incremental: Boolean = false,
 )
 
 /**
@@ -50,10 +52,24 @@ class StatsCollector(
         // el número que falta es justamente el del trabajo más reciente.
         Git.fetch(dir)
 
+        // Sólo lo que llegó desde la última corrida, cuando se puede. Releer todo cada vez son
+        // 2.283 commits sobre siete repositorios en esta instalación, y crece.
+        val desdeSha = commits.lastRun(repo.id)?.second?.takeIf { sha ->
+            // Si ese commit ya no está —la rama se reescribió, o se recreó el clon— continuar
+            // desde ahí dejaría un agujero silencioso en el medio del historial. Ahí se relee todo.
+            Git.exists(dir, sha)
+        }
+
         val args = buildList {
             add("git"); add("log"); add("--all"); add("--no-merges")
             add("--format=$GIT_LOG_FORMAT"); add("--numstat")
-            since?.let { add("--since=$it") }
+            if (desdeSha != null) {
+                // `--not <sha>` y no `<sha>..HEAD`: con `--all` interesa todo lo que no era
+                // alcanzable antes, incluidas ramas que no son la principal.
+                add("--not"); add(desdeSha)
+            } else {
+                since?.let { add("--since=$it") }
+            }
         }
         val salida = runCatching { Git.runRaw(dir, args) }.getOrElse {
             return@withContext CollectProgress(repo.name, error = it.message ?: "git log falló")
@@ -73,8 +89,10 @@ class StatsCollector(
             n++
             if (n % 200 == 0) onProgress(CollectProgress(repo.name, n, cache.size))
         }
+        // Se anota la punta actual aunque no haya commits nuevos: es lo que permite que la
+        // próxima corrida siga siendo incremental en vez de volver a leer todo.
         commits.markRun(repo.id, Git.currentHead(dir), n)
-        CollectProgress(repo.name, n, cache.size, done = true)
+        CollectProgress(repo.name, n, cache.size, done = true, incremental = desdeSha != null)
     }
 }
 
