@@ -18,7 +18,8 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Dashboard
 import androidx.compose.material.icons.filled.Info
-import androidx.compose.material.icons.filled.People
+import androidx.compose.material.icons.filled.BarChart
+import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -90,13 +91,18 @@ fun App(ctx: AppContext) {
                             selection.current is Selection.Dashboard,
                         ) { selection.go(Selection.Dashboard) },
                         io.acr.ui.ActivityItem(
-                            Icons.Default.People, io.acr.i18n.t("nav.people"),
-                            selection.current is Selection.People,
-                        ) { selection.go(Selection.People) },
+                            Icons.Default.FolderOpen, io.acr.i18n.t("nav.repos"),
+                            // También queda activo al estar dentro de un repositorio o de un PR:
+                            // son parte de esta sección, no otro lugar.
+                            selection.current is Selection.Repos ||
+                                selection.current is Selection.Repo ||
+                                selection.current is Selection.Review ||
+                                selection.current is Selection.RepoForm,
+                        ) { selection.go(Selection.Repos) },
                         io.acr.ui.ActivityItem(
-                            Icons.Default.Add, io.acr.i18n.t("nav.repo"),
-                            selection.current is Selection.RepoForm,
-                        ) { selection.go(Selection.RepoForm(null)) },
+                            Icons.Default.BarChart, io.acr.i18n.t("nav.stats"),
+                            selection.current is Selection.Stats,
+                        ) { selection.go(Selection.Stats) },
                     ),
                     bottom = listOf(
                         io.acr.ui.ActivityItem(
@@ -109,15 +115,22 @@ fun App(ctx: AppContext) {
                         ) { selection.go(Selection.Settings) },
                     ),
                 )
-                RepoSidebar(
-                    repos = repos,
-                    running = runningByRepo,
-                    selection = selection,
-                    width = anchoBarra.value,
-                    onAdd = { selection.go(Selection.RepoForm(null)) },
-                    onEdit = { selection.go(Selection.RepoForm(it.id)) },
-                )
-                io.acr.ui.VerticalSplitter(anchoBarra, ctx.prefs, "sidebar", min = 200.dp, max = 480.dp)
+                // La lista de repositorios sólo cuando se está trabajando con repositorios. En el
+                // panel o en estadísticas no aporta nada y se lleva 260 dp de ancho útil.
+                val enRepos = selection.current.let {
+                    it is Selection.Repo || it is Selection.Review || it is Selection.RepoForm
+                }
+                if (enRepos) {
+                    RepoSidebar(
+                        repos = repos,
+                        running = runningByRepo,
+                        selection = selection,
+                        width = anchoBarra.value,
+                        onAdd = { selection.go(Selection.RepoForm(null)) },
+                        onEdit = { selection.go(Selection.RepoForm(it.id)) },
+                    )
+                    io.acr.ui.VerticalSplitter(anchoBarra, ctx.prefs, "sidebar", min = 200.dp, max = 480.dp)
+                }
                 Box(Modifier.weight(1f).fillMaxHeight()) {
                     when (val sel = selection.current) {
                         is Selection.Welcome -> Welcome(hasRepos = repos.isNotEmpty())
@@ -126,7 +139,15 @@ fun App(ctx: AppContext) {
                             onOpenPr = { repoId, prId -> selection.go(Selection.Review(repoId, prId)) },
                         )
                         is Selection.About -> io.acr.ui.about.AboutPanel(ctx)
-                        is Selection.People -> io.acr.ui.stats.PeopleSection(ctx)
+                        is Selection.Stats -> io.acr.ui.stats.StatsSection(ctx)
+                        is Selection.Repos -> io.acr.ui.repos.ReposPanel(
+                            ctx = ctx,
+                            repos = repos,
+                            running = runningByRepo,
+                            onOpen = { selection.go(Selection.Repo(it.id)) },
+                            onEdit = { selection.go(Selection.RepoForm(it.id)) },
+                            onAdd = { selection.go(Selection.RepoForm(null)) },
+                        )
                         is Selection.Settings -> SettingsPanel(
                             ctx = ctx,
                             theme = theme,
@@ -188,8 +209,9 @@ fun App(ctx: AppContext) {
     LaunchedEffect(Unit) {
         reloadRepos()
         // Con repos conectados, lo primero útil es el panel, no una pantalla de bienvenida.
-        if (repos.isNotEmpty() && selection.current is Selection.Welcome) {
-            selection.go(Selection.Dashboard)
+        if (selection.current is Selection.Welcome) {
+            // Sin repositorios, lo único útil es agregar uno; con repositorios, el panel.
+            selection.go(if (repos.isEmpty()) Selection.Repos else Selection.Dashboard)
         }
     }
 

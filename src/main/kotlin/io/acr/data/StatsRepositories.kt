@@ -740,6 +740,12 @@ class CommitStatRepository(private val store: Store) {
         }
     }
 
+    /** Todos los commits recolectados, de todos los repositorios. */
+    fun countAll(): Int =
+        store.stmt("SELECT COUNT(*) FROM commit_stat") { ps ->
+            ps.executeQuery().use { if (it.next()) it.getInt(1) else 0 }
+        }
+
     fun count(repoId: String): Int =
         store.stmt("SELECT COUNT(*) FROM commit_stat WHERE repo_id = ?") { ps ->
             ps.setString(1, repoId)

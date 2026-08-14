@@ -3,6 +3,30 @@
 Reglas de numeración en [CLAUDE.md](CLAUDE.md): un requerimiento **nuevo** incrementa *major*;
 cambiar uno **existente** incrementa *patch*.
 
+## 48.0.0
+
+Requerimiento nuevo: **cada sección con su propio lugar, y los repositorios como sección propia**.
+
+La navegación estaba armada al revés: la lista de repositorios vivía pegada al costado en **todas**
+las pantallas, y "agregar repositorio" era un ítem del menú principal, al mismo nivel que el Panel
+o las Estadísticas.
+
+- **Nueva sección Repositorios.** Cada uno es una tarjeta con lo que hace falta para decidir a
+  cuál entrar: pull requests abiertos, cuántos se revisaron, si hay reviews corriendo y cuándo fue
+  la última. Desde ahí se agrega uno nuevo y se entra a sus pull requests.
+- **Agregar repositorio dejó de ser un ítem del menú**: es una acción de esta sección, no un lugar
+  al que ir.
+- **La lista lateral sólo aparece cuando trabajás con repositorios.** En el Panel o en
+  Estadísticas no aportaba nada y se llevaba 260 dp de ancho útil.
+- **"Personas" pasa a llamarse "Estadísticas"**, que es lo que la sección hace. Las personas son
+  una de sus cuatro vistas, no el todo.
+- **Estadísticas arranca en un resumen** con las tres cifras que resumen el estado —personas,
+  commits leídos, pull requests— y, cuando falta cargar algo, lo dice con el botón al lado. Una
+  tabla vacía sin explicación parece una función rota; el usuario no tiene por qué adivinar que
+  primero hay que traer los datos.
+- Sin repositorios conectados, la app abre directamente en Repositorios: es lo único útil que se
+  puede hacer ahí.
+
 ## 47.0.1
 
 Arreglo: **la reanudación de reviews interrumpidas nunca funcionó.**

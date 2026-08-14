@@ -458,6 +458,24 @@ class ReviewRepository(private val store: Store) {
      * Sólo DONE: continuar una que falló significaría dar por revisados unos commits que nadie
      * llegó a mirar, y el agujero quedaría escondido para siempre en el medio de la rama.
      */
+    /** Cuándo terminó la última review del repositorio. Null si nunca se revisó nada. */
+    fun lastFinishedAt(repoId: String): String? =
+        store.stmt(
+            "SELECT MAX(finished_at) FROM review WHERE repo_id = ? AND status = 'DONE'",
+        ) { ps ->
+            ps.setString(1, repoId)
+            ps.executeQuery().use { if (it.next()) it.getString(1) else null }
+        }
+
+    /** Cuántos pull requests distintos se revisaron con éxito en el repositorio. */
+    fun doneCount(repoId: String): Int =
+        store.stmt(
+            "SELECT COUNT(DISTINCT pr_id) FROM review WHERE repo_id = ? AND status = 'DONE'",
+        ) { ps ->
+            ps.setString(1, repoId)
+            ps.executeQuery().use { if (it.next()) it.getInt(1) else 0 }
+        }
+
     fun latestDoneFor(repoId: String, prId: Long): ReviewRecord? =
         query("WHERE repo_id = ? AND pr_id = ? AND status = 'DONE' ORDER BY created_at DESC LIMIT 1") {
             it.setString(1, repoId)

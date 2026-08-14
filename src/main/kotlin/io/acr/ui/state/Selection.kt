@@ -10,8 +10,11 @@ sealed interface Selection {
     data object Settings : Selection
     data object About : Selection
 
-    /** Quién es quién. No muestra estadísticas: es lo que hay que resolver antes de mostrarlas. */
-    data object People : Selection
+    /** Estadísticas: identidades, volumen, revisión. */
+    data object Stats : Selection
+
+    /** Todos los repositorios, con su estado y desde donde se agrega uno nuevo. */
+    data object Repos : Selection
     data class Repo(val repoId: String) : Selection
     data class Review(val repoId: String, val prId: Long) : Selection
 

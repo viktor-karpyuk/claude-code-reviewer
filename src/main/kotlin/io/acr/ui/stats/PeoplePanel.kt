@@ -7,7 +7,10 @@ import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.ui.draw.clip
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
@@ -50,37 +53,115 @@ import kotlinx.coroutines.launch
  * antes de resolver esto está mal, y peor: parece bien.
  */
 /**
- * La sección Personas, con sus dos vistas.
+ * La sección de Estadísticas, con su portada y sus vistas.
  *
- * Van juntas y en este orden a propósito: los números salen de las identidades, así que cuando
- * algo se ve raro en el equipo, la pantalla que lo explica está al lado y no en otro menú.
+ * Arranca en una portada y no directo en una tabla a propósito: los números de acá no existen
+ * hasta que se lee el historial y se trae el de pull requests, y una tabla vacía sin explicación
+ * parece una función rota. La portada dice qué hay cargado, qué falta y con qué botón se
+ * consigue.
  */
 @Composable
-fun PeopleSection(ctx: AppContext) {
+fun StatsSection(ctx: AppContext) {
     var vista by remember { mutableStateOf(0) }
     Column(Modifier.fillMaxSize()) {
         androidx.compose.material3.TabRow(selectedTabIndex = vista) {
-            androidx.compose.material3.Tab(
-                selected = vista == 0,
-                onClick = { vista = 0 },
-                text = { Text(t("people.tabIdentities")) },
-            )
-            androidx.compose.material3.Tab(
-                selected = vista == 1,
-                onClick = { vista = 1 },
-                text = { Text(t("people.tabTeam")) },
-            )
-            androidx.compose.material3.Tab(
-                selected = vista == 2,
-                onClick = { vista = 2 },
-                text = { Text(t("people.tabReview")) },
-            )
+            listOf("stats.tabHome", "people.tabIdentities", "people.tabTeam", "people.tabReview")
+                .forEachIndexed { i, clave ->
+                    androidx.compose.material3.Tab(
+                        selected = vista == i,
+                        onClick = { vista = i },
+                        text = { Text(t(clave)) },
+                    )
+                }
         }
         when (vista) {
-            0 -> PeoplePanel(ctx)
-            1 -> TeamPanel(ctx)
+            0 -> StatsHome(ctx) { vista = it }
+            1 -> PeoplePanel(ctx)
+            2 -> TeamPanel(ctx)
             else -> ReviewStatsPanel(ctx)
         }
+    }
+}
+
+/**
+ * Portada de Estadísticas: qué datos hay, qué falta y las acciones que los traen.
+ *
+ * Cada tarjeta lleva a la vista que corresponde en vez de explicar dónde está: si hay que contar
+ * cómo llegar a algo, el camino está mal puesto.
+ */
+@Composable
+private fun StatsHome(ctx: AppContext, irA: (Int) -> Unit) {
+    val personas = io.acr.ui.dbState(initial = emptyList<Person>()) { ctx.persons.all() }
+    val commits = io.acr.ui.dbState(initial = 0) { ctx.commitStats.countAll() }
+    val prs = io.acr.ui.dbState(initial = 0) { ctx.prStats.count() }
+    val sinConfirmar = io.acr.ui.dbState(initial = false) { ctx.persons.hasUnconfirmed() }
+    val activas = personas.count { !it.isBot && !it.archived }
+
+    Column(Modifier.fillMaxSize().padding(20.dp).verticalScroll(rememberScrollState())) {
+        Text(t("stats.title"), style = MaterialTheme.typography.titleMedium)
+        Text(
+            t("stats.note"),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+
+        Spacer(Modifier.height(16.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            Tarjeta(t("stats.people"), activas.toString(), t("stats.peopleGo")) { irA(1) }
+            Tarjeta(t("stats.commits"), commits.toString(), t("stats.commitsGo")) { irA(2) }
+            Tarjeta(t("stats.prs"), prs.toString(), t("stats.prsGo")) { irA(3) }
+        }
+
+        // Lo que falta se dice acá y con el botón al lado: una tabla vacía sin explicación parece
+        // una función rota, y el usuario no tiene por qué adivinar que hace falta cargar datos.
+        if (commits == 0 || prs == 0 || sinConfirmar) {
+            Spacer(Modifier.height(18.dp))
+            Text(t("stats.pending"), style = MaterialTheme.typography.titleSmall)
+            Spacer(Modifier.height(4.dp))
+            if (commits == 0) Pendiente(t("stats.needCommits"), t("stats.goIdentities")) { irA(1) }
+            if (prs == 0) Pendiente(t("stats.needPrs"), t("stats.goReview")) { irA(3) }
+            if (sinConfirmar && commits > 0) Pendiente(t("stats.needConfirm"), t("stats.goIdentities")) { irA(1) }
+        }
+
+        Spacer(Modifier.height(20.dp))
+        Text(
+            t("stats.disclaimer"),
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
+}
+
+@Composable
+private fun Tarjeta(titulo: String, valor: String, accion: String, onClick: () -> Unit) {
+    Column(
+        Modifier.width(200.dp)
+            .clip(androidx.compose.foundation.shape.RoundedCornerShape(10.dp))
+            .background(MaterialTheme.colorScheme.surfaceVariant)
+            .clickable(onClick = onClick)
+            .padding(14.dp),
+    ) {
+        Text(valor, style = MaterialTheme.typography.headlineSmall)
+        Text(titulo, style = MaterialTheme.typography.bodySmall)
+        Spacer(Modifier.height(6.dp))
+        Text(
+            accion,
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.primary,
+        )
+    }
+}
+
+@Composable
+private fun Pendiente(texto: String, accion: String, onClick: () -> Unit) {
+    Row(Modifier.fillMaxWidth().padding(vertical = 2.dp), verticalAlignment = Alignment.CenterVertically) {
+        Text(
+            texto,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.weight(1f),
+        )
+        TextButton(onClick = onClick) { Text(accion) }
     }
 }
 
