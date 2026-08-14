@@ -18,6 +18,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Dashboard
 import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.People
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -99,6 +100,7 @@ fun App(ctx: AppContext) {
                             onOpenPr = { repoId, prId -> selection.go(Selection.Review(repoId, prId)) },
                         )
                         is Selection.About -> io.acr.ui.about.AboutPanel(ctx)
+                        is Selection.People -> io.acr.ui.stats.PeoplePanel(ctx)
                         is Selection.Settings -> SettingsPanel(
                             ctx = ctx,
                             theme = theme,
@@ -247,6 +249,17 @@ private fun RepoSidebar(
                 onClick = { selection.go(Selection.Settings) },
                 icon = { Icon(Icons.Default.Settings, contentDescription = null) },
                 label = { Text(io.acr.i18n.t("nav.settings"), maxLines = 1) },
+            )
+        }
+        Row(
+            Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 2.dp),
+            horizontalArrangement = Arrangement.SpaceEvenly,
+        ) {
+            NavigationRailItem(
+                selected = selection.current is Selection.People,
+                onClick = { selection.go(Selection.People) },
+                icon = { Icon(Icons.Default.People, contentDescription = null) },
+                label = { Text(io.acr.i18n.t("nav.people"), maxLines = 1) },
             )
         }
     }

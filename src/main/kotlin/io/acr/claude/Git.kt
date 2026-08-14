@@ -136,6 +136,21 @@ object Git {
         run(dir, listOf("git", "diff", "--unified=5", range, "--", path)).output
     }
 
+    /**
+     * Corre un comando de git y devuelve su salida cruda.
+     *
+     * Lo usa la recolección de estadísticas, que necesita un `git log` con un formato propio y no
+     * encaja en ninguno de los helpers de arriba. Sigue siendo sólo lectura.
+     */
+    suspend fun runRaw(dir: File, cmd: List<String>): Result = withContext(Dispatchers.IO) {
+        run(dir, cmd)
+    }
+
+    /** El commit en el que está parado el clon. Sirve para anotar hasta dónde se procesó. */
+    suspend fun currentHead(dir: File): String? = withContext(Dispatchers.IO) {
+        run(dir, listOf("git", "rev-parse", "HEAD")).takeIf { it.ok }?.output?.trim()
+    }
+
     private fun run(dir: File, cmd: List<String>): Result {
         return runCatching {
             val pb = ProcessBuilder(withGlobalFlags(cmd)).directory(dir).redirectErrorStream(true)

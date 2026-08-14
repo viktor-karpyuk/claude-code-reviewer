@@ -615,6 +615,62 @@ class Store(private val dbPath: Path) : AutoCloseable {
             ALTER TABLE review ADD COLUMN previous_review_id TEXT;--split--
             ALTER TABLE review ADD COLUMN since_sha TEXT
             """.trimIndent(),
+
+            // v37 — quién es quién, y qué commiteó cada uno.
+            //
+            // Es el problema cero de las estadísticas: medido sobre los siete repositorios
+            // conectados, la misma persona aparece hasta con dos nombres y dos emails —"Viktor K
+            // <viktor@>" y "Viktor Karpyuk <viktor.karpyuk@>", 223 y 26 commits—. Agrupar por
+            // email parte a esa persona en dos; agrupar por nombre parte a Mateo, que commitea con
+            // y sin tilde. Sin resolver esto, todos los números que se muestren están mal.
+            //
+            // De ahí la entidad persona con identidades: un par (fuente, valor) por cada forma en
+            // que alguien aparece. `confirmed` distingue lo que decidió una persona de lo que
+            // adivinó la heurística, porque unir por nombre puede equivocarse y hay que poder
+            // revisarlo.
+            //
+            // Los agregados NO se guardan: se calculan por consulta. Guardar totales obliga a
+            // recalcularlos cada vez que se fusiona una identidad, y esa desincronización es
+            // exactamente lo que hace que nadie vuelva a confiar en el número. `commit_stat` sí,
+            // porque recorrer el git log de meses en cada apertura sería lento.
+            """
+            CREATE TABLE person (
+                id           TEXT PRIMARY KEY,
+                display_name TEXT NOT NULL,
+                is_bot       INTEGER NOT NULL DEFAULT 0,
+                created_at   TEXT NOT NULL
+            );--split--
+            CREATE TABLE person_identity (
+                id        TEXT PRIMARY KEY,
+                person_id TEXT NOT NULL REFERENCES person(id) ON DELETE CASCADE,
+                kind      TEXT NOT NULL,
+                value     TEXT NOT NULL,
+                confirmed INTEGER NOT NULL DEFAULT 0,
+                UNIQUE (kind, value)
+            );--split--
+            CREATE INDEX ix_identity_person ON person_identity(person_id);--split--
+            CREATE TABLE commit_stat (
+                repo_id           TEXT NOT NULL REFERENCES repo(id) ON DELETE CASCADE,
+                sha               TEXT NOT NULL,
+                person_id         TEXT REFERENCES person(id) ON DELETE SET NULL,
+                author_name       TEXT NOT NULL,
+                author_email      TEXT NOT NULL,
+                authored_at       TEXT NOT NULL,
+                files             INTEGER NOT NULL DEFAULT 0,
+                added             INTEGER NOT NULL DEFAULT 0,
+                deleted           INTEGER NOT NULL DEFAULT 0,
+                generated_added   INTEGER NOT NULL DEFAULT 0,
+                generated_deleted INTEGER NOT NULL DEFAULT 0,
+                PRIMARY KEY (repo_id, sha)
+            );--split--
+            CREATE INDEX ix_commit_person ON commit_stat(person_id, authored_at);--split--
+            CREATE TABLE stats_run (
+                repo_id  TEXT PRIMARY KEY REFERENCES repo(id) ON DELETE CASCADE,
+                ran_at   TEXT NOT NULL,
+                head_sha TEXT,
+                commits  INTEGER NOT NULL DEFAULT 0
+            )
+            """.trimIndent(),
         )
     }
 }

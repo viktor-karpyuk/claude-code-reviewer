@@ -3,6 +3,38 @@
 Reglas de numeración en [CLAUDE.md](CLAUDE.md): un requerimiento **nuevo** incrementa *major*;
 cambiar uno **existente** incrementa *patch*.
 
+## 39.0.0
+
+Requerimiento nuevo: **estadísticas por persona — fase 1: quién es quién**.
+
+Nueva sección **Personas**. Todavía no muestra estadísticas, y eso es deliberado: primero hay que
+resolver las identidades, porque cualquier número calculado antes está mal y encima parece bien.
+
+- Medido sobre los siete repositorios conectados: la misma persona aparece hasta con **dos nombres
+  y dos emails** —"Viktor K" con 223 commits y "Viktor Karpyuk" con 26 son la misma—. Agrupar por
+  email parte a esa persona en dos; agrupar por nombre parte a quien commitea con y sin tilde.
+- La resolución automática une por email y, si no, por nombre normalizado (sin tildes, sin
+  mayúsculas). Sobre los 14 pares reales de nombre y email deja **9 personas**, y acierta casos
+  que no eran obvios: "Tomás Rivero" y "Tomas Rivero" con emails distintos, o "Braian Chavez"
+  commiteando desde dos dominios.
+- Lo que ninguna regla puede resolver —dos cuentas con dos nombres, o un apodo como "Mapcky"— se
+  **propone** para unir a mano, en vez de adivinarlo. Unir y separar son reversibles, y separar
+  se lleva los commits de esa identidad: si no, la separación sería sólo cosmética.
+- Una unión hecha por nombre queda **marcada**, porque es la que puede equivocarse: dos personas
+  distintas pueden llamarse igual.
+- Mientras haya identidades sin revisar, la pantalla avisa que los números serán **provisionales**.
+- **El resultado no depende del orden en que se lean los repositorios.** Verificado contra los 25
+  pares reales de nombre y email: una sola pasada dejaba a "Lautaro" partido en dos según qué
+  commit apareciera primero, y en la base el `UNIQUE` descartaba el alias en silencio en vez de
+  unir. Encontrar una identidad ya tomada no es un conflicto: es la prueba de que las dos personas
+  son la misma.
+- Las cuatro propuestas de fusión sobre datos reales —Viktor, Lautaro, Tobías y Juan— son todas
+  correctas, y **no hay ninguna falsa**: nunca propone unir gente distinta.
+- El historial se lee con un solo `git log` por repositorio —miles de commits, no mil invocaciones
+  de git— y las líneas de archivos **generados se cuentan aparte desde el origen**: son el 25,6%
+  del total, y sumadas harían que una semilla de datos pese más que un mes de trabajo. Las
+  migraciones de esquema no se excluyen: son cambio real.
+
 ## 38.0.0
 
 Requerimiento nuevo: **revisar sólo lo que llegó después de la última review**.

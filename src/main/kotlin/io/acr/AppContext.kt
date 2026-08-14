@@ -42,6 +42,9 @@ class AppContext private constructor(
     val engine: ReviewEngine,
     val auto: AutoReviewer,
     val notifier: io.acr.notify.Notifier,
+    val persons: io.acr.data.PersonRepository,
+    val commitStats: io.acr.data.CommitStatRepository,
+    val statsCollector: io.acr.stats.StatsCollector,
 ) : AutoCloseable {
 
     /**
@@ -89,6 +92,9 @@ class AppContext private constructor(
             val approvals = ApprovalRepository(store)
             val jobs = PendingJobRepository(store)
             val guidelines = GuidelineRepository(store)
+            val persons = io.acr.data.PersonRepository(store)
+            val commitStats = io.acr.data.CommitStatRepository(store)
+            val statsCollector = io.acr.stats.StatsCollector(persons, commitStats)
             val replies = ReplyRepository(store)
             val seenPrs = io.acr.data.SeenPrRepository(store)
             val prCache = io.acr.data.PrCacheRepository(store)
@@ -107,7 +113,7 @@ class AppContext private constructor(
             val notifier = io.acr.notify.Notifier(prefs)
             val engine = ReviewEngine(reviews, publications, comments, findings, replies, approvals, guidelines, prefs, notifier)
             val auto = AutoReviewer(repos, reviews, prefs, engine, notifier, replies, seenPrs, prLoader, findings, approvals, jobs)
-            return AppContext(store, repos, reviews, publications, comments, notes, findings, approvals, jobs, guidelines, replies, seenPrs, prCache, prLoader, prefs, engine, auto, notifier)
+            return AppContext(store, repos, reviews, publications, comments, notes, findings, approvals, jobs, guidelines, replies, seenPrs, prCache, prLoader, prefs, engine, auto, notifier, persons, commitStats, statsCollector)
         }
 
         /** La propiedad `acr.dataDir` gana sobre la ubicación estándar; la usan los tests. */

@@ -1,7 +1,7 @@
 # STATS — Estadísticas por persona
 
-Estado: **especificación, sin implementar**
-Fecha: 2026-08-12 · decisiones cerradas 2026-08-12
+Estado: **fase 1 implementada (v39.0.0, 2026-08-14)** · fases 2–5 pendientes
+Fecha: 2026-08-12 · decisiones cerradas 2026-08-12 · fase 1 verificada contra datos reales 2026-08-14
 
 ---
 
@@ -383,7 +383,19 @@ se marca como tal, para que no se lea como caída.
 
 ## 9. Fases
 
-1. **Identidad** (UC-1) y recolección de `commit_stat` desde git. Sin esto no se muestra nada.
+1. ~~**Identidad** (UC-1) y recolección de `commit_stat` desde git.~~ **Hecha en v39.0.0.**
+   Medido sobre los 25 pares reales de (nombre, email) de los siete repositorios: la resolución
+   automática deja **17 personas**, y las 4 propuestas de fusión —Viktor, Lautaro, Tobías, Juan—
+   son todas correctas, sin ninguna falsa. Aceptándolas quedan 13; la única irreducible es el
+   apodo "Mapcky", que no tiene ninguna señal que lo delate.
+
+   Dos cosas que la spec no había previsto y aparecieron al implementar:
+   - **El orden importaba.** Una sola pasada dejaba a "Lautaro" partido en dos según qué commit
+     apareciera primero, y en la base el `UNIQUE(kind,value)` descartaba el alias en silencio en
+     vez de unir. Se agregó convergencia en los dos caminos: encontrar una identidad ya tomada no
+     es un conflicto, es la prueba de que las dos personas son la misma.
+   - **Los tests se contaminaban entre sí**: `person` es global, no por repositorio, así que
+     borrar el repo al terminar no la limpia. Cada test va con su propia base.
 2. **M1, M2, M4** y vista de equipo (UC-2, UC-3, UC-5).
 3. **M3, M5, M6** — requieren cruzar con reviews y comentarios (UC-4).
 4. **Ficha individual** (UC-6) y exportación.

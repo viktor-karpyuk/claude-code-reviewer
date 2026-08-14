@@ -9,6 +9,9 @@ sealed interface Selection {
     data object Dashboard : Selection
     data object Settings : Selection
     data object About : Selection
+
+    /** Quién es quién. No muestra estadísticas: es lo que hay que resolver antes de mostrarlas. */
+    data object People : Selection
     data class Repo(val repoId: String) : Selection
     data class Review(val repoId: String, val prId: Long) : Selection
 
