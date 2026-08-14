@@ -3,6 +3,22 @@
 Reglas de numeración en [CLAUDE.md](CLAUDE.md): un requerimiento **nuevo** incrementa *major*;
 cambiar uno **existente** incrementa *patch*.
 
+## 36.0.0
+
+Requerimiento nuevo: **avisar antes de repetir una review que ya está hecha**.
+
+- Al correr una review sobre un commit cuya revisión anterior **terminó bien**, la app avisa
+  cuándo fue, qué encontró y qué costó, y deja decidir. No bloquea: repetir con otra profundidad
+  o con guías nuevas es un uso legítimo.
+- **Sólo avisa si la anterior terminó bien.** Si se había caído —15 de los 18 fallos históricos
+  fueron por cerrar la app a mitad— se corre sin preguntar: ahí repetir es exactamente lo
+  correcto y preguntar sería estorbar.
+- Sale de medir la base local: 11 corridas repitieron un commit ya revisado, a 57, 127 y 139
+  horas de distancia. No es alguien re-corriendo a propósito, es alguien que volvió al PR días
+  después y no se acordaba. Lo que más pesa no es la plata sino los ~7 minutos de espera para
+  redescubrir un resultado que ya estaba guardado.
+- El modo automático ya salteaba los commits vistos; no se tocó.
+
 ## 35.0.0
 
 Requerimiento nuevo: **novedades de cada versión dentro de la app**.

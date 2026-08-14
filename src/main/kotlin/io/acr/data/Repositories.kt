@@ -196,6 +196,14 @@ data class ReviewRecord(
     val finalPassBlockers: Int = 0,
 )
 
+/** Lo mínimo para decidir si vale la pena repetir una review: cuándo fue, qué encontró, qué costó. */
+data class PriorReview(
+    val id: String,
+    val createdAt: String,
+    val costUsd: Double?,
+    val findings: Int,
+)
+
 class ReviewRepository(private val store: Store) {
 
     fun start(
@@ -438,6 +446,40 @@ class ReviewRepository(private val store: Store) {
             ps.setLong(2, prId)
             ps.setString(3, headSha)
             ps.executeQuery().use { it.next() }
+        }
+
+    /**
+     * La última review **terminada bien** de ese commit exacto, si existe.
+     *
+     * Sirve para avisar antes de repetir trabajo ya hecho: un commit sin cambios revisado dos
+     * veces da el mismo resultado, cuesta lo mismo y hace esperar los mismos siete minutos.
+     *
+     * El filtro por DONE no es un detalle: de las 21 repeticiones que había en la base, la mitad
+     * repetía una review que se había caído —casi siempre porque se cerró la app— y ahí repetir
+     * es exactamente lo correcto. Avisar en ese caso sería estorbar justo cuando el usuario está
+     * haciendo lo que hay que hacer.
+     */
+    fun doneForHead(repoId: String, prId: Long, headSha: String): PriorReview? =
+        store.stmt(
+            """SELECT r.id, r.created_at, r.cost_usd,
+                      (SELECT COUNT(*) FROM finding f WHERE f.review_id = r.id)
+                 FROM review r
+                WHERE r.repo_id = ? AND r.pr_id = ? AND r.head_sha = ? AND r.status = ?
+                ORDER BY r.created_at DESC LIMIT 1""",
+        ) { ps ->
+            ps.setString(1, repoId)
+            ps.setLong(2, prId)
+            ps.setString(3, headSha)
+            ps.setString(4, ReviewStatus.DONE.name)
+            ps.executeQuery().use { rs ->
+                if (!rs.next()) null
+                else PriorReview(
+                    id = rs.getString(1),
+                    createdAt = rs.getString(2),
+                    costUsd = rs.getDouble(3).takeIf { !rs.wasNull() },
+                    findings = rs.getInt(4),
+                )
+            }
         }
 
     /**

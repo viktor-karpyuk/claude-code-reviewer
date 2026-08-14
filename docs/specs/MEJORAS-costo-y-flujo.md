@@ -25,11 +25,27 @@ la rama entera, incluyendo los archivos que ya habían sido aprobados 24 veces.
 
 Costo promedio de una review completa: **US$ 5,51** y ~7 minutos de reloj (mediana 431 s).
 
-### 1.2 Re-reviews del mismo commit: US$ 22,10 tirados
+### 1.2 Re-reviews del mismo commit: US$ 10,35 tirados (no 22)
 
-21 de las 89 reviews corrieron sobre un `head_sha` que **ya tenía una review terminada**, sin un
-solo commit en el medio. Nada nuevo que mirar; mismo resultado esperable. Hoy la app no avisa —
-el gasto ocurre sin que nadie lo decida.
+21 de las 89 reviews corrieron sobre un `head_sha` ya revisado, sin un solo commit en el medio.
+**Las 21 fueron manuales**: el modo automático ya salta lo que vio (`AutoReviewer.kt:62`, vía
+`existsForHead`), así que ese frente está cubierto desde antes.
+
+Pero al separar por el estado de la review previa, la mitad no es desperdicio:
+
+| Caso | Reviews | Costo |
+|---|---|---|
+| La previa había terminado **DONE** → repetir no aporta nada | 11 | **US$ 10,35** |
+| La previa **falló o se canceló** → reintento legítimo | 10 | US$ 11,75 |
+
+Avisar en el segundo caso sería estorbar: cuando una review se cae (y 15 de 18 fallos fueron
+porque se cerró la app), volver a correr el mismo sha es exactamente lo correcto.
+
+El desperdicio real, entonces, son **11 reviews y US$ 10,35** — y el detalle temporal muestra de
+qué se trata: los repes ocurren **57 h, 79 h, 127 h, 139 h después** de la review original. No es
+alguien re-corriendo a propósito; es alguien que volvió al PR días más tarde y no se acordaba de
+que ya lo había mirado. Por eso el valor de la mejora no es sólo la plata: son también los ~7
+minutos de espera (mediana 431 s) para redescubrir un resultado que ya estaba guardado.
 
 ### 1.3 Los "87 hallazgos sin destino" no son un problema de triage
 
@@ -90,13 +106,18 @@ de regenerarse con otro `review_id`.
 
 ### M2 — Freno a la re-review del mismo commit *(barata, corta un goteo)*
 
-**Qué:** al disparar una review sobre un `head_sha` que ya tiene review DONE, avisar antes de
-correr: "Este commit ya lo revisaste el <fecha> (N hallazgos, US$ X). ¿Correr de nuevo?" con
-acceso al resultado anterior. No bloquear — a veces se quiere re-correr con otra profundidad u
-otras guías — pero que sea una decisión.
+**Qué:** al disparar manualmente una review sobre un `head_sha` cuya review previa terminó
+**DONE**, avisar antes de correr: "Este commit ya lo revisaste el <fecha> — N hallazgos,
+US$ X. ¿Correr igual?", con la opción de ver el resultado guardado. No bloquear: re-correr con
+otra profundidad o con guías nuevas es un uso legítimo (D3).
 
-**Alcance:** aplica al disparo manual y al auto-reviewer (el automático directamente no repite
-sha, sin pregunta). Evidencia: US$ 22,10 históricos.
+**Alcance ajustado tras §1.2:**
+- El auto-reviewer **ya** salta shas vistos; no se toca.
+- **Sólo** se avisa si la previa fue DONE. Si falló o se canceló, se corre sin preguntar: ahí
+  repetir es lo correcto y preguntar sería estorbar.
+
+**Evidencia:** 11 reviews, US$ 10,35, con repes a 57–139 h de distancia. La plata es poca; lo que
+más pesa es no esperar ~7 minutos para redescubrir un resultado ya guardado.
 
 ### M3 — Importar `CLAUDE.md` del repo como guía *(llena la feature vacía con un click)*
 
@@ -138,11 +159,13 @@ PR?" que M1 reutiliza. STATS al final por tamaño.
 Regla de versionado del proyecto: requerimiento nuevo ⇒ **major**.
 
 ### Fase 1 — v36.0.0 · M2: freno al mismo sha
-1. `ReviewRepository`: consulta "última review DONE para (repo, pr, head_sha)".
-2. Diálogo de confirmación en el disparo manual (fecha, hallazgos, costo de la previa; botones
-   correr / ver resultado / cancelar).
-3. Auto-reviewer: skip silencioso si el sha ya tiene review DONE.
-4. Tests: la consulta; el auto-skip. i18n ES+EN de todo el diálogo.
+1. `ReviewRepository`: consulta "última review **DONE** para (repo, pr, head_sha)", con su fecha,
+   costo y cantidad de hallazgos.
+2. Diálogo de confirmación en el disparo manual: fecha, hallazgos y costo de la previa; botones
+   correr igual / cancelar.
+3. ~~Auto-reviewer: skip~~ — ya implementado (`existsForHead`), no se toca.
+4. Tests: que la consulta ignore reviews FAILED/CANCELLED (si no, el aviso aparecería justo
+   cuando reintentar es lo correcto). i18n ES+EN del diálogo.
 
 ### Fase 2 — v37.0.0 · M3: importar CLAUDE.md
 1. Botón en `RepoFormPanel` (sección de guías del repo): detectar `CLAUDE.md` en el clon,

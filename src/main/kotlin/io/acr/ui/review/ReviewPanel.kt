@@ -89,6 +89,8 @@ fun ReviewPanel(
     // tarjeta necesita saber si LA SUYA está ocupada, no si hay algo ocupado en la pantalla.
     var replyBusy by remember(repo.id, prId) { mutableStateOf<Set<String>>(emptySet()) }
     var confirmarMerge by remember(repo.id, prId) { mutableStateOf(false) }
+    // La review previa de este mismo commit, cuando hay que preguntar si repetirla.
+    var repetir by remember(repo.id, prId) { mutableStateOf<io.acr.data.PriorReview?>(null) }
     var mergeando by remember(repo.id, prId) { mutableStateOf(false) }
     var verificando by remember(repo.id, prId) { mutableStateOf(false) }
     var aprobando by remember(repo.id, prId) { mutableStateOf(false) }
@@ -916,27 +918,45 @@ fun ReviewPanel(
         )
 
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+            // Correr de verdad. Se define acá para que el botón y la confirmación disparen
+            // exactamente lo mismo: si fueran dos copias, la de la confirmación quedaría vieja.
+            fun lanzar() {
+                val target = pr ?: return
+                // appScope y no el de la pantalla: la review tiene que sobrevivir a que el
+                // usuario navegue a otro PR mientras corre.
+                ctx.appScope.launch {
+                    when (val out = ctx.engine.review(repo, target, depth, kind, repo.defaultModel)) {
+                        is ReviewOutcome.Ok -> {
+                            review = out.record
+                            draft = out.record.body.orEmpty()
+                        }
+                        is ReviewOutcome.Error -> {
+                            review = ctx.reviews.latestUsableFor(repo.id, prId)
+                            snackbar.showSnackbar(out.message)
+                        }
+                    }
+                    reload++
+                }
+            }
+
             Button(
                 enabled = pr != null && !running,
                 onClick = {
                     val target = pr ?: return@Button
-                    // appScope y no el de la pantalla: la review tiene que sobrevivir a que el
-                    // usuario navegue a otro PR mientras corre.
-                    ctx.appScope.launch {
-                        when (val out = ctx.engine.review(repo, target, depth, kind, repo.defaultModel)) {
-                            is ReviewOutcome.Ok -> {
-                                review = out.record
-                                draft = out.record.body.orEmpty()
-                            }
-                            is ReviewOutcome.Error -> {
-                                review = ctx.reviews.latestUsableFor(repo.id, prId)
-                                snackbar.showSnackbar(out.message)
-                            }
-                        }
-                        reload++
-                    }
+                    // Si este commit ya se revisó y terminó bien, preguntar antes de gastar otra
+                    // corrida. La consulta ignora las que fallaron: ahí repetir es lo correcto.
+                    val previa = ctx.reviews.doneForHead(repo.id, prId, target.headSha)
+                    if (previa != null) repetir = previa else lanzar()
                 },
             ) { Text(if (review == null) io.acr.i18n.t("review.run") else io.acr.i18n.t("review.rerun")) }
+
+            repetir?.let { previa ->
+                RerunDialog(
+                    previa = previa,
+                    onDismiss = { repetir = null },
+                    onConfirm = { repetir = null; lanzar() },
+                )
+            }
 
             if (running) {
                 OutlinedButton(onClick = { ctx.engine.cancel(prId) }) { Text(io.acr.i18n.t("common.cancel")) }
