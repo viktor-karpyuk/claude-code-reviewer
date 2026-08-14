@@ -783,6 +783,7 @@ fun ReviewPanel(
             ConversationList(
                 threads = hilos,
                 busy = replyBusy,
+                ourName = nuestroNombre,
                 onDraft = { d ->
                     val target = pr
                     if (target == null) {
@@ -1598,6 +1599,8 @@ private fun ConversationList(
     onFocusConsumed: () -> Unit,
     followUpAfterDays: Long,
     onFollowUp: (ConversationThread) -> Unit,
+    /** Con qué nombre aparecemos en el proveedor, para que el avatar diga quién preguntó. */
+    ourName: String?,
     onCloseThread: (String, Boolean) -> Unit,
     onDismissReply: (io.acr.data.ReplyDraft) -> Unit,
     onDismissAllReplies: () -> Unit,
@@ -1699,6 +1702,9 @@ private fun ConversationList(
                     author = io.acr.i18n.t("thread.ourQuestion"),
                     body = h.question,
                     ours = true,
+                    // El rótulo dice qué es el mensaje; el avatar, quién lo escribió. Sin esto las
+                    // iniciales salían del propio rótulo y mostraban "LP", que no es nadie.
+                    avatarName = ourName,
                 )
                 io.acr.ui.SuggestionBlock(h.suggestion)
 

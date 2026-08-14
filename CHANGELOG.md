@@ -3,6 +3,15 @@
 Reglas de numeración en [CLAUDE.md](CLAUDE.md): un requerimiento **nuevo** incrementa *major*;
 cambiar uno **existente** incrementa *patch*.
 
+## 51.0.2
+
+Arreglo: en la conversación, el avatar de **"Lo que preguntamos"** mostraba **"LP"**.
+
+Las iniciales salían del propio rótulo del mensaje en vez de la persona que lo escribió. El rótulo
+dice qué es el mensaje y el avatar dice quién lo escribió: son dos cosas distintas, y ahora van por
+separado. El avatar usa el nombre con el que aparecemos en el proveedor, el mismo que ya se muestra
+en las aprobaciones.
+
 ## 51.0.1
 
 Ajuste: **las tarjetas de repositorio tienen todas el mismo tamaño.**

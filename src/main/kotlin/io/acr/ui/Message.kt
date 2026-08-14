@@ -48,6 +48,14 @@ fun MessageBubble(
     ours: Boolean,
     at: String? = null,
     anchor: String? = null,
+    /**
+     * Nombre del que sale el avatar, cuando el texto de arriba no es una persona.
+     *
+     * Existe por un caso concreto: la burbuja de lo que preguntamos se rotula "Lo que preguntamos",
+     * y el avatar sacaba de ahí sus iniciales — mostraba "LP", que no es nadie. El rótulo describe
+     * el mensaje y el avatar tiene que decir quién lo escribió, así que son dos cosas distintas.
+     */
+    avatarName: String? = null,
     modifier: Modifier = Modifier,
 ) {
     val color = authorColor(ours)
@@ -72,7 +80,7 @@ fun MessageBubble(
                 val quien = author.ifBlank {
                     if (ours) io.acr.i18n.t("msg.us") else io.acr.i18n.t("msg.them")
                 }
-                PersonAvatar(quien, size = 36.dp)
+                PersonAvatar(avatarName?.takeIf { it.isNotBlank() } ?: quien, size = 36.dp)
                 Spacer(Modifier.width(6.dp))
                 Text(quien, style = MaterialTheme.typography.labelSmall, color = color)
                 if (ours) {
