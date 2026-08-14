@@ -3,6 +3,36 @@
 Reglas de numeración en [CLAUDE.md](CLAUDE.md): un requerimiento **nuevo** incrementa *major*;
 cambiar uno **existente** incrementa *patch*.
 
+## 49.0.0
+
+Requerimiento nuevo: **un resumen de estadísticas que responda algo**.
+
+Al armarlo apareció un problema de fondo en los datos, así que el resumen se diseñó alrededor de
+él en vez de disimularlo.
+
+**El hallazgo**: 40 commits —el **1,7%** del total— concentran el **69,5% de todas las líneas**.
+Al abrirlos son importaciones de proyectos enteros: un `100k.json` de cien mil líneas, hojas de
+estilo vendorizadas, librerías copiadas al repositorio. Con ellos adentro el reparto decía 77,9%
+para una persona que sin ellos tiene 65,9%, y ponía a otra en el segundo puesto por dos commits de
+importación. La métrica principal del módulo describía unos pocos movimientos de archivos.
+
+El resumen ahora responde tres preguntas, en este orden:
+
+1. **¿Se puede confiar en estos números?** Cobertura de autoría, identidades sin revisar y el
+   aviso de commits atípicos con su porcentaje. Va primero porque si la respuesta es no, el resto
+   sobra.
+2. **¿Cómo se reparte el cambio?** Anillo por persona, calculado **sin** los commits de más de
+   5.000 líneas, y diciéndolo. Seis porciones y el resto agrupado: con trece, ninguna se distingue.
+3. **¿Qué encontró la revisión?** Anillo por gravedad, más cuántos hallazgos publicados siguen sin
+   verificar contra el código —que es tan informativo como lo encontrado—.
+
+Más la **actividad por trimestre**, lo único que muestra una tendencia y no una foto.
+
+Sobre los gráficos: anillo y no torta, porque el agujero deja lugar al total y quita la tentación
+de comparar áreas. Los porcentajes van escritos en la referencia, porque un ángulo no se lee con
+precisión por bien dibujado que esté. Y sólo se usa para partes de un todo: para tiempos o
+promedios sería un dibujo lindo sin significado.
+
 ## 48.0.0
 
 Requerimiento nuevo: **cada sección con su propio lugar, y los repositorios como sección propia**.

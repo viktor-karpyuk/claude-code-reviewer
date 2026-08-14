@@ -1165,6 +1165,34 @@ class FindingRepository(private val store: Store) {
         }
     }
 
+    /** Cuántos hallazgos hay de cada gravedad: bloqueantes, importantes, menores. */
+    fun severityTotals(): Triple<Int, Int, Int> =
+        store.stmt(
+            """SELECT SUM(CASE WHEN severity = 'blocker' THEN 1 ELSE 0 END),
+                      SUM(CASE WHEN severity = 'major' THEN 1 ELSE 0 END),
+                      SUM(CASE WHEN severity = 'minor' THEN 1 ELSE 0 END)
+                 FROM finding WHERE dismissed_at IS NULL""",
+        ) { ps ->
+            ps.executeQuery().use {
+                if (it.next()) Triple(it.getInt(1), it.getInt(2), it.getInt(3)) else Triple(0, 0, 0)
+            }
+        }
+
+    /**
+     * Cuántos hallazgos publicados están sin verificar, sobre el total de publicados.
+     *
+     * Es tan informativo como lo que se encontró: un hallazgo publicado y nunca verificado es una
+     * observación de la que nadie sabe si se atendió.
+     */
+    fun verificationTotals(): Pair<Int, Int> =
+        store.stmt(
+            """SELECT SUM(CASE WHEN resolution IS NULL THEN 1 ELSE 0 END), COUNT(*)
+                 FROM finding
+                WHERE dismissed_at IS NULL AND published_id IS NOT NULL""",
+        ) { ps ->
+            ps.executeQuery().use { if (it.next()) it.getInt(1) to it.getInt(2) else 0 to 0 }
+        }
+
     fun close(id: String, closed: Boolean) {
         store.stmt("UPDATE finding SET closed_at = ? WHERE id = ?") { ps ->
             ps.setString(1, if (closed) Instant.now().toString() else null)

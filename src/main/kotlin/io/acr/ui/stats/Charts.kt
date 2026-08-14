@@ -1,6 +1,7 @@
 package io.acr.ui.stats
 
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -127,6 +128,121 @@ fun MiniBars(
         }
     }
 }
+
+/**
+ * Anillo de proporciones, con el total en el centro.
+ *
+ * Anillo y no torta: el agujero deja lugar para el total, que es el dato que uno busca primero, y
+ * de paso quita la tentación de comparar áreas —que es lo que peor se lee de una torta—. Los
+ * porcentajes van en la referencia, al lado del nombre, porque un ángulo no se lee con precisión
+ * por más bien dibujado que esté.
+ *
+ * Sólo sirve para partes de un todo. Usarlo para cosas que no suman al total —tiempos, promedios—
+ * produce un dibujo lindo que no significa nada.
+ *
+ * @param segments ya ordenados y acotados: con trece personas, trece porciones no se distinguen.
+ *   Quien llama agrupa la cola en "otros" antes de pasar la lista.
+ */
+@Composable
+fun DonutChart(
+    segments: List<Segment>,
+    centerValue: String,
+    centerLabel: String,
+    size: androidx.compose.ui.unit.Dp = 132.dp,
+    modifier: Modifier = Modifier,
+) {
+    val total = segments.sumOf { it.value }
+    val vacio = MaterialTheme.colorScheme.surfaceVariant
+    Box(modifier.size(size), contentAlignment = Alignment.Center) {
+        Canvas(Modifier.size(size)) {
+            val grosor = this.size.minDimension * 0.22f
+            val radio = (this.size.minDimension - grosor) / 2f
+            val esquina = Offset(
+                (this.size.width - radio * 2) / 2f,
+                (this.size.height - radio * 2) / 2f,
+            )
+            val medida = Size(radio * 2, radio * 2)
+            if (total <= 0.0) {
+                // Sin datos se dibuja el anillo vacío igual: un hueco donde debería haber algo se
+                // lee como que el gráfico se rompió.
+                drawArc(
+                    color = vacio, startAngle = 0f, sweepAngle = 360f, useCenter = false,
+                    topLeft = esquina, size = medida,
+                    style = androidx.compose.ui.graphics.drawscope.Stroke(grosor),
+                )
+                return@Canvas
+            }
+            // Se arranca arriba, como un reloj: es de donde todo el mundo espera que salga.
+            var angulo = -90f
+            segments.forEach { s ->
+                val barrido = (s.value / total * 360.0).toFloat()
+                drawArc(
+                    color = s.color, startAngle = angulo, sweepAngle = barrido, useCenter = false,
+                    topLeft = esquina, size = medida,
+                    style = androidx.compose.ui.graphics.drawscope.Stroke(grosor),
+                )
+                angulo += barrido
+            }
+        }
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            Text(centerValue, style = MaterialTheme.typography.titleMedium)
+            Text(
+                centerLabel,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
+}
+
+/**
+ * Referencia vertical con el valor y el porcentaje de cada porción.
+ *
+ * Va al lado del anillo y no debajo porque se lee en paralelo con él. Y lleva los números: el
+ * gráfico sirve para ver de un vistazo quién pesa más, no para leer cuánto.
+ */
+@Composable
+fun DonutLegend(segments: List<Segment>, modifier: Modifier = Modifier) {
+    val total = segments.sumOf { it.value }.takeIf { it > 0.0 } ?: 1.0
+    Column(modifier) {
+        segments.forEach { s ->
+            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(vertical = 1.dp)) {
+                Canvas(Modifier.size(9.dp)) { drawRect(s.color) }
+                Spacer(Modifier.width(6.dp))
+                Text(
+                    s.label,
+                    style = MaterialTheme.typography.labelSmall,
+                    modifier = Modifier.width(150.dp),
+                    maxLines = 1,
+                )
+                Text(
+                    "%,.0f".format(s.value),
+                    style = MaterialTheme.typography.labelSmall,
+                    modifier = Modifier.width(64.dp),
+                    textAlign = androidx.compose.ui.text.style.TextAlign.End,
+                )
+                Text(
+                    " %d%%".format(Math.round(s.value / total * 100)),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.width(44.dp),
+                    textAlign = androidx.compose.ui.text.style.TextAlign.End,
+                )
+            }
+        }
+    }
+}
+
+/**
+ * Paleta para las porciones de un anillo.
+ *
+ * Se recorre en orden y se repite si hace falta, pero quien llama acota la lista antes: doce
+ * colores distinguibles es el techo, y más allá el gráfico deja de informar.
+ */
+val SLICE_COLORS = listOf(
+    Color(0xFF4A6FA5), Color(0xFF2E7D5B), Color(0xFFD08A2C), Color(0xFF9B5DA8),
+    Color(0xFF3E8E93), Color(0xFFB4543A), Color(0xFF6C7A89), Color(0xFF8A9B3D),
+)
 
 /** Referencia de colores. Sin esto una barra apilada es un adorno: no se sabe qué es cada parte. */
 @Composable

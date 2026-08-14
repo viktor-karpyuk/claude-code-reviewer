@@ -760,20 +760,50 @@ class CommitStatRepository(private val store: Store) {
             ps.executeQuery().use { it.next() }
         }
 
-    /** Volumen por persona en un rango de fechas ISO. Se calcula, no se guarda. */
-    fun volumeByPerson(desde: String, hasta: String, repoId: String? = null): Map<String, Volume> =
+    /**
+     * Tamaño a partir del cual un commit deja de describir trabajo escrito.
+     *
+     * Medido en esta base: 40 commits —el 1,7% del total— concentran el **69,5% de todas las
+     * líneas**, y al abrirlos son importaciones de proyectos enteros: un `100k.json` de cien mil
+     * líneas, hojas de estilo vendorizadas, librerías copiadas al repositorio. Contarlos como
+     * volumen de una persona hacía que el reparto dijera 77,9% para alguien que, sin ellos, tiene
+     * 65,9%; y ponía a otra persona en el segundo puesto por dos commits de importación.
+     *
+     * No es una regla sobre quién trabaja más: es que mover un árbol de archivos y escribir código
+     * son cosas distintas, y un solo número no puede ser las dos.
+     */
+    companion object {
+        /** Ver el comentario de arriba: el umbral vive acá para poder nombrarlo desde la pantalla. */
+        const val BULK_COMMIT_LINES = 5_000
+    }
+
+    /**
+     * Volumen por persona en un rango de fechas ISO. Se calcula, no se guarda.
+     *
+     * @param maxLines deja afuera los commits más grandes que eso. Null los incluye a todos, que
+     *   es lo correcto cuando lo que se quiere es el total crudo y no el reparto del trabajo.
+     */
+    fun volumeByPerson(
+        desde: String,
+        hasta: String,
+        repoId: String? = null,
+        maxLines: Int? = null,
+    ): Map<String, Volume> =
         store.stmt(
             """SELECT person_id, COUNT(*), SUM(added), SUM(deleted),
                       SUM(generated_added), SUM(generated_deleted)
                  FROM commit_stat
                 WHERE authored_at >= ? AND authored_at <= ? AND person_id IS NOT NULL
                   AND (? IS NULL OR repo_id = ?)
+                  AND (? IS NULL OR added + deleted <= ?)
                 GROUP BY person_id""",
         ) { ps ->
             ps.setString(1, desde)
             ps.setString(2, hasta)
             ps.setString(3, repoId)
             ps.setString(4, repoId)
+            if (maxLines == null) { ps.setNull(5, java.sql.Types.INTEGER); ps.setNull(6, java.sql.Types.INTEGER) }
+            else { ps.setInt(5, maxLines); ps.setInt(6, maxLines) }
             ps.executeQuery().use { rs ->
                 buildMap {
                     while (rs.next()) {
@@ -782,6 +812,45 @@ class CommitStatRepository(private val store: Store) {
                             Volume(rs.getInt(2), rs.getInt(3), rs.getInt(4), rs.getInt(5), rs.getInt(6)),
                         )
                     }
+                }
+            }
+        }
+
+    /**
+     * Cuántos commits enormes hay y cuánto del total se llevan.
+     *
+     * Es el número que hace honesto al reparto: sin decir que 40 commits mueven dos tercios de las
+     * líneas, cualquier gráfico de volumen describe unas pocas importaciones y no el trabajo.
+     */
+    fun bulkShare(desde: String, hasta: String, maxLines: Int = BULK_COMMIT_LINES): Triple<Int, Long, Long> =
+        store.stmt(
+            """SELECT SUM(CASE WHEN added + deleted > ? THEN 1 ELSE 0 END),
+                      SUM(CASE WHEN added + deleted > ? THEN added + deleted ELSE 0 END),
+                      SUM(added + deleted)
+                 FROM commit_stat
+                WHERE authored_at >= ? AND authored_at <= ?""",
+        ) { ps ->
+            ps.setInt(1, maxLines)
+            ps.setInt(2, maxLines)
+            ps.setString(3, desde)
+            ps.setString(4, hasta)
+            ps.executeQuery().use {
+                if (it.next()) Triple(it.getInt(1), it.getLong(2), it.getLong(3)) else Triple(0, 0L, 0L)
+            }
+        }
+
+    /** Commits y personas activas por trimestre. Dice si el equipo creció, se achicó o se frenó. */
+    fun activityByQuarter(): List<QuarterActivity> =
+        store.stmt(
+            """SELECT substr(authored_at, 1, 4) || '-Q' ||
+                      ((CAST(substr(authored_at, 6, 2) AS INTEGER) - 1) / 3 + 1) q,
+                      COUNT(*), COUNT(DISTINCT person_id)
+                 FROM commit_stat
+                GROUP BY q ORDER BY q""",
+        ) { ps ->
+            ps.executeQuery().use { rs ->
+                buildList {
+                    while (rs.next()) add(QuarterActivity(rs.getString(1), rs.getInt(2), rs.getInt(3)))
                 }
             }
         }
@@ -806,6 +875,9 @@ class CommitStatRepository(private val store: Store) {
             }
         }
 }
+
+/** Actividad de un trimestre: cuánto se commiteó y cuánta gente lo hizo. */
+data class QuarterActivity(val label: String, val commits: Int, val people: Int)
 
 /**
  * Volumen de cambio, siempre desglosado.

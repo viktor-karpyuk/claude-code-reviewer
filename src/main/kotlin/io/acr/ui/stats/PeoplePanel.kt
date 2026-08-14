@@ -84,10 +84,16 @@ fun StatsSection(ctx: AppContext) {
 }
 
 /**
- * Portada de Estadísticas: qué datos hay, qué falta y las acciones que los traen.
+ * Portada de Estadísticas: en qué estado está el equipo y si se puede confiar en estos números.
  *
- * Cada tarjeta lleva a la vista que corresponde en vez de explicar dónde está: si hay que contar
- * cómo llegar a algo, el camino está mal puesto.
+ * El orden responde a las tres preguntas que uno tiene al abrir esto, y en ese orden:
+ *
+ * 1. **¿Puedo creerle a estos números?** Va primero porque si la respuesta es no, el resto sobra.
+ *    Acá viven la cobertura, las identidades sin revisar y el aviso de commits atípicos.
+ * 2. **¿Cómo se reparte el trabajo?** El anillo de volumen, calculado sin las importaciones.
+ * 3. **¿Qué encontró la revisión, y qué quedó sin cerrar?**
+ *
+ * Más la actividad por trimestre, que es lo único que muestra una tendencia en vez de una foto.
  */
 @Composable
 private fun StatsHome(ctx: AppContext, irA: (Int) -> Unit) {
@@ -95,7 +101,32 @@ private fun StatsHome(ctx: AppContext, irA: (Int) -> Unit) {
     val commits = io.acr.ui.dbState(initial = 0) { ctx.commitStats.countAll() }
     val prs = io.acr.ui.dbState(initial = 0) { ctx.prStats.count() }
     val sinConfirmar = io.acr.ui.dbState(initial = false) { ctx.persons.hasUnconfirmed() }
-    val activas = personas.count { !it.isBot && !it.archived }
+    val cobertura = io.acr.ui.dbState(initial = 0 to 0) { ctx.reviewStats.coverage("1970-01-01", "2999-12-31") }
+    val trimestres = io.acr.ui.dbState(initial = emptyList<io.acr.data.QuarterActivity>()) {
+        ctx.commitStats.activityByQuarter()
+    }
+    val bulk = io.acr.ui.dbState(initial = Triple(0, 0L, 0L)) {
+        ctx.commitStats.bulkShare("1970-01-01", "2999-12-31")
+    }
+    // El reparto se calcula SIN las importaciones: con ellas describe unos pocos commits de
+    // mover archivos y no el trabajo. Medido acá: 40 commits llevaban el 69,5% de las líneas.
+    val volumen = io.acr.ui.dbState(initial = emptyMap<String, io.acr.data.Volume>()) {
+        ctx.commitStats.volumeByPerson(
+            "1970-01-01", "2999-12-31",
+            maxLines = io.acr.data.CommitStatRepository.BULK_COMMIT_LINES,
+        )
+    }
+    val gravedad = io.acr.ui.dbState(initial = emptyMap<String, io.acr.data.SeverityCount>()) {
+        ctx.reviewStats.findingsByPrAuthor("1970-01-01", "2999-12-31")
+    }
+    val hallazgos = io.acr.ui.dbState(initial = Triple(0, 0, 0)) { ctx.findings.severityTotals() }
+    val sinVerificar = io.acr.ui.dbState(initial = 0 to 0) { ctx.findings.verificationTotals() }
+
+    val activas = personas.filter { !it.isBot && !it.archived }
+    val porPersona = remember(personas, volumen) {
+        activas.mapNotNull { p -> volumen[p.id]?.let { p.displayName to it.touched.toDouble() } }
+            .sortedByDescending { it.second }
+    }
 
     Column(Modifier.fillMaxSize().padding(20.dp).verticalScroll(rememberScrollState())) {
         Text(t("stats.title"), style = MaterialTheme.typography.titleMedium)
@@ -107,20 +138,109 @@ private fun StatsHome(ctx: AppContext, irA: (Int) -> Unit) {
 
         Spacer(Modifier.height(16.dp))
         Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-            Tarjeta(t("stats.people"), activas.toString(), t("stats.peopleGo")) { irA(1) }
-            Tarjeta(t("stats.commits"), commits.toString(), t("stats.commitsGo")) { irA(2) }
+            Tarjeta(t("stats.people"), activas.size.toString(), t("stats.peopleGo")) { irA(1) }
+            Tarjeta(t("stats.commits"), "%,d".format(commits), t("stats.commitsGo")) { irA(2) }
             Tarjeta(t("stats.prs"), prs.toString(), t("stats.prsGo")) { irA(3) }
+            Tarjeta(t("stats.findings"), "%,d".format(hallazgos.first + hallazgos.second + hallazgos.third), t("stats.findingsGo")) { irA(3) }
         }
 
-        // Lo que falta se dice acá y con el botón al lado: una tabla vacía sin explicación parece
-        // una función rota, y el usuario no tiene por qué adivinar que hace falta cargar datos.
-        if (commits == 0 || prs == 0 || sinConfirmar) {
-            Spacer(Modifier.height(18.dp))
-            Text(t("stats.pending"), style = MaterialTheme.typography.titleSmall)
+        // --- 1. ¿Se puede confiar en esto? ---
+        Spacer(Modifier.height(20.dp))
+        Text(t("stats.trust"), style = MaterialTheme.typography.titleSmall)
+        Spacer(Modifier.height(4.dp))
+        if (commits == 0) Aviso(t("stats.needCommits"), t("stats.goIdentities"), true) { irA(1) }
+        if (prs == 0) Aviso(t("stats.needPrs"), t("stats.goReview"), true) { irA(3) }
+        if (sinConfirmar && commits > 0) Aviso(t("stats.needConfirm"), t("stats.goIdentities"), true) { irA(1) }
+        if (cobertura.first > 0) {
+            Aviso(t("stats.coverage", cobertura.second, cobertura.first), null, cobertura.second < cobertura.first) {}
+        }
+        // Los commits gigantes distorsionan el reparto más que cualquier otra cosa. Decirlo acá,
+        // con el número, es lo que evita leer el anillo como si describiera el trabajo.
+        if (bulk.first > 0 && bulk.third > 0) {
+            Aviso(
+                t("stats.bulk", bulk.first, Math.round(100.0 * bulk.second / bulk.third).toInt()),
+                null,
+                true,
+            ) {}
+        }
+
+        // --- 2. ¿Cómo se reparte el trabajo? ---
+        if (porPersona.isNotEmpty()) {
+            Spacer(Modifier.height(20.dp))
+            Text(t("stats.split"), style = MaterialTheme.typography.titleSmall)
+            Text(
+                t("stats.splitNote", io.acr.data.CommitStatRepository.BULK_COMMIT_LINES),
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Spacer(Modifier.height(8.dp))
+            // Seis porciones y el resto agrupado: con trece, ninguna se distingue de la de al lado.
+            val top = porPersona.take(6)
+            val resto = porPersona.drop(6).sumOf { it.second }
+            val trozos = top.mapIndexed { i, (n, v) -> Segment(v, SLICE_COLORS[i % SLICE_COLORS.size], n) } +
+                if (resto > 0) listOf(Segment(resto, SLICE_COLORS[6], t("stats.others", porPersona.size - 6))) else emptyList()
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                DonutChart(
+                    trozos,
+                    centerValue = "%,.0f".format(porPersona.sumOf { it.second }),
+                    centerLabel = t("stats.linesTouched"),
+                )
+                Spacer(Modifier.width(16.dp))
+                DonutLegend(trozos)
+            }
+        }
+
+        // --- 3. ¿Qué encontró la revisión? ---
+        val totalHallazgos = hallazgos.first + hallazgos.second + hallazgos.third
+        if (totalHallazgos > 0) {
+            Spacer(Modifier.height(20.dp))
+            Text(t("stats.review"), style = MaterialTheme.typography.titleSmall)
+            Spacer(Modifier.height(8.dp))
+            val porGravedad = listOf(
+                Segment(hallazgos.first.toDouble(), ChartColors.blocker, t("rstats.blocker")),
+                Segment(hallazgos.second.toDouble(), ChartColors.major, t("rstats.major")),
+                Segment(hallazgos.third.toDouble(), ChartColors.minor, t("rstats.minor")),
+            ).filter { it.value > 0 }
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                DonutChart(porGravedad, totalHallazgos.toString(), t("stats.findingsCenter"))
+                Spacer(Modifier.width(16.dp))
+                Column {
+                    DonutLegend(porGravedad)
+                    Spacer(Modifier.height(8.dp))
+                    // Lo que quedó sin mirar es tan informativo como lo que se encontró: son
+                    // observaciones publicadas de las que nadie sabe si se atendieron.
+                    Text(
+                        t("stats.unverified", sinVerificar.first, sinVerificar.second),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = if (sinVerificar.first > sinVerificar.second / 2)
+                            MaterialTheme.colorScheme.error
+                        else MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+        }
+
+        // --- Tendencia ---
+        if (trimestres.size > 1) {
+            Spacer(Modifier.height(20.dp))
+            Text(t("stats.trend"), style = MaterialTheme.typography.titleSmall)
+            Text(
+                t("stats.trendNote"),
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Spacer(Modifier.height(6.dp))
+            MiniBars(
+                values = trimestres.map { it.commits.toDouble() },
+                labels = trimestres.map { it.label.substringAfter('-') + " " + it.label.take(4).drop(2) },
+                modifier = Modifier.width(460.dp),
+            )
             Spacer(Modifier.height(4.dp))
-            if (commits == 0) Pendiente(t("stats.needCommits"), t("stats.goIdentities")) { irA(1) }
-            if (prs == 0) Pendiente(t("stats.needPrs"), t("stats.goReview")) { irA(3) }
-            if (sinConfirmar && commits > 0) Pendiente(t("stats.needConfirm"), t("stats.goIdentities")) { irA(1) }
+            Text(
+                trimestres.joinToString("   ") { "${it.label.substringAfter('-')}: ${it.commits}c · ${it.people}p" },
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
         }
 
         Spacer(Modifier.height(20.dp))
@@ -129,6 +249,21 @@ private fun StatsHome(ctx: AppContext, irA: (Int) -> Unit) {
             style = MaterialTheme.typography.labelSmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
+    }
+}
+
+/** Una línea de estado, con su acción si la tiene. Rojo sólo cuando algo falta o distorsiona. */
+@Composable
+private fun Aviso(texto: String, accion: String?, alerta: Boolean, onClick: () -> Unit) {
+    Row(Modifier.fillMaxWidth().padding(vertical = 2.dp), verticalAlignment = Alignment.CenterVertically) {
+        Text(
+            texto,
+            style = MaterialTheme.typography.bodySmall,
+            color = if (alerta) MaterialTheme.colorScheme.error
+            else MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.weight(1f),
+        )
+        if (accion != null) TextButton(onClick = onClick) { Text(accion) }
     }
 }
 
@@ -152,18 +287,6 @@ private fun Tarjeta(titulo: String, valor: String, accion: String, onClick: () -
     }
 }
 
-@Composable
-private fun Pendiente(texto: String, accion: String, onClick: () -> Unit) {
-    Row(Modifier.fillMaxWidth().padding(vertical = 2.dp), verticalAlignment = Alignment.CenterVertically) {
-        Text(
-            texto,
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.weight(1f),
-        )
-        TextButton(onClick = onClick) { Text(accion) }
-    }
-}
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
