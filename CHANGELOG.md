@@ -3,6 +3,31 @@
 Reglas de numeración en [CLAUDE.md](CLAUDE.md): un requerimiento **nuevo** incrementa *major*;
 cambiar uno **existente** incrementa *patch*.
 
+## 38.0.0
+
+Requerimiento nuevo: **revisar sólo lo que llegó después de la última review**.
+
+- Cuando un PR ya tiene una review terminada y llegaron commits nuevos, la corrida mira
+  `últimoRevisado..head` en vez de la rama entera, y arrastra los hallazgos que quedaron
+  abiertos: por cada uno el modelo dictamina si **sigue en pie**, si **se corrigió** o si **dejó
+  de aplicar**, con la evidencia del diff.
+- **Medido sobre la historia real del PR #149**: sus 21 re-reviews continuables releyeron 273.420
+  líneas para mirar 11.819 nuevas. El trabajo de leer el diff baja al **4,3%**. Ese PR costó
+  US$ 225, el 60% de todo el consumo de la app.
+- **Vuelve a la pasada completa sola** cuando no puede continuar: si el autor rebasó o forzó el
+  push, el commit revisado ya no está en la historia y el rango daría basura. Ante cualquier duda
+  —git falla, el objeto no está en el clon— mira todo: una review completa de sobra cuesta plata,
+  una incremental sobre una historia reescrita devuelve algo en lo que no se puede confiar.
+- **Ningún hallazgo se pierde en el camino.** Si el modelo devuelve la lista de dictámenes
+  incompleta, lo que no dictaminó se arrastra abierto igual. Un hallazgo que desaparece sin que
+  nadie lo resuelva ni lo descarte es lo que una herramienta de revisión no puede hacer.
+- Los hallazgos se **mueven** a la review nueva en vez de copiarse, así que conservan su id, su
+  publicación y su ancla. Eso además corta de raíz la acumulación de filas muertas: de 87
+  hallazgos sin publicar ni descartar, 81 eran residuo de reviews superadas.
+- Botón **Revisar todo de nuevo** para pedir la rama entera, y la pantalla dice desde qué commit
+  miró: una corrida que revisó sólo una parte tiene que decirlo.
+- La pasada final sigue siendo siempre completa: es el contrapeso de encadenar incrementales.
+
 ## 37.0.0
 
 Requerimiento nuevo: **importar las convenciones que el repositorio ya trae escritas**.

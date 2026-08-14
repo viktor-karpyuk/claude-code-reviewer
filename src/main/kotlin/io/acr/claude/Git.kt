@@ -23,6 +23,24 @@ object Git {
         run(dir, listOf("git", "rev-parse", "origin/$branch")).takeIf { it.ok }?.output?.trim()
     }
 
+    /**
+     * ¿[maybeAncestor] está en la historia de [descendant]?
+     *
+     * Es la pregunta que decide si una review incremental es posible: si el commit que revisamos
+     * sigue siendo ancestro del actual, `viejo..nuevo` son exactamente los commits que llegaron
+     * después. Si el autor rebasó o forzó el push, ese commit ya no está en la historia y el rango
+     * daría vacío o basura: la review miraría cualquier cosa menos el cambio.
+     *
+     * `--is-ancestor` contesta por código de salida: 0 sí, 1 no, otro para errores. Un objeto que
+     * no está en el clon es error, no un "no", pero acá los dos llevan al mismo lado —mirar todo—
+     * así que alcanza con distinguir el 0.
+     */
+    suspend fun isAncestor(dir: File, maybeAncestor: String, descendant: String): Boolean =
+        withContext(Dispatchers.IO) {
+            if (maybeAncestor.isBlank() || descendant.isBlank()) return@withContext false
+            run(dir, listOf("git", "merge-base", "--is-ancestor", maybeAncestor, descendant)).ok
+        }
+
     /** Un archivo del diff con sus líneas agregadas y borradas. */
     data class FileChange(val path: String, val added: Int, val deleted: Int) {
         val touched: Int get() = added + deleted

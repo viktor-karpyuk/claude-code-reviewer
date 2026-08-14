@@ -89,9 +89,21 @@ diff nuevo.
 calcula `sinceSha`, y el prompt de seguimiento ya opera con un `rangeSinceReview`. Es extender
 ese patrón a la review principal.
 
-**Efecto esperado:** en un PR tipo #149, 23 lecturas completas se vuelven 1 completa + 22 diffs
-chicos. Con que la pasada incremental cueste un tercio de la completa (esperable: el diff entre
-dos pushes es una fracción de la rama), el histórico habría costado ~US$ 90 en vez de US$ 225.
+**Efecto medido (2026-08-14, sobre la historia real del #149):** de sus 22 reviews DONE, **las 21
+transiciones eran continuables** —ninguna con la historia reescrita—. Releyeron **273.420 líneas
+para mirar 11.819 nuevas: el trabajo de leer el diff baja al 4,3%.**
+
+| Transición (muestra) | Rama entera | Sólo lo nuevo |
+|---|---|---|
+| `0f1c86a→41da7a6` | 5.439 líneas | 139 |
+| `4304519→f55faf4` | 12.248 | 108 |
+| `019159a→6629070` | 13.574 | 37 |
+| `36b8c48→74832e4` | 15.043 | 14 |
+
+El costo **no** baja al 4,3%: hay piso fijo —prompt, guías, hilo de comentarios, los archivos que
+igual hay que abrir para entender el contexto—. Lo que se desploma es la parte que crecía con la
+rama, que es justo la que hacía que la pasada 25 costara más que la primera.
+
 Bonus: deja de fabricar filas muertas (§1.3), porque los hallazgos vigentes se arrastran en vez
 de regenerarse con otro `review_id`.
 
@@ -216,3 +228,6 @@ Según su propia spec, empezando por resolución de identidad. Se re-planifica a
 | D3 | M2 avisa, no bloquea | re-correr con otra profundidad/guías es un uso legítimo |
 | D4′ | La guía importada **no** se re-lee sola: se detecta la diferencia y se avisa | re-leer contradice la decisión de la migración v34 (un `checkout` cambiaría las reglas en silencio); congelar sin avisar deja criterios viejos. Avisar resuelve las dos |
 | D5 | Pasada final nunca es incremental | es el contrapeso de la deriva de N incrementales |
+| D6 | Los hallazgos se **mueven** a la review nueva, no se copian | copiar duplicaría el mismo problema una vez por corrida, con el mismo `published_id`: pantalla duplicada, contadores dobles y filas muertas acumulándose — que es lo que ya estaba pasando |
+| D7 | Lo que el modelo no dictamina se arrastra **abierto** | si devuelve la lista incompleta, dejarlo atrás haría desaparecer un problema que nadie resolvió. Un hallazgo perdido en silencio es lo que una herramienta de revisión no puede hacer |
+| D8 | Ante cualquier duda de git, review completa | `--is-ancestor` devuelve 128 si el objeto no está en el clon; tratar eso como "sí, continuá" revisaría el código equivocado |

@@ -526,6 +526,8 @@ class ReviewEngine(
         kind: ProjectKind? = repo.projectKind,
         model: String = repo.defaultModel,
         auto: Boolean = false,
+        /** Pedir la rama entera aunque se pudiera mirar sólo lo nuevo. */
+        forceFull: Boolean = false,
     ): ReviewOutcome {
         val claim = key(repo.id, pr.id)
         if (!inFlight.add(claim)) {
@@ -579,9 +581,20 @@ class ReviewEngine(
             return ReviewOutcome.Error(msg)
         }
 
-        // El plan necesita el diff, así que va después del fetch.
+        // ¿Hay que mirar la rama entera o alcanza con lo que llegó después de la última review?
+        val decision = decideScope(
+            previous = reviews.latestDoneFor(repo.id, pr.id),
+            headSha = pr.headSha,
+            forceFull = forceFull,
+        ) { a, b -> kotlinx.coroutines.runBlocking { Git.isAncestor(workDir, a, b) } }
+        val incremental = decision.scope as? ReviewScope.Incremental
+
+        // El plan necesita el diff, así que va después del fetch. Se dimensiona con el rango que
+        // esta corrida va a mirar: plantear una pasada pesada por el tamaño de la rama entera,
+        // cuando lo nuevo son treinta líneas, es pagar por trabajo que no se va a hacer.
         val range = "origin/${pr.targetBranch}...origin/${pr.sourceBranch}"
-        val plan = ReviewPlanner.plan(Git.numstat(workDir, range), depth, kind)
+        val rangoDelPlan = incremental?.let { "${it.sinceSha}..${pr.headSha}" } ?: range
+        val plan = ReviewPlanner.plan(Git.numstat(workDir, rangoDelPlan), depth, kind)
         val resolvedModel = model.ifBlank { plan.depth.defaultModel }
         emit(pr.id) {
             it.copy(
@@ -591,8 +604,23 @@ class ReviewEngine(
             )
         }
 
+        // Los hallazgos que la corrida anterior dejó abiertos. Se leen antes de crear la review
+        // nueva: son la entrada del prompt y lo que después se arrastra o se cierra.
+        val previos = incremental?.let { findings.openForCarry(it.previousReviewId) }.orEmpty()
+        if (incremental != null) {
+            emit(pr.id) { p ->
+                p.copy(
+                    lines = p.lines +
+                        "Sólo lo nuevo desde ${incremental.sinceSha.take(7)}" +
+                        if (previos.isEmpty()) "." else ", arrastrando ${previos.size} hallazgo(s) abiertos.",
+                )
+            }
+        }
+
         val reviewId = reviews.start(
             repo.id, pr.id, pr.title, pr.headSha, plan.depth, plan.kind, resolvedModel, auto,
+            previousReviewId = incremental?.previousReviewId,
+            sinceSha = incremental?.sinceSha,
         )
         // Todo lo que sigue va bajo guarda: cualquier excepción no atrapada (una consulta a la
         // base, el parseo, el guardado de hallazgos) dejaba la review en RUNNING para siempre,
@@ -609,10 +637,17 @@ class ReviewEngine(
             }
 
             val language = prefs.get(io.acr.AppContext.PREF_LANGUAGE) ?: "español"
-            val prompt = ReviewPrompt.build(
-                pr, language, plan.depth, plan.kind, existing,
-                guidelines = guidelines.forRepo(repo.id),
-            )
+            val prompt = if (incremental != null) {
+                ReviewPrompt.buildIncremental(
+                    pr, language, plan.depth, plan.kind, incremental.sinceSha, previos, existing,
+                    guidelines = guidelines.forRepo(repo.id),
+                )
+            } else {
+                ReviewPrompt.build(
+                    pr, language, plan.depth, plan.kind, existing,
+                    guidelines = guidelines.forRepo(repo.id),
+                )
+            }
 
             var proc: Process? = null
             val result = try {
@@ -623,7 +658,8 @@ class ReviewEngine(
                     model = resolvedModel,
                     allowedTools = plan.depth.allowedTools(),
                     disallowedTools = ReviewPrompt.DISALLOWED_TOOLS,
-                    jsonSchema = ReviewPrompt.SCHEMA,
+                    jsonSchema = if (incremental != null) ReviewPrompt.INCREMENTAL_SCHEMA
+                                 else ReviewPrompt.SCHEMA,
                     register = { p ->
                         proc = p
                         running[pr.id] = p
@@ -684,12 +720,37 @@ class ReviewEngine(
 
             val parsed = parseFindings(result.structured ?: result.text, repo.id, pr.id, reviewId)
             findings.replaceForReview(reviewId, repo.id, pr.id, parsed.second)
+            // El arrastre va DESPUÉS de guardar los nuevos: `replaceForReview` borra por
+            // review_id antes de insertar, y si los arrastrados ya estuvieran ahí se irían con
+            // ese DELETE. Sería perder hallazgos abiertos sin que nadie lo decida.
+            val carry = if (incremental != null) {
+                val stats = applyCarried(
+                    previos,
+                    parseCarried(result.structured ?: result.text, previos.map { it.id }.toSet()),
+                    reviewId,
+                )
+                emit(pr.id) { p ->
+                    p.copy(lines = p.lines + "Anteriores: ${stats.stillOpen} siguen abiertos, ${stats.fixed} corregidos, ${stats.obsolete} ya no aplican.")
+                }
+                stats
+            } else null
             val warning = if (result.permissionDenials.isEmpty()) "" else
                 "\n\n> ⚠️ Esta review corrió con ${result.permissionDenials.size} herramienta(s) denegada(s) " +
                     "(${result.permissionDenials.distinct().joinToString(", ")}), así que puede estar incompleta."
+            // Una review incremental que dice "encontré 2 problemas" mientras arrastra 5 abiertos
+            // subestima lo que falta. El cuerpo es lo que se publica: tiene que contar todo.
+            val nota = carry?.let {
+                buildString {
+                    append("\n\n_Revisé sólo los commits nuevos desde `${incremental!!.sinceSha.take(7)}`.")
+                    if (it.stillOpen > 0) append(" Quedan ${it.stillOpen} observación(es) anterior(es) sin resolver.")
+                    if (it.fixed > 0) append(" ${it.fixed} de la review anterior quedaron corregidas.")
+                    if (it.obsolete > 0) append(" ${it.obsolete} dejaron de aplicar.")
+                    append("_")
+                }
+            }.orEmpty()
             reviews.finish(
                 reviewId,
-                renderMarkdown(parsed.first, parsed.second) + warning,
+                renderMarkdown(parsed.first, parsed.second) + nota + warning,
                 result.sessionId,
                 result.costUsd,
                 result.tokensIn,
@@ -752,6 +813,87 @@ class ReviewEngine(
         }
         return summary to list
     }
+
+    /** El dictamen del modelo sobre un hallazgo anterior. */
+    data class Carried(
+        val id: String,
+        val verdict: CarryVerdict,
+        val line: Int?,
+        val evidence: String,
+    )
+
+    /**
+     * Lee los dictámenes sobre los hallazgos anteriores.
+     *
+     * Sólo se aceptan ids que estaban en la lista que se mandó: un id inventado —o de otro PR—
+     * movería o cerraría un hallazgo que nadie miró. Se ignoran en silencio en vez de fallar,
+     * porque el resto de la review es válido y perderla entera por un id de más sería peor.
+     *
+     * Un veredicto que no se entiende cae en STILL_OPEN: dejar algo abierto de más se corrige
+     * mirándolo; cerrar algo que sigue roto se descubre en producción.
+     */
+    internal fun parseCarried(raw: String, valid: Set<String>): List<Carried> {
+        val cleaned = raw.trim().removePrefix("```json").removePrefix("```").removeSuffix("```").trim()
+        val obj = runCatching {
+            kotlinx.serialization.json.Json { ignoreUnknownKeys = true; isLenient = true }
+                .parseToJsonElement(cleaned).jsonObject
+        }.getOrNull() ?: return emptyList()
+
+        return (obj["carried"] as? JsonArray ?: JsonArray(emptyList())).mapNotNull { el ->
+            val o = el as? JsonObject ?: return@mapNotNull null
+            val id = o["id"]?.jsonPrimitive?.contentOrNull?.takeIf { it in valid } ?: return@mapNotNull null
+            Carried(
+                id = id,
+                verdict = runCatching {
+                    CarryVerdict.valueOf(o["verdict"]?.jsonPrimitive?.contentOrNull.orEmpty())
+                }.getOrDefault(CarryVerdict.STILL_OPEN),
+                line = o["line"]?.jsonPrimitive?.contentOrNull?.toIntOrNull(),
+                evidence = o["evidence"]?.jsonPrimitive?.contentOrNull.orEmpty(),
+            )
+        }.distinctBy { it.id }
+    }
+
+    /**
+     * Aplica los dictámenes y arrastra lo que sigue abierto a la review nueva.
+     *
+     * Los hallazgos que el modelo NO dictaminó se arrastran igual, abiertos. Es la decisión
+     * importante de acá: si el modelo se olvida de uno —o devuelve la lista incompleta—, dejarlo
+     * atrás lo haría desaparecer de la pantalla sin que nadie lo haya resuelto ni decidido
+     * descartar. Un hallazgo que se pierde en silencio es exactamente lo que una herramienta de
+     * revisión no puede hacer.
+     */
+    internal fun applyCarried(
+        previos: List<io.acr.data.Finding>,
+        dictamenes: List<Carried>,
+        newReviewId: String,
+    ): CarryStats {
+        val porId = dictamenes.associateBy { it.id }
+        var abiertos = 0
+        var corregidos = 0
+        var obsoletos = 0
+        previos.forEach { f ->
+            when (porId[f.id]?.verdict ?: CarryVerdict.STILL_OPEN) {
+                CarryVerdict.STILL_OPEN -> {
+                    findings.carryForward(f.id, newReviewId, porId[f.id]?.line)
+                    abiertos++
+                }
+                CarryVerdict.FIXED -> {
+                    // Se queda en la review anterior, marcado: es trabajo terminado, y moverlo a
+                    // la nueva lo mostraría como pendiente.
+                    findings.setResolution(f.id, io.acr.data.Resolution.RESOLVED, porId[f.id]?.evidence)
+                    corregidos++
+                }
+                CarryVerdict.OBSOLETE -> {
+                    findings.setResolution(f.id, io.acr.data.Resolution.RESOLVED, porId[f.id]?.evidence)
+                    findings.close(f.id, true)
+                    obsoletos++
+                }
+            }
+        }
+        return CarryStats(abiertos, corregidos, obsoletos)
+    }
+
+    data class CarryStats(val stillOpen: Int, val fixed: Int, val obsolete: Int)
 
     /**
      * Corrige o descarta anclas imposibles antes de guardar.

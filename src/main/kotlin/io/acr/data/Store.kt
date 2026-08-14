@@ -600,6 +600,21 @@ class Store(private val dbPath: Path) : AutoCloseable {
             ALTER TABLE guideline ADD COLUMN linked_path TEXT;--split--
             ALTER TABLE guideline ADD COLUMN linked_hash TEXT
             """.trimIndent(),
+
+            // v36 — una review puede continuar a otra en vez de empezar de cero.
+            //
+            // Hasta acá cada corrida miraba la rama entera. En esta base eso significó que el PR
+            // #149, de 23 commits, se revisara 25 veces de punta a punta por US$ 225: el 60% de
+            // todo el consumo, releyendo archivos ya aprobados 24 veces.
+            //
+            // `previous_review_id` es de dónde vienen los hallazgos arrastrados y `since_sha` el
+            // commit desde el que se miró. Se guardan aunque se puedan deducir porque una review
+            // que miró sólo una parte tiene que poder decirlo después: leer un resultado sin saber
+            // qué alcance tuvo lleva a creer que se revisó algo que nadie miró en esa corrida.
+            """
+            ALTER TABLE review ADD COLUMN previous_review_id TEXT;--split--
+            ALTER TABLE review ADD COLUMN since_sha TEXT
+            """.trimIndent(),
         )
     }
 }

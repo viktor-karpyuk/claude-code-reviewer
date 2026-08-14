@@ -920,12 +920,12 @@ fun ReviewPanel(
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
             // Correr de verdad. Se define acá para que el botón y la confirmación disparen
             // exactamente lo mismo: si fueran dos copias, la de la confirmación quedaría vieja.
-            fun lanzar() {
+            fun lanzar(completa: Boolean = false) {
                 val target = pr ?: return
                 // appScope y no el de la pantalla: la review tiene que sobrevivir a que el
                 // usuario navegue a otro PR mientras corre.
                 ctx.appScope.launch {
-                    when (val out = ctx.engine.review(repo, target, depth, kind, repo.defaultModel)) {
+                    when (val out = ctx.engine.review(repo, target, depth, kind, repo.defaultModel, forceFull = completa)) {
                         is ReviewOutcome.Ok -> {
                             review = out.record
                             draft = out.record.body.orEmpty()
@@ -950,6 +950,15 @@ fun ReviewPanel(
                 },
             ) { Text(if (review == null) io.acr.i18n.t("review.run") else io.acr.i18n.t("review.rerun")) }
 
+            // La escotilla. Una review incremental se apoya en que la anterior miró bien lo suyo;
+            // si hay motivo para dudar de eso —o si el cambio nuevo toca algo transversal— tiene
+            // que haber forma de pedir la rama entera sin tener que borrar nada.
+            if (pr != null && !running && ctx.reviews.latestDoneFor(repo.id, prId) != null) {
+                TextButton(onClick = { lanzar(completa = true) }) {
+                    Text(io.acr.i18n.t("review.runFull"))
+                }
+            }
+
             repetir?.let { previa ->
                 RerunDialog(
                     previa = previa,
@@ -964,6 +973,16 @@ fun ReviewPanel(
             }
 
             Spacer(Modifier.weight(1f))
+            // Que la corrida haya mirado sólo una parte no puede quedar implícito: leer un
+            // resultado sin saber su alcance lleva a creer que se revisó algo que nadie miró.
+            review?.sinceSha?.let { desde ->
+                Text(
+                    io.acr.i18n.t("review.incrementalFrom", desde.take(7)),
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Spacer(Modifier.width(10.dp))
+            }
             review?.costUsd?.let {
                 Text(
                     "US$ ${"%.4f".format(it)}",

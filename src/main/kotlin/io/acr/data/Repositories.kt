@@ -194,7 +194,14 @@ data class ReviewRecord(
     val finalPassHead: String? = null,
     val finalPassSummary: String? = null,
     val finalPassBlockers: Int = 0,
-)
+    /** La review que esta continúa, cuando miró sólo los commits nuevos. */
+    val previousReviewId: String? = null,
+    /** El commit desde el que miró. Null = miró la rama entera. */
+    val sinceSha: String? = null,
+) {
+    /** Miró sólo lo que llegó después de otra review. */
+    val incremental: Boolean get() = sinceSha != null
+}
 
 /** Lo mínimo para decidir si vale la pena repetir una review: cuándo fue, qué encontró, qué costó. */
 data class PriorReview(
@@ -215,12 +222,15 @@ class ReviewRepository(private val store: Store) {
         projectKind: io.acr.claude.ProjectKind,
         model: String,
         auto: Boolean,
+        previousReviewId: String? = null,
+        sinceSha: String? = null,
     ): String {
         val id = UlidCreator.getUlid().toString()
         store.stmt(
             """INSERT INTO review(id, repo_id, pr_id, pr_title, head_sha, status, created_at,
-                                 depth, project_kind, model, trigger_kind)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
+                                 depth, project_kind, model, trigger_kind,
+                                 previous_review_id, since_sha)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
         ) { ps ->
             ps.setString(1, id)
             ps.setString(2, repoId)
@@ -233,6 +243,8 @@ class ReviewRepository(private val store: Store) {
             ps.setString(9, projectKind.name)
             ps.setString(10, model)
             ps.setString(11, if (auto) "AUTO" else "MANUAL")
+            ps.setString(12, previousReviewId)
+            ps.setString(13, sinceSha)
             ps.executeUpdate()
         }
         return id
@@ -431,6 +443,18 @@ class ReviewRepository(private val store: Store) {
 
     fun latestFor(repoId: String, prId: Long): ReviewRecord? =
         query("WHERE repo_id = ? AND pr_id = ? ORDER BY created_at DESC LIMIT 1") {
+            it.setString(1, repoId)
+            it.setLong(2, prId)
+        }.firstOrNull()
+
+    /**
+     * La última review terminada, que es sobre la que se puede seguir.
+     *
+     * Sólo DONE: continuar una que falló significaría dar por revisados unos commits que nadie
+     * llegó a mirar, y el agujero quedaría escondido para siempre en el medio de la rama.
+     */
+    fun latestDoneFor(repoId: String, prId: Long): ReviewRecord? =
+        query("WHERE repo_id = ? AND pr_id = ? AND status = 'DONE' ORDER BY created_at DESC LIMIT 1") {
             it.setString(1, repoId)
             it.setLong(2, prId)
         }.firstOrNull()
@@ -694,7 +718,8 @@ class ReviewRepository(private val store: Store) {
             """SELECT id, repo_id, pr_id, pr_title, head_sha, status, body, error,
                       session_id, cost_usd, published_url, created_at, depth, project_kind, model,
                       trigger_kind, denied_tools, resolution_summary, resolution_at,
-                      resolution_head, final_pass_head, final_pass_summary, final_pass_blockers
+                      resolution_head, final_pass_head, final_pass_summary, final_pass_blockers,
+                      previous_review_id, since_sha
                FROM review $tail""",
         ) { ps ->
             bind(ps)
@@ -729,6 +754,8 @@ class ReviewRepository(private val store: Store) {
                             finalPassHead = rs.getString(21),
                             finalPassSummary = rs.getString(22),
                             finalPassBlockers = rs.getInt(23),
+                            previousReviewId = rs.getString(24),
+                            sinceSha = rs.getString(25),
                         ),
                     )
                 }
@@ -1073,6 +1100,47 @@ class FindingRepository(private val store: Store) {
     }
 
     /** Cierra el hilo sin esperar cambios: se habló y quedó saldado. Se puede reabrir. */
+    /**
+     * Los hallazgos que una review incremental tiene que dictaminar: los abiertos de la anterior.
+     *
+     * Descartado, cerrado en la conversación o ya verificado como resuelto no entra: son
+     * decisiones tomadas, y volver a preguntar por ellas gasta contexto para reabrir algo que
+     * alguien ya cerró.
+     */
+    fun openForCarry(reviewId: String): List<Finding> =
+        query(
+            """WHERE review_id = ? AND dismissed_at IS NULL AND closed_at IS NULL
+                 AND (resolution IS NULL OR resolution <> 'RESOLVED')""",
+        ) { it.setString(1, reviewId) }
+
+    /**
+     * Mueve un hallazgo que sigue abierto a la review nueva.
+     *
+     * Se mueve la fila en vez de copiarla, y eso es deliberado. Copiar dejaría dos filas del mismo
+     * problema —una por corrida— con el mismo `published_id`: la pantalla mostraría el hallazgo
+     * duplicado, los contadores lo contarían dos veces y en la base quedarían acumulándose filas
+     * muertas. De hecho es lo que venía pasando: de 87 hallazgos sin publicar ni descartar, 81
+     * eran residuo de reviews superadas.
+     *
+     * Al mover se conserva el id, y con él todo lo que cuelga: si estaba publicado sigue
+     * publicado, si tenía nota de resolución la mantiene, y el comentario del PR sigue apuntando
+     * al mismo lugar. El historial no se resiente porque la línea de tiempo se arma con reviews,
+     * publicaciones y comentarios, no con los hallazgos de cada corrida.
+     *
+     * @param newLine la línea si el código se movió. Null deja la que tenía: un hallazgo publicado
+     *   está anclado a un comentario en una línea concreta, y reescribirla con un null la borraría.
+     */
+    fun carryForward(id: String, toReviewId: String, newLine: Int?) {
+        store.stmt(
+            "UPDATE finding SET review_id = ?, line_no = COALESCE(?, line_no) WHERE id = ?",
+        ) { ps ->
+            ps.setString(1, toReviewId)
+            if (newLine == null) ps.setNull(2, java.sql.Types.INTEGER) else ps.setInt(2, newLine)
+            ps.setString(3, id)
+            ps.executeUpdate()
+        }
+    }
+
     fun close(id: String, closed: Boolean) {
         store.stmt("UPDATE finding SET closed_at = ? WHERE id = ?") { ps ->
             ps.setString(1, if (closed) Instant.now().toString() else null)

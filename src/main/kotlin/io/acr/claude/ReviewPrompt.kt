@@ -24,6 +24,33 @@ object ReviewPrompt {
     },"required":["summary","findings"]}
     """.trimIndent()
 
+    /**
+     * Igual que [SCHEMA] más el dictamen sobre cada hallazgo anterior.
+     *
+     * Los dos van juntos en una sola corrida a propósito: separar "¿qué hay de nuevo?" de "¿lo
+     * anterior sigue en pie?" son dos lecturas del mismo diff y dos veces el mismo costo, que es
+     * justamente lo que esta mejora viene a evitar.
+     */
+    val INCREMENTAL_SCHEMA = """
+    {"type":"object","properties":{
+      "summary":{"type":"string"},
+      "findings":{"type":"array","items":{"type":"object","properties":{
+        "file":{"type":"string"},
+        "line":{"type":["integer","null"]},
+        "severity":{"type":"string","enum":["blocker","major","minor"]},
+        "title":{"type":"string"},
+        "body":{"type":"string"},
+        "suggestion":{"type":["string","null"]}
+      },"required":["file","severity","title","body"]}},
+      "carried":{"type":"array","items":{"type":"object","properties":{
+        "id":{"type":"string"},
+        "verdict":{"type":"string","enum":["STILL_OPEN","FIXED","OBSOLETE"]},
+        "line":{"type":["integer","null"]},
+        "evidence":{"type":"string"}
+      },"required":["id","verdict","evidence"]}}
+    },"required":["summary","findings","carried"]}
+    """.trimIndent()
+
     /** Veredicto por hallazgo, más el global. Los ids vuelven tal cual para poder anclar cada uno. */
     val RESOLUTION_SCHEMA = """
     {"type":"object","properties":{
@@ -253,6 +280,130 @@ object ReviewPrompt {
         Breve: 2 a 6 oraciones. Es una respuesta en un hilo, no otra review.
         Tono de par, no de auditor. Nada de condescendencia ni de disculpas de más.
     """.trimIndent()
+
+    /**
+     * Prompt de una review que mira sólo lo que llegó después de la anterior.
+     *
+     * La diferencia con [build] no es sólo el rango: acá hay que hacer dos trabajos en una sola
+     * lectura del diff —revisar lo nuevo y dictaminar sobre lo viejo— porque separarlos costaría
+     * dos veces lo mismo que se está tratando de ahorrar.
+     *
+     * Se le da el rango completo además del corto, y no por costumbre: un cambio nuevo puede
+     * romper algo que se agregó tres commits atrás, y sin poder mirar el resto de la rama eso es
+     * invisible. Lo que se acota es qué *se reporta*, no qué se *puede leer*.
+     *
+     * @param sinceSha el commit ya revisado. El rango nuevo es `sinceSha..head`.
+     * @param carried los hallazgos abiertos de la review anterior, con su id: vuelven dictaminados.
+     */
+    fun buildIncremental(
+        pr: PullRequest,
+        language: String,
+        depth: ReviewDepth,
+        kind: ProjectKind,
+        sinceSha: String,
+        carried: List<io.acr.data.Finding>,
+        existing: List<StoredComment> = emptyList(),
+        guidelines: List<io.acr.data.Guideline> = emptyList(),
+    ): String {
+        val rangoCompleto = "origin/${pr.targetBranch}...origin/${pr.sourceBranch}"
+        val rangoNuevo = "$sinceSha..${pr.headSha}"
+        val blocks = listOf(
+            """
+            Sos un revisor de código senior. Este pull request YA SE REVISÓ antes: tu trabajo ahora
+            es mirar lo que llegó después y decidir qué pasó con lo que se había señalado. Devolvé
+            UNICAMENTE el JSON que se describe al final.
+
+            PULL REQUEST
+            - Título: ${pr.title}
+            - Autor: ${pr.author}
+            - Rama: ${pr.sourceBranch} -> ${pr.targetBranch}
+            - Commit head actual: ${pr.headSha}
+            - Último commit ya revisado: $sinceSha
+            - **Commits nuevos a revisar: $rangoNuevo**
+            - Rama completa, para contexto: $rangoCompleto
+
+            Los comandos de git de sólo lectura YA ESTAN AUTORIZADOS en esta sesión: corrélos sin
+            pedir permiso y sin avisar que no podrías. Si uno falla, mostrá el error exacto.
+
+            Empezá por `git diff --stat $rangoNuevo`: eso es lo que hay que revisar. Todo lo
+            anterior ya se revisó y no hace falta volver a mirarlo en busca de problemas nuevos.
+
+            PODÉS leer el resto de la rama —`git diff $rangoCompleto`, los archivos completos— y a
+            veces tenés que hacerlo: un cambio nuevo puede romper algo que se agregó antes, y eso
+            no se ve mirando sólo el diff corto. La regla no es qué podés leer sino qué reportás.
+            """.trimIndent(),
+
+            depth.instructions(),
+            kind.focus(),
+            guidelinesSection(guidelines),
+            threadSection(existing),
+            carriedSection(carried, language),
+
+            """
+            QUÉ REPORTAR COMO HALLAZGO NUEVO
+            Sólo problemas introducidos por los commits nuevos ($rangoNuevo), o problemas que esos
+            commits provocan en código anterior. Si algo ya estaba mal antes y sigue igual, no es
+            un hallazgo nuevo: o ya está en la lista de arriba, o se decidió no reportarlo.
+
+            QUÉ NO REPORTAR
+            - Problemas preexistentes en líneas que estos commits no tocaron.
+            - Repetir con otras palabras algo que ya está en la lista de hallazgos anteriores.
+              Si sigue en pie, va como STILL_OPEN en "carried", no como hallazgo nuevo.
+            - Cosas que un linter, el compilador o el type-checker ya detectan.
+            - Nitpicks de estilo que un ingeniero senior no marcaría.
+            - Falta de tests o documentación, salvo que un CLAUDE.md lo exija explícitamente.
+            - Hallazgos que no puedas verificar leyendo el código.
+
+            FORMATO DE SALIDA — JSON, sin texto alrededor
+            Un objeto con "summary", "findings" y "carried".
+
+            "findings": sólo lo NUEVO, con el mismo formato de siempre:
+            - "file": ruta EXACTA como aparece en el diff, relativa a la raíz del repo.
+            - "line": línea del LADO NUEVO, o null si es del archivo entero. Verificá el número
+              contra el diff: uno equivocado ancla el comentario en otro lado.
+            - "severity": "blocker" | "major" | "minor".
+            - "title": una línea, la afirmación concreta.
+            - "body": 2-4 oraciones en $language con el escenario de falla.
+            - "suggestion": cómo se arregla, o null si no podés proponer algo que sostengas.
+
+            "carried": UNA entrada por cada hallazgo anterior de la lista, ninguno de más ni de
+            menos, usando su "id" tal cual:
+            - "verdict": "STILL_OPEN" si el problema sigue ahí; "FIXED" si los commits nuevos lo
+              corrigieron; "OBSOLETE" si el código que lo motivaba ya no existe o cambió tanto que
+              la observación dejó de aplicar.
+            - "line": si sigue abierto y el código se movió, la línea nueva. Null si no cambió o
+              no aplica. Un hallazgo publicado quedó anclado a una línea que ahora puede ser otra.
+            - "evidence": qué miraste para decidirlo, citando el cambio concreto. **Que el autor
+              haya dicho que lo arregló no es evidencia; el diff sí lo es.** Ante la duda,
+              STILL_OPEN: cerrar algo que sigue roto es peor que dejarlo abierto de más.
+
+            "summary": una o dos oraciones en $language sobre lo que trajeron los commits nuevos.
+            """.trimIndent(),
+        )
+        return blocks.filter { it.isNotBlank() }.joinToString("\n\n")
+    }
+
+    /** Los hallazgos que vienen de la review anterior, para que el modelo los dictamine. */
+    private fun carriedSection(carried: List<io.acr.data.Finding>, language: String): String {
+        if (carried.isEmpty()) return ""
+        val items = carried.joinToString("\n\n") { f ->
+            buildString {
+                append("- id: ${f.id}\n")
+                append("  archivo: ${f.filePath}${f.lineNo?.let { ":$it" } ?: ""}\n")
+                append("  gravedad: ${f.severity}\n")
+                append("  título: ${f.title}\n")
+                append("  detalle: ${f.body.take(600)}")
+                if (f.publishedId != null) append("\n  (ya publicado como comentario en el PR)")
+            }
+        }
+        return """
+            HALLAZGOS DE LA REVIEW ANTERIOR — hay que dictaminar cada uno
+            Estos se señalaron antes y quedaron abiertos. Para cada uno decidí, MIRANDO EL CÓDIGO,
+            si sigue en pie, si se corrigió o si dejó de aplicar. Escribí en $language.
+
+            $items
+        """.trimIndent()
+    }
 
     fun build(
         pr: PullRequest,
