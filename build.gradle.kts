@@ -9,7 +9,7 @@ plugins {
 
 group = "io.acr"
 // Fuente ÚNICA de la versión. Ver CLAUDE.md para cuándo incrementar qué.
-version = "45.0.0"
+version = "46.0.0"
 
 repositories {
     mavenCentral()

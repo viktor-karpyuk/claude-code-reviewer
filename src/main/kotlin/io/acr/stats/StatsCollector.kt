@@ -126,6 +126,53 @@ class PrHistoryCollector(private val prs: io.acr.data.PrStatRepository) {
 }
 
 /**
+ * Cuenta los commits que llegaron después de que revisamos, para los PRs que tuvieron hallazgos
+ * publicados.
+ *
+ * La condición de los hallazgos publicados es la que le da sentido al número: los commits que
+ * llegan después de una review que no encontró nada son desarrollo normal, no corrección.
+ * Contarlos como retrabajo diría que alguien arregló algo que nadie le señaló.
+ */
+class ReworkCollector(private val prs: io.acr.data.PrStatRepository) {
+
+    suspend fun collect(
+        repos: List<RepoRecord>,
+        onProgress: (CollectProgress) -> Unit = {},
+    ): CollectProgress {
+        val porId = repos.associateBy { it.id }
+        val objetivos = prs.pendingRework()
+        var medidos = 0
+        for (o in objetivos) {
+            val repo = porId[o.repoId] ?: continue
+            val dir = File(repo.localPath)
+            if (!Git.isRepo(dir)) continue
+            prs.setRework(o.repoId, o.prId, contar(dir, o))
+            medidos++
+            if (medidos % 10 == 0) onProgress(CollectProgress(repo.name, medidos))
+        }
+        return CollectProgress(repos.firstOrNull()?.name.orEmpty(), medidos, done = true)
+    }
+
+    /**
+     * Cuántos commits hay entre el que revisamos y la punta de la rama.
+     *
+     * Devuelve null —y no cero— cuando no se puede saber: si el commit revisado ya no está en la
+     * rama, es porque hubo un rebase que reescribió la historia. Ahí "0 correcciones" sería una
+     * afirmación falsa, y contar todos los commits de la rama también.
+     */
+    private suspend fun contar(dir: File, o: io.acr.data.ReworkTarget): Int? {
+        if (o.reviewedSha.isBlank()) return null
+        // Si el commit revisado no es ancestro de la punta, la historia se reescribió.
+        if (!Git.isAncestor(dir, o.reviewedSha, "origin/${o.sourceBranch}")) return null
+        val res = Git.runRaw(
+            dir,
+            listOf("git", "rev-list", "--count", "${o.reviewedSha}..origin/${o.sourceBranch}"),
+        )
+        return if (!res.ok) null else res.output.trim().toIntOrNull()
+    }
+}
+
+/**
  * Los patrones de archivo generado que aplican a este repositorio.
  *
  * Hoy son los mismos para todos. Queda como punto de extensión porque la lista correcta depende

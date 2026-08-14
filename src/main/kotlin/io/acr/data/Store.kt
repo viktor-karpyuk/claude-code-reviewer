@@ -732,6 +732,21 @@ class Store(private val dbPath: Path) : AutoCloseable {
             """
             ALTER TABLE person ADD COLUMN archived INTEGER NOT NULL DEFAULT 0
             """.trimIndent(),
+
+            // v41 — retrabajo: los commits que llegaron después de que revisamos.
+            //
+            // Hace falta la rama del PR para poder preguntarle a git qué vino después del commit
+            // que miramos; sin ella sólo se sabe la fecha, y la fecha no distingue entre un commit
+            // de esa rama y cualquier otro del repositorio.
+            //
+            // `commits_after_review` se guarda en vez de calcularse en cada apertura porque es una
+            // llamada a git por pull request. Null significa "todavía no se calculó", que es
+            // distinto de cero: cero es "no hubo correcciones" y null es "no sé".
+            """
+            ALTER TABLE pr_stat ADD COLUMN source_branch TEXT;--split--
+            ALTER TABLE pr_stat ADD COLUMN commits_after_review INTEGER;--split--
+            ALTER TABLE pr_stat ADD COLUMN rework_at TEXT
+            """.trimIndent(),
         )
     }
 }

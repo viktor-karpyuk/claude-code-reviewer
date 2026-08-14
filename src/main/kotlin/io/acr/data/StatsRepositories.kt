@@ -436,9 +436,15 @@ class PrStatRepository(private val store: Store) {
         // El estado y la fecha de cierre cambian cuando el PR se mergea, así que se reemplaza la
         // fila en vez de ignorarla si ya existe.
         store.stmt(
-            """INSERT OR REPLACE INTO pr_stat(repo_id, pr_id, author, title, state, created_on,
-                                              closed_on, synced_at)
-               VALUES (?,?,?,?,?,?,?,?)""",
+            // Se conserva lo ya calculado de retrabajo: volver a sincronizar el PR no invalida
+            // ese número, y recalcularlo cuesta una llamada a git por pull request.
+            """INSERT INTO pr_stat(repo_id, pr_id, author, title, state, created_on,
+                                    closed_on, synced_at, source_branch)
+               VALUES (?,?,?,?,?,?,?,?,?)
+               ON CONFLICT(repo_id, pr_id) DO UPDATE SET
+                   author = excluded.author, title = excluded.title, state = excluded.state,
+                   created_on = excluded.created_on, closed_on = excluded.closed_on,
+                   synced_at = excluded.synced_at, source_branch = excluded.source_branch""",
         ) { ps ->
             ps.setString(1, repoId)
             ps.setLong(2, pr.id)
@@ -450,9 +456,80 @@ class PrStatRepository(private val store: Store) {
             // commit, y tomarlo como cierre daría tiempos de ciclo de PRs que siguen vivos.
             ps.setString(7, if (pr.state == io.acr.forge.PrState.OPEN) null else pr.updatedOn)
             ps.setString(8, Instant.now().toString())
+            ps.setString(9, pr.sourceBranch)
             ps.executeUpdate()
         }
     }
+
+    /**
+     * Guarda cuántos commits llegaron después de la review.
+     *
+     * Null es un valor válido y distinto de cero: significa que no se pudo saber —la rama ya no
+     * está, o el commit que revisamos desapareció en un rebase—. Cero diría "no hubo
+     * correcciones", que es una afirmación, y ahí no la hay.
+     */
+    fun setRework(repoId: String, prId: Long, commits: Int?) {
+        store.stmt("UPDATE pr_stat SET commits_after_review = ?, rework_at = ? WHERE repo_id = ? AND pr_id = ?") { ps ->
+            if (commits == null) ps.setNull(1, java.sql.Types.INTEGER) else ps.setInt(1, commits)
+            ps.setString(2, Instant.now().toString())
+            ps.setString(3, repoId)
+            ps.setLong(4, prId)
+            ps.executeUpdate()
+        }
+    }
+
+    /**
+     * Los PRs que hay que medir: los que tuvieron una review terminada **con hallazgos
+     * publicados**.
+     *
+     * La condición de los hallazgos publicados es la que hace que el número signifique algo. Los
+     * commits que llegan después de una review que no encontró nada son desarrollo normal, no
+     * corrección: contarlos como retrabajo diría que alguien corrigió algo que nadie le señaló.
+     */
+    fun pendingRework(): List<ReworkTarget> =
+        store.stmt(
+            """SELECT s.repo_id, s.pr_id, s.source_branch, r.head_sha
+                 FROM pr_stat s
+                 JOIN review r ON r.repo_id = s.repo_id AND r.pr_id = s.pr_id
+                WHERE s.source_branch IS NOT NULL AND r.status = 'DONE'
+                  AND EXISTS (
+                      SELECT 1 FROM finding f
+                       WHERE f.review_id = r.id AND f.published_id IS NOT NULL
+                  )
+                GROUP BY s.repo_id, s.pr_id
+               HAVING r.created_at = MAX(r.created_at)""",
+        ) { ps ->
+            ps.executeQuery().use { rs ->
+                buildList {
+                    while (rs.next()) {
+                        add(ReworkTarget(rs.getString(1), rs.getLong(2), rs.getString(3), rs.getString(4)))
+                    }
+                }
+            }
+        }
+
+    /** Retrabajo por autor: cuántos PRs necesitaron correcciones y cuántos commits en total. */
+    fun reworkByAuthor(desde: String, hasta: String): Map<String, Rework> =
+        store.stmt(
+            """SELECT author,
+                      SUM(CASE WHEN commits_after_review > 0 THEN 1 ELSE 0 END),
+                      SUM(COALESCE(commits_after_review, 0)),
+                      SUM(CASE WHEN commits_after_review IS NOT NULL THEN 1 ELSE 0 END)
+                 FROM pr_stat
+                WHERE created_on >= ? AND created_on <= ?
+                GROUP BY author""",
+        ) { ps ->
+            ps.setString(1, desde)
+            ps.setString(2, hasta)
+            ps.executeQuery().use { rs ->
+                buildMap {
+                    while (rs.next()) {
+                        val medidos = rs.getInt(4)
+                        if (medidos > 0) put(rs.getString(1), Rework(rs.getInt(2), rs.getInt(3), medidos))
+                    }
+                }
+            }
+        }
 
     fun count(repoId: String? = null): Int =
         store.stmt("SELECT COUNT(*) FROM pr_stat WHERE (? IS NULL OR repo_id = ?)") { ps ->
@@ -558,6 +635,22 @@ class PrStatRepository(private val store: Store) {
                )""",
         ) { it.executeUpdate() }
 }
+
+/** Un PR al que hay que medirle el retrabajo, con lo necesario para preguntarle a git. */
+data class ReworkTarget(
+    val repoId: String,
+    val prId: Long,
+    val sourceBranch: String,
+    val reviewedSha: String,
+)
+
+/**
+ * Retrabajo de alguien en un período.
+ *
+ * @param measured sobre cuántos PRs se pudo medir. Va junto con el resto porque "3 PRs con
+ *   correcciones" significa cosas muy distintas si se midieron 4 o 40.
+ */
+data class Rework(val prsWithFixes: Int, val commits: Int, val measured: Int)
 
 /** Un pull request concreto de la lista que hay detrás de un número. */
 data class PrRow(

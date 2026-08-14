@@ -48,6 +48,7 @@ class AppContext private constructor(
     val reviewStats: io.acr.data.ReviewStatsRepository,
     val prStats: io.acr.data.PrStatRepository,
     val prHistory: io.acr.stats.PrHistoryCollector,
+    val rework: io.acr.stats.ReworkCollector,
 ) : AutoCloseable {
 
     /**
@@ -100,6 +101,7 @@ class AppContext private constructor(
             val reviewStats = io.acr.data.ReviewStatsRepository(store)
             val prStats = io.acr.data.PrStatRepository(store)
             val prHistory = io.acr.stats.PrHistoryCollector(prStats)
+            val rework = io.acr.stats.ReworkCollector(prStats)
             val statsCollector = io.acr.stats.StatsCollector(persons, commitStats)
             val replies = ReplyRepository(store)
             val seenPrs = io.acr.data.SeenPrRepository(store)
@@ -119,7 +121,7 @@ class AppContext private constructor(
             val notifier = io.acr.notify.Notifier(prefs)
             val engine = ReviewEngine(reviews, publications, comments, findings, replies, approvals, guidelines, prefs, notifier)
             val auto = AutoReviewer(repos, reviews, prefs, engine, notifier, replies, seenPrs, prLoader, findings, approvals, jobs)
-            return AppContext(store, repos, reviews, publications, comments, notes, findings, approvals, jobs, guidelines, replies, seenPrs, prCache, prLoader, prefs, engine, auto, notifier, persons, commitStats, statsCollector, reviewStats, prStats, prHistory)
+            return AppContext(store, repos, reviews, publications, comments, notes, findings, approvals, jobs, guidelines, replies, seenPrs, prCache, prLoader, prefs, engine, auto, notifier, persons, commitStats, statsCollector, reviewStats, prStats, prHistory, rework)
         }
 
         /** La propiedad `acr.dataDir` gana sobre la ubicación estándar; la usan los tests. */

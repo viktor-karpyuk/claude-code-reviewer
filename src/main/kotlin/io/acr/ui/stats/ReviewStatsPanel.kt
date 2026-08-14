@@ -66,6 +66,9 @@ fun ReviewStatsPanel(ctx: AppContext) {
     val duraciones = io.acr.ui.dbState(periodo, version, initial = emptyMap<String, List<Double>>()) {
         ctx.prStats.mergedDurationsByAuthor(periodo.from, periodo.to)
     }
+    val retrabajo = io.acr.ui.dbState(periodo, version, initial = emptyMap<String, io.acr.data.Rework>()) {
+        ctx.prStats.reworkByAuthor(periodo.from, periodo.to)
+    }
     val comentarios = io.acr.ui.dbState(periodo, version, initial = emptyMap<String, Participation>()) {
         ctx.reviewStats.commentsByAuthor(periodo.from, periodo.to)
     }
@@ -126,6 +129,10 @@ fun ReviewStatsPanel(ctx: AppContext) {
                         // falla a mitad —Bitbucket devuelve 401 al azar en cerca del 40% de las
                         // llamadas— lo ya traído queda y se retoma pidiéndolo de nuevo.
                         repos.forEach { r -> avance = ctx.prHistory.collect(r) { avance = it } }
+                        // El retrabajo se mide acá y no en una acción aparte: recién ahora se
+                        // conocen las ramas de los PRs, que es lo que hace falta para poder
+                        // preguntarle a git qué llegó después de cada review.
+                        avance = ctx.rework.collect(repos) { avance = it }
                         trayendo = false
                         version++
                     }
@@ -158,6 +165,7 @@ fun ReviewStatsPanel(ctx: AppContext) {
                 Col(t("rstats.declined"), 90.dp)
                 Col(t("rstats.median"), 110.dp)
                 Col(t("rstats.p90"), 110.dp)
+                Col(t("rstats.rework"), 140.dp)
             }
             Legend(
                 listOf(
@@ -188,6 +196,13 @@ fun ReviewStatsPanel(ctx: AppContext) {
                     Num(if (c.declined > 0) c.declined.toString() else "—", 90.dp)
                     Num(p?.let { "%.1f d".format(it.first) } ?: "—", 110.dp)
                     Num(p?.let { "%.1f d".format(it.second) } ?: "—", 110.dp)
+                    // "3 de 4" y no "3": el número solo significa cosas muy distintas según sobre
+                    // cuántos PRs se pudo medir.
+                    val rw = retrabajo[nombre]
+                    Num(
+                        if (rw == null) "—" else t("rstats.reworkValue", rw.prsWithFixes, rw.measured, rw.commits),
+                        140.dp,
+                    )
                     Spacer(Modifier.width(12.dp))
                     BarRow(
                         segments = listOf(

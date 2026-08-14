@@ -417,9 +417,13 @@ se marca como tal, para que no se lea como caída.
    más se guarda al arrancar cada corrida. Lo viejo no se recupera sin el histórico del proveedor,
    así que la pantalla declara sobre cuántos PRs calcula cada número.
 
-   **M3a (commits de corrección) y M3c (vueltas de conversación) quedan pendientes**: la primera
-   necesita cruzar commits con el sha revisado por PR, y la segunda depende de la misma
-   atribución de autoría que hoy cubre poco.
+   **M3a hecha en v46.0.0**: commits posteriores al sha revisado, sólo para PRs con hallazgos
+   publicados —sin esa condición se contarían como corrección commits de desarrollo normal—, con
+   el denominador siempre a la vista y distinguiendo "no medido" de "cero". Necesitó guardar la
+   rama del PR (migración v41).
+
+   **M3c (vueltas de conversación) sigue pendiente**: depende de la misma atribución de autoría
+   que hoy cubre poco.
 5. **Histórico bajo demanda** (UC-7) — **hecho en v42.0.0** para los pull requests: botón
    explícito, un estado por vez para que un 401 cueste un estado y no la corrida, y relleno de
    `review.pr_author` con lo que trae. Con eso quedan **M1** (PRs abiertos) y **M4** (tiempo de

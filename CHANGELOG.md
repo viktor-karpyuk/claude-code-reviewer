@@ -3,6 +3,29 @@
 Reglas de numeración en [CLAUDE.md](CLAUDE.md): un requerimiento **nuevo** incrementa *major*;
 cambiar uno **existente** incrementa *patch*.
 
+## 46.0.0
+
+Requerimiento nuevo: **dónde se concentra el retrabajo**.
+
+Nueva columna en la pestaña de Revisión: cuántos pull requests de cada persona necesitaron
+correcciones después de que los revisamos, y cuántos commits en total.
+
+- **Sólo cuenta si el PR tuvo hallazgos publicados.** Los commits que llegan después de una review
+  que no encontró nada son desarrollo normal, no corrección: contarlos diría que alguien arregló
+  algo que nadie le señaló. Es la condición que le da sentido al número.
+- **"3 de 4" y no "3"**: se muestra siempre sobre cuántos PRs se pudo medir, porque el número solo
+  significa cosas muy distintas si el denominador es 4 o 40.
+- **No medido no es cero.** Si el commit que revisamos ya no está en la rama —hubo un rebase— el
+  resultado es "no sé", no "no hubo correcciones". Mezclarlos haría que una historia reescrita se
+  lea como un PR impecable.
+- Se calcula al traer el histórico, que es cuando recién se conocen las ramas de los PRs, y se
+  guarda: es una llamada a git por pull request y no tiene sentido repetirla en cada apertura.
+  Volver a sincronizar no descarta lo ya medido.
+
+Como todo en este módulo, alto no significa que alguien trabaje peor: puede ser un revisor
+exigente, un requerimiento mal definido o un área intrínsecamente difícil. Es una señal para
+preguntar, no una conclusión, y la pantalla lo dice.
+
 ## 45.0.0
 
 Dos requerimientos nuevos: **menú vertical estilo VS Code** y **ocultar a quienes ya no están**.
