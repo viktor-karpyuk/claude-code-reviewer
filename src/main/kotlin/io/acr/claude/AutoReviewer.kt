@@ -56,10 +56,21 @@ class AutoReviewer(
                 jobs.remove(job.repoId, job.prId)
                 continue
             }
-            // Si ya existe una review para el commit actual, alguien la corrió mientras tanto.
+            // Si ya hay una review TERMINADA de ese commit, alguien la corrió mientras tanto y no
+            // hay nada que reanudar.
+            //
+            // Terminada y no "cualquiera": acá `existsForHead` estaba mal y hacía que la
+            // reanudación no ocurriera nunca. Al arrancar, la review interrumpida se marca fallida
+            // con ese mismo `head_sha` justo antes de llegar a este punto, así que la consulta se
+            // encontraba a sí misma, daba true, y el trabajo se descartaba en silencio mientras la
+            // pantalla decía "se reanuda al abrir". Quedó a la vista en la base: cinco reviews
+            // interrumpidas y ninguna reanudada.
+            //
+            // No hay riesgo de bucle: el job se saca abajo pase lo que pase, así que como mucho se
+            // reintenta una vez por interrupción.
             val pr = runCatching { prLoader.refresh(repo) }.getOrNull()
                 ?.firstOrNull { it.id == job.prId }
-            if (pr == null || reviews.existsForHead(repo.id, pr.id, pr.headSha)) {
+            if (pr == null || reviews.doneForHead(repo.id, pr.id, pr.headSha) != null) {
                 jobs.remove(job.repoId, job.prId)
                 continue
             }

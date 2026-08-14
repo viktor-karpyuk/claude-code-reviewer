@@ -3,6 +3,27 @@
 Reglas de numeración en [CLAUDE.md](CLAUDE.md): un requerimiento **nuevo** incrementa *major*;
 cambiar uno **existente** incrementa *patch*.
 
+## 47.0.1
+
+Arreglo: **la reanudación de reviews interrumpidas nunca funcionó.**
+
+Se descubrió mirando la base real: cinco reviews cortadas por cerrar la app y ninguna reanudada,
+mientras la pantalla decía "se reanuda al abrir".
+
+La causa es una secuencia que se muerde la cola. Al arrancar, la review que quedó corriendo se
+encola como trabajo pendiente **y** acto seguido se marca fallida, con su mismo commit. El guard
+que decide si hace falta reanudarla preguntaba "¿existe alguna review de este commit?" — y se
+encontraba a sí misma. Contestaba que sí, descartaba el trabajo, y no quedaba rastro.
+
+Ahora pregunta si existe una review **terminada**, que es lo que realmente significa "esto ya lo
+hizo alguien". El caso legítimo sigue cubierto: si mientras la app estaba cerrada alguien corrió
+la review a mano y terminó bien, no se repite. Y no hay riesgo de bucle, porque el trabajo se
+saca de la cola pase lo que pase: como mucho un reintento por interrupción.
+
+La función que shipeó la 33.0.0 recién ahora hace lo que decía. Los tests nuevos reproducen la
+secuencia completa —encolar, marcar fallida, decidir— en vez de probar las piezas por separado,
+que es como se había escapado.
+
 ## 47.0.0
 
 Requerimiento nuevo: **leer sólo lo nuevo del historial de git**.
