@@ -3,6 +3,33 @@
 Reglas de numeración en [CLAUDE.md](CLAUDE.md): un requerimiento **nuevo** incrementa *major*;
 cambiar uno **existente** incrementa *patch*.
 
+## 40.0.0
+
+Requerimiento nuevo: **estadísticas por persona — fase 2: volumen de cambio**.
+
+La sección Personas suma una pestaña con el volumen de cambio por persona, sobre las identidades
+que resolvió la fase 1.
+
+- Selector de período: **Todo**, últimos 3 meses, trimestre en curso, trimestre anterior. El
+  trimestre en curso se marca como incompleto, para que no se lea como una caída cuando va por la
+  mitad. Y **evolución por trimestre**, porque un total acumulado de dos años no describe a nadie.
+- **Nunca un número solo**: agregadas, borradas, neto y tocadas, siempre juntas. Un refactor que
+  borra 2.000 líneas suma más que el bugfix de una línea que salvó producción.
+- Las líneas de archivos generados se muestran en su propia columna en vez de esconderse: son el
+  25,6% del total, y sin verlas no se puede juzgar si la lista de exclusión está bien puesta.
+- La tabla se puede ordenar, pero **no es un podio**: ordenar no destaca al primero ni le cambia
+  el color. Y la advertencia de qué no se puede concluir está arriba, visible, no en un tooltip.
+- Los bots quedan fuera de los totales.
+
+**No hay métricas de pull request todavía, y es a propósito.** Medido sobre estos repositorios,
+git ve 9 merges de PR en un año en `kubrik-erp-be` —donde la app conoce PRs hasta el #152—, 53 en
+el frontend y 0 en timelogbook. Calcularlas desde git daría números que parecen reales y
+subcuentan feo. Necesitan traer el histórico del proveedor, que es una fase aparte.
+
+También: el recolector ahora tiene una prueba de integración contra un repositorio de git de
+verdad. Los otros tests le daban salida fabricada, lo que prueba el parseo pero no que el comando
+sea el correcto ni que el formato sobreviva al subproceso.
+
 ## 39.0.0
 
 Requerimiento nuevo: **estadísticas por persona — fase 1: quién es quién**.

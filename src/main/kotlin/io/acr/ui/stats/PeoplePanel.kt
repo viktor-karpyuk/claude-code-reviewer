@@ -49,6 +49,32 @@ import kotlinx.coroutines.launch
  * en dos; agrupar por nombre parte a quien commitea con y sin tilde. Cualquier número calculado
  * antes de resolver esto está mal, y peor: parece bien.
  */
+/**
+ * La sección Personas, con sus dos vistas.
+ *
+ * Van juntas y en este orden a propósito: los números salen de las identidades, así que cuando
+ * algo se ve raro en el equipo, la pantalla que lo explica está al lado y no en otro menú.
+ */
+@Composable
+fun PeopleSection(ctx: AppContext) {
+    var vista by remember { mutableStateOf(0) }
+    Column(Modifier.fillMaxSize()) {
+        androidx.compose.material3.TabRow(selectedTabIndex = vista) {
+            androidx.compose.material3.Tab(
+                selected = vista == 0,
+                onClick = { vista = 0 },
+                text = { Text(t("people.tabIdentities")) },
+            )
+            androidx.compose.material3.Tab(
+                selected = vista == 1,
+                onClick = { vista = 1 },
+                text = { Text(t("people.tabTeam")) },
+            )
+        }
+        if (vista == 0) PeoplePanel(ctx) else TeamPanel(ctx)
+    }
+}
+
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun PeoplePanel(ctx: AppContext) {

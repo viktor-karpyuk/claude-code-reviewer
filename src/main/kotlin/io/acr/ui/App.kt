@@ -100,7 +100,7 @@ fun App(ctx: AppContext) {
                             onOpenPr = { repoId, prId -> selection.go(Selection.Review(repoId, prId)) },
                         )
                         is Selection.About -> io.acr.ui.about.AboutPanel(ctx)
-                        is Selection.People -> io.acr.ui.stats.PeoplePanel(ctx)
+                        is Selection.People -> io.acr.ui.stats.PeopleSection(ctx)
                         is Selection.Settings -> SettingsPanel(
                             ctx = ctx,
                             theme = theme,

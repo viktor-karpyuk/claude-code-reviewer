@@ -396,7 +396,17 @@ se marca como tal, para que no se lea como caída.
      es un conflicto, es la prueba de que las dos personas son la misma.
    - **Los tests se contaminaban entre sí**: `person` es global, no por repositorio, así que
      borrar el repo al terminar no la limpia. Cada test va con su propia base.
-2. **M1, M2, M4** y vista de equipo (UC-2, UC-3, UC-5).
+2. **M2 y vista de equipo** (UC-2, UC-5) — **hecha en v40.0.0**: período con presets y evolución
+   trimestral, volumen siempre desglosado, generadas en columna propia, sin podio, advertencia
+   visible, bots fuera.
+
+   **M1 y M4 quedaron afuera a propósito.** La spec las ponía en esta fase asumiendo que los PRs
+   se podían derivar; medido, no alcanza: git ve **9 merges de PR en 12 meses** en `kubrik-erp-be`
+   —donde la app conoce PRs hasta el #152—, **53** en `kubrik-erp-fe` y **0** en `talos-apirest`.
+   La cobertura depende de si el equipo mergea con merge commit o con squash, y de qué ramas tenga
+   el clon. Calcular "PRs abiertos" o "tiempo de ciclo" sobre eso daría números que parecen reales
+   y subcuentan feo, que es justo lo que §2 dice que no hay que hacer. Se mueven a la fase del
+   histórico del proveedor (UC-7).
 3. **M3, M5, M6** — requieren cruzar con reviews y comentarios (UC-4).
 4. **Ficha individual** (UC-6) y exportación.
 5. **Histórico bajo demanda** (UC-7).
