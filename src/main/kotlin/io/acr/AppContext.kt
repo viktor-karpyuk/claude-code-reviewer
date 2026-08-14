@@ -50,7 +50,22 @@ class AppContext private constructor(
     val prHistory: io.acr.stats.PrHistoryCollector,
     val rework: io.acr.stats.ReworkCollector,
     val health: io.acr.data.RepoHealthRepository,
+    val jira: io.acr.data.JiraRepository,
 ) : AutoCloseable {
+
+    /**
+     * Configuración de Jira, leída de preferencias.
+     *
+     * El token se guarda cifrado con la misma clave que los del proveedor de git: es una
+     * credencial de la misma clase y no hay motivo para tratarla peor.
+     */
+    fun jiraConfig(): io.acr.jira.JiraConfig = io.acr.jira.JiraConfig(
+        baseUrl = prefs.get(PREF_JIRA_URL).orEmpty(),
+        email = prefs.get(PREF_JIRA_EMAIL).orEmpty(),
+        token = prefs.get(PREF_JIRA_TOKEN).orEmpty(),
+    )
+
+    fun jiraClient(): io.acr.jira.JiraClient = io.acr.jira.JiraClient(jiraConfig())
 
     /**
      * Scope de vida de la app. Las reviews se lanzan acá y NO en el scope de la pantalla: con el
@@ -78,6 +93,9 @@ class AppContext private constructor(
         const val PREF_FOLLOWUP_DAYS = "followup.days"
         const val PREF_DASH_COLLAPSED = "ui.dashCollapsed"
         const val PREF_MERGE_STRATEGY = "merge.strategy"
+        const val PREF_JIRA_URL = "jira.url"
+        const val PREF_JIRA_EMAIL = "jira.email"
+        const val PREF_JIRA_TOKEN = "jira.token"
 
         /**
          * @param dataDir dónde viven la base y la clave. Configurable para que los tests NO
@@ -104,6 +122,7 @@ class AppContext private constructor(
             val prHistory = io.acr.stats.PrHistoryCollector(prStats)
             val rework = io.acr.stats.ReworkCollector(prStats)
             val health = io.acr.data.RepoHealthRepository(store)
+            val jira = io.acr.data.JiraRepository(store)
             val statsCollector = io.acr.stats.StatsCollector(persons, commitStats)
             val replies = ReplyRepository(store)
             val seenPrs = io.acr.data.SeenPrRepository(store)
@@ -121,9 +140,14 @@ class AppContext private constructor(
             }
             reviews.failOrphanedRunning()
             val notifier = io.acr.notify.Notifier(prefs)
-            val engine = ReviewEngine(reviews, publications, comments, findings, replies, approvals, guidelines, prefs, notifier)
+            val engine = ReviewEngine(
+                reviews, publications, comments, findings, replies, approvals, guidelines, prefs,
+                notifier,
+                // Si Jira no está configurado esto devuelve vacío y la review corre igual que antes.
+                jiraIssues = { repoId, prId -> jira.issuesOf(repoId, prId) },
+            )
             val auto = AutoReviewer(repos, reviews, prefs, engine, notifier, replies, seenPrs, prLoader, findings, approvals, jobs)
-            return AppContext(store, repos, reviews, publications, comments, notes, findings, approvals, jobs, guidelines, replies, seenPrs, prCache, prLoader, prefs, engine, auto, notifier, persons, commitStats, statsCollector, reviewStats, prStats, prHistory, rework, health)
+            return AppContext(store, repos, reviews, publications, comments, notes, findings, approvals, jobs, guidelines, replies, seenPrs, prCache, prLoader, prefs, engine, auto, notifier, persons, commitStats, statsCollector, reviewStats, prStats, prHistory, rework, health, jira)
         }
 
         /** La propiedad `acr.dataDir` gana sobre la ubicación estándar; la usan los tests. */

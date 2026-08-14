@@ -785,6 +785,33 @@ class Store(private val dbPath: Path) : AutoCloseable {
             """
             ALTER TABLE finding ADD COLUMN category TEXT
             """.trimIndent(),
+
+            // v44 — los tickets de Jira que menciona cada pull request.
+            //
+            // Se guardan y no se piden cada vez porque el contenido de un ticket casi no cambia
+            // mientras el PR está abierto, y pedirlo en cada apertura de pantalla sería una
+            // llamada por PR contra un servicio que no controlamos.
+            //
+            // La descripción se guarda aplanada a texto: lo que hace falta es qué se pidió, y
+            // para eso el formato no aporta. Además así entra directo en el prompt de la review.
+            """
+            CREATE TABLE jira_issue (
+                key         TEXT PRIMARY KEY,
+                summary     TEXT NOT NULL,
+                description TEXT NOT NULL,
+                type        TEXT,
+                status      TEXT,
+                assignee    TEXT,
+                url         TEXT,
+                fetched_at  TEXT NOT NULL
+            );--split--
+            CREATE TABLE pr_issue (
+                repo_id  TEXT NOT NULL REFERENCES repo(id) ON DELETE CASCADE,
+                pr_id    INTEGER NOT NULL,
+                key      TEXT NOT NULL,
+                PRIMARY KEY (repo_id, pr_id, key)
+            )
+            """.trimIndent(),
         )
     }
 }

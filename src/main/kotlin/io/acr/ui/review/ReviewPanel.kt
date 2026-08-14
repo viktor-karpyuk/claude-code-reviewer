@@ -516,6 +516,15 @@ fun ReviewPanel(
             }
 
             Spacer(Modifier.height(8.dp))
+            // Antes de los hallazgos: revisar sin saber qué se pidió es revisar sólo el código,
+            // y así se puede aprobar un cambio impecable que resuelve otra cosa.
+            TicketCard(
+                ctx = ctx,
+                repoId = repo.id,
+                prId = prId,
+                branch = pr?.sourceBranch,
+                title = pr?.title,
+            )
             ReadinessCard(listo, ctx.prefs)
 
             review?.finalPassSummary?.takeIf { it.isNotBlank() && finalHecha }?.let { resumen ->

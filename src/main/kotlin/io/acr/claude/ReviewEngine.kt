@@ -57,6 +57,13 @@ class ReviewEngine(
     private val guidelines: io.acr.data.GuidelineRepository,
     private val prefs: PrefsRepo,
     private val notifier: io.acr.notify.Notifier? = null,
+    /**
+     * De dónde salen los tickets de un PR.
+     *
+     * Se inyecta como función y no como repositorio para que el motor no dependa de Jira: si no
+     * está configurado, esto es null y la review corre exactamente como antes.
+     */
+    private val jiraIssues: ((String, Long) -> List<io.acr.jira.JiraIssue>)? = null,
 ) {
 
     /**
@@ -641,15 +648,26 @@ class ReviewEngine(
             }
 
             val language = prefs.get(io.acr.AppContext.PREF_LANGUAGE) ?: "español"
+            // Los tickets que menciona el PR: es lo que permite revisar contra lo pedido y no
+            // sólo contra el código. Si Jira no está configurado la lista viene vacía y el prompt
+            // queda igual que antes.
+            val tickets = jiraIssues?.invoke(repo.id, pr.id).orEmpty()
+            if (tickets.isNotEmpty()) {
+                emit(pr.id) { p ->
+                    p.copy(lines = p.lines + "Tickets: " + tickets.joinToString(", ") { it.key })
+                }
+            }
             val prompt = if (incremental != null) {
                 ReviewPrompt.buildIncremental(
                     pr, language, plan.depth, plan.kind, incremental.sinceSha, previos, existing,
                     guidelines = guidelines.forRepo(repo.id),
+                    issues = tickets,
                 )
             } else {
                 ReviewPrompt.build(
                     pr, language, plan.depth, plan.kind, existing,
                     guidelines = guidelines.forRepo(repo.id),
+                    issues = tickets,
                 )
             }
 

@@ -306,6 +306,7 @@ object ReviewPrompt {
         carried: List<io.acr.data.Finding>,
         existing: List<StoredComment> = emptyList(),
         guidelines: List<io.acr.data.Guideline> = emptyList(),
+        issues: List<io.acr.jira.JiraIssue> = emptyList(),
     ): String {
         val rangoCompleto = "origin/${pr.targetBranch}...origin/${pr.sourceBranch}"
         val rangoNuevo = "$sinceSha..${pr.headSha}"
@@ -338,6 +339,7 @@ object ReviewPrompt {
             depth.instructions(),
             kind.focus(),
             guidelinesSection(guidelines),
+            issuesSection(issues),
             threadSection(existing),
             carriedSection(carried, language),
 
@@ -408,6 +410,36 @@ object ReviewPrompt {
         """.trimIndent()
     }
 
+    /**
+     * Lo que pide el ticket, para poder revisar contra lo pedido y no sólo contra el código.
+     *
+     * Es la diferencia entre "esto está bien escrito" y "esto hace lo que había que hacer". Sin el
+     * ticket, un cambio impecable que resuelve otra cosa pasa la review sin que nadie lo note.
+     *
+     * Se recorta cada descripción: hay tickets con hilos enteros de discusión pegados, y lo que
+     * sirve para revisar está siempre arriba.
+     */
+    fun issuesSection(issues: List<io.acr.jira.JiraIssue>): String {
+        if (issues.isEmpty()) return ""
+        val cuerpo = issues.joinToString("\n\n") { i ->
+            buildString {
+                append("- ${i.key} (${i.type.ifBlank { "sin tipo" }}, ${i.status.ifBlank { "sin estado" }}): ${i.summary}")
+                if (i.description.isNotBlank()) append("\n  ").append(i.description.take(3_000).replace("\n", "\n  "))
+            }
+        }
+        return """
+            LO QUE PIDE EL TICKET
+            El pull request dice resolver esto. Usalo para revisar contra lo pedido y no sólo
+            contra el código: un cambio impecable que resuelve otra cosa igual está mal.
+
+            $cuerpo
+
+            Si el cambio no cubre lo que el ticket pide, o hace bastante más de lo pedido sin que
+            se justifique, reportalo como hallazgo FUNCTIONAL. Si el ticket es ambiguo, no
+            inventes la intención: decilo en el body y no lo cuentes como problema del código.
+        """.trimIndent()
+    }
+
     fun build(
         pr: PullRequest,
         language: String,
@@ -415,6 +447,7 @@ object ReviewPrompt {
         kind: ProjectKind,
         existing: List<StoredComment> = emptyList(),
         guidelines: List<io.acr.data.Guideline> = emptyList(),
+        issues: List<io.acr.jira.JiraIssue> = emptyList(),
     ): String {
         val range = "origin/${pr.targetBranch}...origin/${pr.sourceBranch}"
         val blocks = listOf(
@@ -443,6 +476,7 @@ object ReviewPrompt {
             depth.instructions(),
             kind.focus(),
             guidelinesSection(guidelines),
+            issuesSection(issues),
             threadSection(existing),
 
             """

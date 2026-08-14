@@ -3,6 +3,34 @@
 Reglas de numeración en [CLAUDE.md](CLAUDE.md): un requerimiento **nuevo** incrementa *major*;
 cambiar uno **existente** incrementa *patch*.
 
+## 53.0.0
+
+Requerimiento nuevo: **integración con Jira**.
+
+Se configura en Ajustes —URL, tu email de Atlassian y un API token— con un botón que prueba la
+conexión y devuelve el nombre de la cuenta. Es **sólo lectura**: la app mira los tickets, nunca los
+mueve.
+
+**El ticket del PR se deduce solo**, de la rama y del título. Verificado contra los repositorios
+conectados: `KS-655`, `feature/KS-631`, `FIS-389-auto-create-remediation`, `feat(POS-84): …`. Se
+exigen mayúsculas para que ramas como `tasks-ms-rabbit-placeholders` o `feature/pos-ar-fiscal` no
+den un falso positivo. **Gana la rama sobre el título**, porque la rama se crea al empezar y casi
+no se toca mientras el título se edita a mano: hay un PR real con rama `KS-655` y título
+`KS-644 history`, dos tickets distintos.
+
+**El ticket entra en el prompt de la review**, que es lo que más cambia: permite revisar contra lo
+que se pidió y no sólo contra el código. Un cambio impecable que resuelve otra cosa pasaba la
+review sin que nadie lo notara; ahora eso se reporta como hallazgo **funcional**. Si el ticket es
+ambiguo, la review lo dice en vez de inventar la intención.
+
+Y se ve en la pantalla del PR, arriba de los hallazgos, con la descripción completa y no sólo el
+título: el título dice de qué habla, la descripción dice qué había que hacer.
+
+Los tickets se guardan al traerlos —el contenido casi no cambia mientras el PR está abierto— y se
+piden a mano, no solos: es una llamada a un servicio externo por PR.
+
+Sin Jira configurado, todo funciona exactamente como antes.
+
 ## 52.0.0
 
 Requerimiento nuevo: **cada hallazgo dice qué clase de problema es**, no sólo cuán urgente.

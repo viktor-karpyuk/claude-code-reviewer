@@ -217,6 +217,10 @@ fun SettingsPanel(
 
         Spacer(Modifier.height(4.dp))
         HorizontalDivider()
+        JiraSettings(ctx)
+
+        Spacer(Modifier.height(4.dp))
+        HorizontalDivider()
         io.acr.ui.GuidelinesSection(
             repo = ctx.guidelines,
             repoId = null,
@@ -231,5 +235,87 @@ fun SettingsPanel(
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
+    }
+}
+
+/**
+ * Conexión con Jira, para ver de qué se trata cada pull request.
+ *
+ * Sólo lectura: la app mira los tickets, no los mueve. Mover el estado es del que trabaja.
+ *
+ * El token va como Basic junto con el email, que es como autentica Jira Cloud —al revés que
+ * Bitbucket, donde Basic falla siempre y sólo anda Bearer—. Son dos productos de la misma empresa
+ * con dos esquemas distintos, y confundirlos da un 401 que parece una credencial vencida; por eso
+ * el botón de probar dice el nombre de la cuenta cuando funciona.
+ */
+@Composable
+private fun JiraSettings(ctx: io.acr.AppContext) {
+    var url by remember { mutableStateOf(ctx.prefs.get(io.acr.AppContext.PREF_JIRA_URL).orEmpty()) }
+    var email by remember { mutableStateOf(ctx.prefs.get(io.acr.AppContext.PREF_JIRA_EMAIL).orEmpty()) }
+    var token by remember { mutableStateOf(ctx.prefs.get(io.acr.AppContext.PREF_JIRA_TOKEN).orEmpty()) }
+    var estado by remember { mutableStateOf<String?>(null) }
+    var probando by remember { mutableStateOf(false) }
+    val scope = androidx.compose.runtime.rememberCoroutineScope()
+
+    Column(Modifier.fillMaxWidth().padding(vertical = 8.dp)) {
+        Text(io.acr.i18n.t("jira.title"), style = MaterialTheme.typography.labelLarge)
+        Text(
+            io.acr.i18n.t("jira.note"),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Spacer(Modifier.height(6.dp))
+        OutlinedTextField(
+            value = url,
+            onValueChange = { url = it; ctx.prefs.put(io.acr.AppContext.PREF_JIRA_URL, it.trim()) },
+            label = { Text(io.acr.i18n.t("jira.url")) },
+            placeholder = { Text("https://tuempresa.atlassian.net") },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth(),
+        )
+        Spacer(Modifier.height(6.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            OutlinedTextField(
+                value = email,
+                onValueChange = { email = it; ctx.prefs.put(io.acr.AppContext.PREF_JIRA_EMAIL, it.trim()) },
+                label = { Text(io.acr.i18n.t("jira.email")) },
+                singleLine = true,
+                modifier = Modifier.weight(1f),
+            )
+            OutlinedTextField(
+                value = token,
+                onValueChange = { token = it; ctx.prefs.put(io.acr.AppContext.PREF_JIRA_TOKEN, it.trim()) },
+                label = { Text(io.acr.i18n.t("jira.token")) },
+                singleLine = true,
+                visualTransformation = androidx.compose.ui.text.input.PasswordVisualTransformation(),
+                modifier = Modifier.weight(1f),
+            )
+        }
+        Spacer(Modifier.height(6.dp))
+        Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+            OutlinedButton(
+                enabled = !probando && url.isNotBlank() && email.isNotBlank() && token.isNotBlank(),
+                onClick = {
+                    probando = true
+                    estado = null
+                    scope.launch {
+                        ctx.jiraClient().check()
+                            .onSuccess { estado = io.acr.i18n.t2("jira.ok", it) }
+                            .onFailure { estado = it.message ?: "falló" }
+                        probando = false
+                    }
+                },
+            ) { Text(io.acr.i18n.t("jira.check")) }
+            Spacer(Modifier.width(8.dp))
+            estado?.let {
+                Text(
+                    it,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = if (it.startsWith("Conectado") || it.startsWith("Connected"))
+                        MaterialTheme.colorScheme.primary
+                    else MaterialTheme.colorScheme.error,
+                )
+            }
+        }
     }
 }
