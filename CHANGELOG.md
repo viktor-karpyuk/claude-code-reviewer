@@ -3,6 +3,15 @@
 Reglas de numeración en [CLAUDE.md](CLAUDE.md): un requerimiento **nuevo** incrementa *major*;
 cambiar uno **existente** incrementa *patch*.
 
+## 49.0.1
+
+Arreglo de la navegación de la 48.0.0: **la lista de repositorios ahora acompaña a toda la sección
+de Repositorios**, no sólo al entrar a uno.
+
+Antes aparecía recién al abrir un repositorio, así que la portada de la sección se veía sin lista y
+el layout saltaba al hacer click. Entrar a la sección y entrar a un repositorio son el mismo lugar
+y tienen que verse igual. En el Panel y en Estadísticas sigue sin aparecer.
+
 ## 49.0.0
 
 Requerimiento nuevo: **un resumen de estadísticas que responda algo**.

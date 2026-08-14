@@ -115,10 +115,15 @@ fun App(ctx: AppContext) {
                         ) { selection.go(Selection.Settings) },
                     ),
                 )
-                // La lista de repositorios sólo cuando se está trabajando con repositorios. En el
-                // panel o en estadísticas no aporta nada y se lleva 260 dp de ancho útil.
+                // La lista de repositorios acompaña a toda la sección de repositorios, incluida
+                // su portada: entrar a la sección y entrar a un repositorio son el mismo lugar, y
+                // que la lista apareciera recién al abrir uno hacía saltar el layout.
+                //
+                // En el panel o en estadísticas no aparece: ahí no aporta nada y se lleva 260 dp
+                // de ancho útil.
                 val enRepos = selection.current.let {
-                    it is Selection.Repo || it is Selection.Review || it is Selection.RepoForm
+                    it is Selection.Repos || it is Selection.Repo ||
+                        it is Selection.Review || it is Selection.RepoForm
                 }
                 if (enRepos) {
                     RepoSidebar(
