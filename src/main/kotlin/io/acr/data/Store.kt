@@ -671,6 +671,25 @@ class Store(private val dbPath: Path) : AutoCloseable {
                 commits  INTEGER NOT NULL DEFAULT 0
             )
             """.trimIndent(),
+
+            // v38 — de quién era el PR que se revisó.
+            //
+            // Sin esto no se puede decir a quién le tocó cada hallazgo: la review guarda el título
+            // y el commit del PR, pero no su autor, y `pr_cache` sólo tiene los que siguen
+            // abiertos. Medido en esta base: de 12 PRs revisados, apenas 7 tienen autor conocido,
+            // y 205 de 264 comentarios están en PRs de los que no sabemos de quién eran.
+            //
+            // Se rellena lo que se pueda desde `pr_cache` y de acá en más se guarda al arrancar
+            // cada review. Lo viejo no se puede recuperar sin volver a pedirle el histórico al
+            // proveedor, así que las métricas por persona van a decir sobre qué parte se calculan
+            // en vez de disimular el agujero.
+            """
+            ALTER TABLE review ADD COLUMN pr_author TEXT;--split--
+            UPDATE review SET pr_author = (
+                SELECT p.author FROM pr_cache p
+                 WHERE p.repo_id = review.repo_id AND p.pr_id = review.pr_id
+            ) WHERE pr_author IS NULL
+            """.trimIndent(),
         )
     }
 }

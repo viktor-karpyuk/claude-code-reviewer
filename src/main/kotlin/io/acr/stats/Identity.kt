@@ -171,6 +171,24 @@ private fun converge(inicial: MutableList<Person>): List<Person> {
 }
 
 /**
+ * A qué persona corresponde un nombre que muestra el proveedor.
+ *
+ * Bitbucket y GitHub dan un nombre para mostrar, no un email, así que lo único con lo que se puede
+ * enganchar es el nombre normalizado. En estos repositorios alcanza: el proveedor dice "Tomás
+ * Rivero" y git registra "Tomas Rivero", que normalizan igual, y lo mismo pasa con los otros
+ * cuatro. Por eso no hace falta configurar nada para que los comentarios se atribuyan.
+ *
+ * Devuelve null si no coincide con nadie. Es importante que no invente: un nombre del proveedor
+ * que no está en git suele ser alguien que comenta pero no commitea —un product owner, un QA— y
+ * meterlo a la fuerza en la persona más parecida le adjudicaría trabajo que no hizo.
+ */
+fun personForDisplayName(displayName: String, known: List<Person>): Person? {
+    val n = normalizeName(displayName)
+    if (n.isBlank()) return null
+    return known.firstOrNull { n in it.names() }
+}
+
+/**
  * Personas que probablemente sean la misma y la heurística no pudo unir.
  *
  * El caso que lo motiva está en estos repositorios: "Viktor K <viktor@…>" y "Viktor Karpyuk

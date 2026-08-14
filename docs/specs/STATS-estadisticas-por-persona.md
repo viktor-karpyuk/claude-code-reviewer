@@ -407,7 +407,19 @@ se marca como tal, para que no se lea como caída.
    el clon. Calcular "PRs abiertos" o "tiempo de ciclo" sobre eso daría números que parecen reales
    y subcuentan feo, que es justo lo que §2 dice que no hay que hacer. Se mueven a la fase del
    histórico del proveedor (UC-7).
-3. **M3, M5, M6** — requieren cruzar con reviews y comentarios (UC-4).
+3. **M3b, M5, M6** — **hecha en v41.0.0**: participación revisando (M6) primero, hallazgos
+   recibidos por gravedad normalizados por PR (M5) y los no resueltos a la primera (M3b).
+
+   Apareció un agujero que la spec no había previsto: **la review no guardaba de quién era el
+   PR.** `pr_cache` sólo tiene los abiertos, así que de 12 PRs revisados apenas 7 tenían autor, y
+   205 de 264 comentarios estaban en PRs de autor desconocido. Se agregó `review.pr_author`
+   (migración v38), se rellenó desde `pr_cache` lo que se pudo —20 de 90 reviews— y de ahora en
+   más se guarda al arrancar cada corrida. Lo viejo no se recupera sin el histórico del proveedor,
+   así que la pantalla declara sobre cuántos PRs calcula cada número.
+
+   **M3a (commits de corrección) y M3c (vueltas de conversación) quedan pendientes**: la primera
+   necesita cruzar commits con el sha revisado por PR, y la segunda depende de la misma
+   atribución de autoría que hoy cubre poco.
 4. **Ficha individual** (UC-6) y exportación.
 5. **Histórico bajo demanda** (UC-7).
 

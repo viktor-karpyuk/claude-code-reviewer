@@ -70,8 +70,17 @@ fun PeopleSection(ctx: AppContext) {
                 onClick = { vista = 1 },
                 text = { Text(t("people.tabTeam")) },
             )
+            androidx.compose.material3.Tab(
+                selected = vista == 2,
+                onClick = { vista = 2 },
+                text = { Text(t("people.tabReview")) },
+            )
         }
-        if (vista == 0) PeoplePanel(ctx) else TeamPanel(ctx)
+        when (vista) {
+            0 -> PeoplePanel(ctx)
+            1 -> TeamPanel(ctx)
+            else -> ReviewStatsPanel(ctx)
+        }
     }
 }
 

@@ -621,6 +621,7 @@ class ReviewEngine(
             repo.id, pr.id, pr.title, pr.headSha, plan.depth, plan.kind, resolvedModel, auto,
             previousReviewId = incremental?.previousReviewId,
             sinceSha = incremental?.sinceSha,
+            prAuthor = pr.author,
         )
         // Todo lo que sigue va bajo guarda: cualquier excepción no atrapada (una consulta a la
         // base, el parseo, el guardado de hallazgos) dejaba la review en RUNNING para siempre,

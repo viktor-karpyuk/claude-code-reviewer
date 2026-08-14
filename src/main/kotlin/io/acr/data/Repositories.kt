@@ -198,6 +198,8 @@ data class ReviewRecord(
     val previousReviewId: String? = null,
     /** El commit desde el que miró. Null = miró la rama entera. */
     val sinceSha: String? = null,
+    /** Autor del PR. Null en las reviews viejas: no se guardaba y no se puede recuperar. */
+    val prAuthor: String? = null,
 ) {
     /** Miró sólo lo que llegó después de otra review. */
     val incremental: Boolean get() = sinceSha != null
@@ -224,13 +226,15 @@ class ReviewRepository(private val store: Store) {
         auto: Boolean,
         previousReviewId: String? = null,
         sinceSha: String? = null,
+        /** De quién es el PR. Sin esto no se puede decir a quién le tocó cada hallazgo. */
+        prAuthor: String? = null,
     ): String {
         val id = UlidCreator.getUlid().toString()
         store.stmt(
             """INSERT INTO review(id, repo_id, pr_id, pr_title, head_sha, status, created_at,
                                  depth, project_kind, model, trigger_kind,
-                                 previous_review_id, since_sha)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                                 previous_review_id, since_sha, pr_author)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
         ) { ps ->
             ps.setString(1, id)
             ps.setString(2, repoId)
@@ -245,6 +249,7 @@ class ReviewRepository(private val store: Store) {
             ps.setString(11, if (auto) "AUTO" else "MANUAL")
             ps.setString(12, previousReviewId)
             ps.setString(13, sinceSha)
+            ps.setString(14, prAuthor)
             ps.executeUpdate()
         }
         return id
@@ -719,7 +724,7 @@ class ReviewRepository(private val store: Store) {
                       session_id, cost_usd, published_url, created_at, depth, project_kind, model,
                       trigger_kind, denied_tools, resolution_summary, resolution_at,
                       resolution_head, final_pass_head, final_pass_summary, final_pass_blockers,
-                      previous_review_id, since_sha
+                      previous_review_id, since_sha, pr_author
                FROM review $tail""",
         ) { ps ->
             bind(ps)
@@ -756,6 +761,7 @@ class ReviewRepository(private val store: Store) {
                             finalPassBlockers = rs.getInt(23),
                             previousReviewId = rs.getString(24),
                             sinceSha = rs.getString(25),
+                            prAuthor = rs.getString(26),
                         ),
                     )
                 }

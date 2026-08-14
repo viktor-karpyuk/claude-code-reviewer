@@ -3,6 +3,28 @@
 Reglas de numeración en [CLAUDE.md](CLAUDE.md): un requerimiento **nuevo** incrementa *major*;
 cambiar uno **existente** incrementa *patch*.
 
+## 41.0.0
+
+Requerimiento nuevo: **estadísticas por persona — fase 3: participación y hallazgos recibidos**.
+
+Tercera pestaña en Personas, con lo que sale de nuestras propias reviews.
+
+- **Participación revisando**: cuántos comentarios dejó cada uno y en cuántos PRs. Va primero y no
+  al final a propósito — sin esto el módulo mide sólo a quien escribe código y trata como
+  invisible a quien revisa, que es la mitad del trabajo. Lo que publicó la app en nuestro nombre
+  no cuenta como participación de nadie.
+- **Hallazgos recibidos** por el autor de cada PR, separados en bloqueantes, importantes y
+  menores, normalizados por PR —quien mandó diez acumula más que quien mandó uno, y eso no dice
+  nada de ninguno— y con los que no se resolvieron a la primera en columna aparte.
+- Los nombres del proveedor se enganchan con las personas de git por nombre normalizado, y en
+  estos repositorios alcanza: Bitbucket dice "Tomás Rivero" y git registra "Tomas Rivero". Quien
+  comenta pero no commitea aparece igual, marcado, en vez de forzarlo dentro de la persona más
+  parecida: eso le adjudicaría trabajo que no hizo.
+- **La pantalla dice sobre cuánto está calculando.** La review no guardaba de quién era el PR: de
+  12 revisados sólo 7 tienen autor conocido, y 205 de 264 comentarios están en PRs de los que no
+  sabemos de quién eran. Se rellenó lo que se pudo y de ahora en más se guarda. Un número cierto
+  presentado como si cubriera todo es una forma de mentir.
+
 ## 40.0.0
 
 Requerimiento nuevo: **estadísticas por persona — fase 2: volumen de cambio**.

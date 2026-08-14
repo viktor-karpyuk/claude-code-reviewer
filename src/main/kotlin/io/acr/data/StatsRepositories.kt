@@ -281,6 +281,116 @@ class PersonRepository(private val store: Store) {
         }
 }
 
+/**
+ * Lo que sale de nuestras reviews: qué se le señaló a cada uno y quién participó revisando.
+ *
+ * Todo lo de acá es **cobertura parcial**: sólo existe para los pull requests que la app revisó o
+ * sincronizó. Mezclarlo con el volumen de git —que cubre todo lo commiteado— sin decirlo sería
+ * mentir, así que cada consulta devuelve también sobre cuánto se calculó.
+ */
+class ReviewStatsRepository(private val store: Store) {
+
+    /**
+     * Cuántos comentarios dejó cada persona, y en cuántos PRs.
+     *
+     * Es la métrica que evita que el módulo mida sólo a quien escribe código y trate como
+     * invisible a quien revisa. Se atribuye por el nombre que muestra el proveedor, que en estos
+     * repositorios normaliza igual que el de git —"Tomás Rivero" y "Tomas Rivero" caen en la misma
+     * persona— así que engancha sin configurar nada.
+     *
+     * @param excludeOurs deja afuera lo que publicó la app en nuestro nombre: son comentarios
+     *   nuestros pero no son participación de una persona revisando.
+     */
+    fun commentsByAuthor(desde: String, hasta: String, excludeOurs: Boolean = true): Map<String, Participation> =
+        store.stmt(
+            """SELECT author, COUNT(*), COUNT(DISTINCT repo_id || '|' || pr_id)
+                 FROM pr_comment
+                WHERE is_deleted = 0 AND created_on >= ? AND created_on <= ?
+                  ${if (excludeOurs) "AND is_ours = 0" else ""}
+                GROUP BY author""",
+        ) { ps ->
+            ps.setString(1, desde)
+            ps.setString(2, hasta)
+            ps.executeQuery().use { rs ->
+                buildMap {
+                    while (rs.next()) put(rs.getString(1), Participation(rs.getInt(2), rs.getInt(3)))
+                }
+            }
+        }
+
+    /**
+     * Hallazgos que recibió el autor de cada PR, por gravedad.
+     *
+     * Sólo de la review vigente de cada PR: las superadas dejaron hallazgos que ya se arrastraron
+     * o se cerraron, y contarlas sumaría dos veces el mismo problema.
+     */
+    fun findingsByPrAuthor(desde: String, hasta: String): Map<String, SeverityCount> =
+        store.stmt(
+            """SELECT r.pr_author,
+                      SUM(CASE WHEN f.severity = 'blocker' THEN 1 ELSE 0 END),
+                      SUM(CASE WHEN f.severity = 'major'   THEN 1 ELSE 0 END),
+                      SUM(CASE WHEN f.severity = 'minor'   THEN 1 ELSE 0 END),
+                      COUNT(DISTINCT r.repo_id || '|' || r.pr_id),
+                      SUM(CASE WHEN f.resolution IN ('PARTIAL','UNRESOLVED') THEN 1 ELSE 0 END)
+                 FROM finding f
+                 JOIN review r ON r.id = f.review_id
+                WHERE r.pr_author IS NOT NULL AND r.created_at >= ? AND r.created_at <= ?
+                  AND f.dismissed_at IS NULL
+                GROUP BY r.pr_author""",
+        ) { ps ->
+            ps.setString(1, desde)
+            ps.setString(2, hasta)
+            ps.executeQuery().use { rs ->
+                buildMap {
+                    while (rs.next()) {
+                        put(
+                            rs.getString(1),
+                            SeverityCount(rs.getInt(2), rs.getInt(3), rs.getInt(4), rs.getInt(5), rs.getInt(6)),
+                        )
+                    }
+                }
+            }
+        }
+
+    /**
+     * Sobre qué parte de lo revisado se puede atribuir a alguien.
+     *
+     * Se muestra siempre al lado de los números: una tabla que dice "3 bloqueantes" sin aclarar
+     * que se calculó sobre 7 de 12 PRs invita a conclusiones que los datos no sostienen.
+     */
+    fun coverage(desde: String, hasta: String): Pair<Int, Int> =
+        store.stmt(
+            """SELECT COUNT(DISTINCT repo_id || '|' || pr_id),
+                      COUNT(DISTINCT CASE WHEN pr_author IS NOT NULL THEN repo_id || '|' || pr_id END)
+                 FROM review
+                WHERE status = 'DONE' AND created_at >= ? AND created_at <= ?""",
+        ) { ps ->
+            ps.setString(1, desde)
+            ps.setString(2, hasta)
+            ps.executeQuery().use { if (it.next()) it.getInt(1) to it.getInt(2) else 0 to 0 }
+        }
+}
+
+/** Cuánto participó alguien revisando: comentarios dejados y en cuántos PRs distintos. */
+data class Participation(val comments: Int, val prs: Int)
+
+/**
+ * Hallazgos recibidos, por gravedad.
+ *
+ * @param notFixedFirstTime los que la verificación dio como parciales o sin resolver. Alto no
+ *   significa que alguien trabaje peor: puede ser un revisor exigente, un requerimiento mal
+ *   definido o un área difícil. Es una señal para preguntar, no una conclusión.
+ */
+data class SeverityCount(
+    val blocker: Int,
+    val major: Int,
+    val minor: Int,
+    val prs: Int,
+    val notFixedFirstTime: Int,
+) {
+    val total: Int get() = blocker + major + minor
+}
+
 /** Commits ya procesados, con su volumen de cambio. */
 class CommitStatRepository(private val store: Store) {
 
