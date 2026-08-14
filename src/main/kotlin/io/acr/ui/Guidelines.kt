@@ -59,6 +59,8 @@ fun GuidelinesSection(
         if (repoId == null) repo.globals() else repo.forRepo(repoId, onlyEnabled = false)
     }
     var error by remember { mutableStateOf<String?>(null) }
+    // null = cerrado; Pair(id-o-null, texto) = editando una existente o escribiendo una nueva.
+    var editor by remember { mutableStateOf<Triple<String?, String, String>?>(null) }
     // `t()` es @Composable y esto se usa dentro de un onClick: se resuelve acá.
     val msgVacio = io.acr.i18n.t("guide.empty")
     val msgSinClaude = io.acr.i18n.t("guide.noneFound")
@@ -123,6 +125,14 @@ fun GuidelinesSection(
                         else -> Unit
                     }
                 }
+                // Sólo las escritas a mano se editan acá: cambiar el texto de una importada la
+                // dejaría distinta del archivo del que salió, y el próximo "actualizar" pisaría
+                // el cambio sin avisar. Esas se editan en el archivo y se re-importan.
+                if (d.linkedPath == null && (repoId == null || !d.global)) {
+                    TextButton(onClick = { editor = Triple(d.id, d.name, d.content) }) {
+                        Text(io.acr.i18n.t("common.edit"))
+                    }
+                }
                 // Una guía global no se borra desde un repositorio: se administra donde vive.
                 if (repoId == null || !d.global) {
                     TextButton(onClick = { repo.delete(d.id); version++ }) {
@@ -154,6 +164,13 @@ fun GuidelinesSection(
                 version++
             }) { Text(io.acr.i18n.t("guide.upload")) }
 
+            // La tercera vía, y la que cubre el caso más común: la regla que existe en la cabeza
+            // del equipo y en ningún documento. Obligar a crear un archivo para anotar dos
+            // renglones es pedir tres pasos, y por eso no se hace.
+            OutlinedButton(onClick = { editor = Triple(null, "", "") }) {
+                Text(io.acr.i18n.t("guide.write"))
+            }
+
             // El repositorio ya suele traer sus convenciones escritas. Pedirle al usuario que
             // busque a mano un archivo que está a dos directorios de acá es trabajo inventado.
             if (localPath != null) {
@@ -168,6 +185,19 @@ fun GuidelinesSection(
         }
         error?.let {
             Text(it, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.error)
+        }
+
+        editor?.let { (id, nombre, texto) ->
+            io.acr.ui.GuidelineEditorDialog(
+                tituloInicial = nombre,
+                textoInicial = texto,
+                onDismiss = { editor = null },
+                onSave = { n, t ->
+                    if (id == null) repo.add(repoId, n, t, null) else repo.update(id, n, t)
+                    editor = null
+                    version++
+                },
+            )
         }
     }
 }

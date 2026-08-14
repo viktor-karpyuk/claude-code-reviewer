@@ -1978,6 +1978,22 @@ class GuidelineRepository(private val store: Store) {
         return id
     }
 
+    /**
+     * Cambia el nombre y el texto de una guía escrita a mano.
+     *
+     * No se ofrece para las importadas de un archivo: editarlas acá las dejaría distintas del
+     * `.md` del que salieron, y el próximo "actualizar" pisaría el cambio sin avisar. Lo que se
+     * edita ahí es el archivo, y después se re-importa.
+     */
+    fun update(id: String, name: String, content: String) {
+        store.stmt("UPDATE guideline SET name = ?, content = ? WHERE id = ? AND linked_path IS NULL") { ps ->
+            ps.setString(1, name)
+            ps.setString(2, content)
+            ps.setString(3, id)
+            ps.executeUpdate()
+        }
+    }
+
     fun setEnabled(id: String, enabled: Boolean) {
         store.stmt("UPDATE guideline SET enabled = ? WHERE id = ?") { ps ->
             ps.setInt(1, if (enabled) 1 else 0)

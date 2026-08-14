@@ -3,6 +3,30 @@
 Reglas de numeración en [CLAUDE.md](CLAUDE.md): un requerimiento **nuevo** incrementa *major*;
 cambiar uno **existente** incrementa *patch*.
 
+## 50.0.0
+
+Requerimiento nuevo: **escribir las convenciones directamente en la app**.
+
+Ahora hay tres formas de darle criterios a la review, y conviven:
+
+- **Subir un `.md`** — ya estaba.
+- **Importarlo del repositorio** — ya estaba, desde la 37.0.0.
+- **Escribirla acá**, en un editor con nombre y texto Markdown. Es la que faltaba y cubre el caso
+  más común de todos: la regla que el equipo tiene clara y no está escrita en ningún lado.
+  Obligar a crear un archivo para anotar "los controladores no llevan lógica" es pedir tres pasos
+  —abrir un editor, inventar una ruta, volver— para dos renglones, y por eso no se hace.
+
+Las escritas a mano **se pueden editar**: una convención se afina con el uso, y si no se pudiera
+corregir habría que borrarla y reescribirla entera.
+
+Las **importadas de un archivo no se editan desde la app**, a propósito: cambiarlas acá las dejaría
+distintas del `.md` del que salieron y el próximo "actualizar" pisaría el cambio sin avisar. Esas
+se editan en el archivo y se vuelven a importar.
+
+El campo de texto es monoespaciado y alto porque lo que se escribe es Markdown que va a viajar
+dentro de un prompt: verlo en una sola línea invita a escribir una sola línea. Y muestra el tamaño
+contra el tope de contexto mientras se escribe.
+
 ## 49.0.1
 
 Arreglo de la navegación de la 48.0.0: **la lista de repositorios ahora acompaña a toda la sección
