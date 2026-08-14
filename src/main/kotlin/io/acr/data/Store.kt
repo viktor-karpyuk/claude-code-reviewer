@@ -717,6 +717,21 @@ class Store(private val dbPath: Path) : AutoCloseable {
             );--split--
             CREATE INDEX ix_pr_stat_author ON pr_stat(author, created_on)
             """.trimIndent(),
+
+            // v40 — quién sigue en el equipo.
+            //
+            // La spec dejó esto como pregunta abierta: si alguien que se fue se archiva y sale de
+            // los agregados, o si sigue apareciendo en los períodos en que sí trabajó. Lo segundo
+            // es más fiel al histórico y lo primero es más útil para leer, y la respuesta correcta
+            // resultó ser las dos: se archiva y desaparece de los reportes por defecto, pero sus
+            // datos no se borran y hay un interruptor para volver a verlos.
+            //
+            // Borrarlos sería peor de lo que parece: los commits quedarían sin persona y los
+            // totales del equipo bajarían sin que nadie entienda por qué, incluso en trimestres
+            // viejos donde esa persona sí estuvo.
+            """
+            ALTER TABLE person ADD COLUMN archived INTEGER NOT NULL DEFAULT 0
+            """.trimIndent(),
         )
     }
 }

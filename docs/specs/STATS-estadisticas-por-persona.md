@@ -440,8 +440,10 @@ esté andando y se vean personas y números reales:
 
 1. **Umbral de "identidad candidata a fusión"**: hoy la heurística compara nombre normalizado. Si
    con datos reales genera falsos positivos, habrá que endurecerla o pedir confirmación siempre.
-2. **Qué hacer con quien ya no está en el equipo**: ¿se archiva la persona y sale de los agregados
-   por defecto, o sigue apareciendo en los períodos en que sí trabajó? Lo segundo es más honesto
-   con el histórico; lo primero es más cómodo de leer.
+2. ~~**Qué hacer con quien ya no está en el equipo.**~~ **Resuelto en v45.0.0**: las dos cosas a la
+   vez. Se marca a la persona y desaparece de los reportes, pero **no se borra nada** —en un
+   trimestre viejo esa persona sí estuvo, y sacar su trabajo del histórico haría bajar los totales
+   del equipo sin explicación—. El filtro es de vista, con interruptor para volver a verlos, y el
+   archivado se deshace. La pregunta estaba mal planteada: no era archivar *o* conservar.
 3. **Repositorios sin clon local**: hoy todos lo tienen. Si aparece uno sin clon, las métricas de
    git no se pueden calcular y habría que mostrarlo con cobertura reducida en vez de vacío.

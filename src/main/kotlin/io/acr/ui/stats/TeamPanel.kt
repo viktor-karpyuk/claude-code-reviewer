@@ -64,6 +64,7 @@ fun TeamPanel(ctx: AppContext) {
     var orden by remember { mutableStateOf(Orden.TOUCHED) }
     var verEvolucion by remember { mutableStateOf(false) }
     var ficha by remember { mutableStateOf<Person?>(null) }
+    var verArchivadas by remember { mutableStateOf(false) }
 
     val periodo = remember(preset) { resolvePreset(preset) }
     val personas = io.acr.ui.dbState(initial = emptyList<Person>()) { ctx.persons.all() }
@@ -76,7 +77,10 @@ fun TeamPanel(ctx: AppContext) {
         trimestres.associate { q -> q.label to ctx.commitStats.volumeByPerson(q.from, q.to) }
     }
 
-    val visibles = personas.filter { !it.isBot }
+    // Quien ya no está deja de aparecer, pero sus datos no se borran: en un trimestre viejo esa
+    // persona sí estuvo, y sacarla del histórico haría bajar los totales del equipo sin
+    // explicación. Por eso se filtra al mostrar y no al guardar, y se puede volver a ver.
+    val visibles = personas.filter { !it.isBot && (verArchivadas || !it.archived) }
     val filas = remember(visibles, volumenes, orden) {
         visibles.map { it to (volumenes[it.id] ?: Volume(0, 0, 0, 0, 0)) }
             .sortedWith(
@@ -141,6 +145,14 @@ fun TeamPanel(ctx: AppContext) {
                 )
             }
             Spacer(Modifier.weight(1f))
+            if (personas.any { it.archived }) {
+                TextButton(onClick = { verArchivadas = !verArchivadas }) {
+                    Text(
+                        if (verArchivadas) t("team.hideArchived")
+                        else t("team.showArchived", personas.count { it.archived }),
+                    )
+                }
+            }
             TextButton(onClick = { verEvolucion = !verEvolucion }) {
                 Text(if (verEvolucion) t("team.hideEvolution") else t("team.showEvolution"))
             }

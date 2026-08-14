@@ -222,6 +222,14 @@ fun PeoplePanel(ctx: AppContext) {
                                 Spacer(Modifier.width(6.dp))
                                 StatusBadge(t("people.bot"))
                             }
+                            if (p.archived) {
+                                Spacer(Modifier.width(6.dp))
+                                Text(
+                                    t("people.archived"),
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
                             if (p.autoMerged) {
                                 Spacer(Modifier.width(6.dp))
                                 Text(
@@ -247,6 +255,11 @@ fun PeoplePanel(ctx: AppContext) {
                     // Marcar como bot lo saca de todos los agregados. El mecanismo existe aunque
                     // hoy no haya ninguno en estos repositorios: en cuanto entre un dependabot,
                     // sus cientos de commits taparían a las personas.
+                    // Archivar en vez de borrar: borrar dejaría los commits sin persona y haría
+                    // bajar los totales de trimestres viejos donde esa persona sí trabajó.
+                    TextButton(onClick = { ctx.persons.setArchived(p.id, !p.archived); version++ }) {
+                        Text(if (p.archived) t("people.unarchive") else t("people.archive"))
+                    }
                     TextButton(onClick = { ctx.persons.setBot(p.id, !p.isBot); version++ }) {
                         Text(if (p.isBot) t("people.unbot") else t("people.markBot"))
                     }

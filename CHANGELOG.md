@@ -3,6 +3,40 @@
 Reglas de numeración en [CLAUDE.md](CLAUDE.md): un requerimiento **nuevo** incrementa *major*;
 cambiar uno **existente** incrementa *patch*.
 
+## 45.0.0
+
+Dos requerimientos nuevos: **menú vertical estilo VS Code** y **ocultar a quienes ya no están**.
+
+### Barra de actividad
+
+Los cuatro accesos —Panel, Personas, Repositorio, Info, Ajustes— pasan a una tira angosta de
+íconos pegada al borde izquierdo, como la de VS Code.
+
+- Antes vivían al pie de la lista de repositorios, compitiendo por el mismo ancho: con las
+  etiquetas puestas no entraban y había que partirlos en dos filas de dos, con Ajustes recortado.
+- Además separa dos cosas distintas: **navegar entre secciones** y **elegir en qué repositorio se
+  trabaja**. Estaban mezcladas en la misma columna.
+- Sólo íconos, con el nombre al pasar el mouse: a 48 dp no entra texto legible, y son pocas
+  entradas y siempre las mismas, así que la posición se aprende enseguida.
+- La marca de selección es una barra fina al borde, no un fondo relleno: con fondo, el ícono
+  activo pesaría más que el contenido de la pantalla de al lado.
+- Ajustes e Info quedan anclados abajo: no son destinos de trabajo, y arriba estarían a la misma
+  altura que lo que se usa todo el día.
+
+### Quienes ya no están
+
+Se puede marcar a alguien como que dejó el equipo, y desaparece de los reportes.
+
+- **No se borra nada.** En un trimestre viejo esa persona sí estuvo, y sacar su trabajo del
+  histórico haría bajar los totales del equipo sin que nadie entienda por qué. Se filtra al
+  mostrar, no al guardar.
+- Hay un interruptor para volver a verlos cuando hace falta mirar hacia atrás, y archivar se
+  deshace.
+- Aplica a las tres pestañas: volumen, participación y hallazgos.
+
+Esto además cierra una de las preguntas que la especificación había dejado abiertas — resultó que
+la respuesta no era archivar *o* conservar el histórico, sino las dos cosas.
+
 ## 44.0.0
 
 Requerimiento nuevo: **estadísticas por persona — ficha individual**.

@@ -39,7 +39,7 @@ class PersonRepository(private val store: Store) {
             }
         }
         val porPersona = identidades.groupBy { it.first }
-        return store.stmt("SELECT id, display_name, is_bot FROM person ORDER BY display_name") { ps ->
+        return store.stmt("SELECT id, display_name, is_bot, archived FROM person ORDER BY display_name") { ps ->
             ps.executeQuery().use { rs ->
                 buildList {
                     while (rs.next()) {
@@ -51,6 +51,7 @@ class PersonRepository(private val store: Store) {
                                 displayName = rs.getString(2),
                                 identities = propias.map { it.second },
                                 isBot = rs.getInt(3) == 1,
+                                archived = rs.getInt(4) == 1,
                                 // Sin confirmar = la unió la heurística y nadie la revisó todavía.
                                 autoMerged = propias.any { !it.third },
                             ),
@@ -239,6 +240,21 @@ class PersonRepository(private val store: Store) {
             }
         }
         return nuevo
+    }
+
+    /**
+     * Marca a alguien como fuera del equipo.
+     *
+     * No borra nada: los commits y los PRs siguen donde estaban. Borrar dejaría los commits sin
+     * persona y haría bajar los totales del equipo en trimestres viejos donde esa persona sí
+     * estuvo, sin que nadie entienda por qué.
+     */
+    fun setArchived(personId: String, archived: Boolean) {
+        store.stmt("UPDATE person SET archived = ? WHERE id = ?") { ps ->
+            ps.setInt(1, if (archived) 1 else 0)
+            ps.setString(2, personId)
+            ps.executeUpdate()
+        }
     }
 
     fun setBot(personId: String, isBot: Boolean) {

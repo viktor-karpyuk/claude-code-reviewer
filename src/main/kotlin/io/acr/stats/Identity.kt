@@ -40,6 +40,8 @@ data class Person(
     val identities: List<Identity>,
     val isBot: Boolean = false,
     val autoMerged: Boolean = false,
+    /** Ya no está en el equipo. Sus datos siguen; deja de aparecer en los reportes. */
+    val archived: Boolean = false,
 ) {
     fun emails(): Set<String> =
         identities.filter { it.kind == IdentityKind.GIT_EMAIL }.map { it.value }.toSet()

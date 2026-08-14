@@ -84,6 +84,10 @@ fun ReviewStatsPanel(ctx: AppContext) {
         return (p?.displayName ?: nombre) to (p != null)
     }
 
+    /** Quien ya no está no aparece en los reportes. Sus datos siguen guardados. */
+    fun oculta(nombre: String): Boolean =
+        personForDisplayName(nombre, personas)?.let { it.archived || it.isBot } ?: false
+
     Column(Modifier.fillMaxWidth().padding(16.dp).verticalScroll(rememberScrollState())) {
         Text(t("rstats.title"), style = MaterialTheme.typography.titleMedium)
         Text(
@@ -165,7 +169,7 @@ fun ReviewStatsPanel(ctx: AppContext) {
             )
             HorizontalDivider()
             val maxPrs = abiertos.values.maxOfOrNull { it.opened }?.toDouble() ?: 0.0
-            abiertos.entries.sortedByDescending { it.value.opened }.forEach { (nombre, c) ->
+            abiertos.entries.filterNot { oculta(it.key) }.sortedByDescending { it.value.opened }.forEach { (nombre, c) ->
                 val (mostrar, _) = etiqueta(nombre)
                 // Mediana y percentil 90, nunca el promedio: un PR olvidado tres meses corre el
                 // promedio y deja de describir a ninguno de los otros.
@@ -227,7 +231,7 @@ fun ReviewStatsPanel(ctx: AppContext) {
             }
             HorizontalDivider()
             val maxComentarios = comentarios.values.maxOfOrNull { it.comments }?.toDouble() ?: 0.0
-            comentarios.entries.sortedByDescending { it.value.comments }.forEach { (nombre, p) ->
+            comentarios.entries.filterNot { oculta(it.key) }.sortedByDescending { it.value.comments }.forEach { (nombre, p) ->
                 val (mostrar, enganchado) = etiqueta(nombre)
                 Row(
                     Modifier.fillMaxWidth().padding(vertical = 5.dp),
@@ -295,7 +299,7 @@ fun ReviewStatsPanel(ctx: AppContext) {
             )
             HorizontalDivider()
             val maxHallazgos = hallazgos.values.maxOfOrNull { it.total }?.toDouble() ?: 0.0
-            hallazgos.entries.sortedByDescending { it.value.total }.forEach { (nombre, s) ->
+            hallazgos.entries.filterNot { oculta(it.key) }.sortedByDescending { it.value.total }.forEach { (nombre, s) ->
                 val (mostrar, _) = etiqueta(nombre)
                 Row(
                     Modifier.fillMaxWidth().padding(vertical = 5.dp),

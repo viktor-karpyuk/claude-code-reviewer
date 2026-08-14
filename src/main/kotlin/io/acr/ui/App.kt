@@ -83,6 +83,32 @@ fun App(ctx: AppContext) {
     AcrTheme(theme) {
         Scaffold(snackbarHost = { SnackbarHost(snackbar) }) { padding ->
             Row(Modifier.fillMaxSize().padding(padding)) {
+                io.acr.ui.ActivityBar(
+                    items = listOf(
+                        io.acr.ui.ActivityItem(
+                            Icons.Default.Dashboard, io.acr.i18n.t("nav.panel"),
+                            selection.current is Selection.Dashboard,
+                        ) { selection.go(Selection.Dashboard) },
+                        io.acr.ui.ActivityItem(
+                            Icons.Default.People, io.acr.i18n.t("nav.people"),
+                            selection.current is Selection.People,
+                        ) { selection.go(Selection.People) },
+                        io.acr.ui.ActivityItem(
+                            Icons.Default.Add, io.acr.i18n.t("nav.repo"),
+                            selection.current is Selection.RepoForm,
+                        ) { selection.go(Selection.RepoForm(null)) },
+                    ),
+                    bottom = listOf(
+                        io.acr.ui.ActivityItem(
+                            Icons.Default.Info, io.acr.i18n.t("nav.about"),
+                            selection.current is Selection.About,
+                        ) { selection.go(Selection.About) },
+                        io.acr.ui.ActivityItem(
+                            Icons.Default.Settings, io.acr.i18n.t("nav.settings"),
+                            selection.current is Selection.Settings,
+                        ) { selection.go(Selection.Settings) },
+                    ),
+                )
                 RepoSidebar(
                     repos = repos,
                     running = runningByRepo,
@@ -214,54 +240,6 @@ private fun RepoSidebar(
             }
         }
 
-        HorizontalDivider()
-        // Dos filas de dos: cuatro items no entran en 260dp sin recortar las etiquetas, y el
-        // último —Ajustes— quedaba comido.
-        Row(
-            Modifier.fillMaxWidth().padding(horizontal = 4.dp),
-            horizontalArrangement = Arrangement.SpaceEvenly,
-        ) {
-            NavigationRailItem(
-                selected = selection.current is Selection.Dashboard,
-                onClick = { selection.go(Selection.Dashboard) },
-                icon = { Icon(Icons.Default.Dashboard, contentDescription = null) },
-                label = { Text(io.acr.i18n.t("nav.panel"), maxLines = 1) },
-            )
-            NavigationRailItem(
-                selected = selection.current is Selection.RepoForm,
-                onClick = onAdd,
-                icon = { Icon(Icons.Default.Add, contentDescription = null) },
-                label = { Text(io.acr.i18n.t("nav.repo"), maxLines = 1) },
-            )
-        }
-        Row(
-            Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 2.dp),
-            horizontalArrangement = Arrangement.SpaceEvenly,
-        ) {
-            NavigationRailItem(
-                selected = selection.current is Selection.About,
-                onClick = { selection.go(Selection.About) },
-                icon = { Icon(Icons.Default.Info, contentDescription = null) },
-                label = { Text(io.acr.i18n.t("nav.about"), maxLines = 1) },
-            )
-            NavigationRailItem(
-                selected = selection.current is Selection.Settings,
-                onClick = { selection.go(Selection.Settings) },
-                icon = { Icon(Icons.Default.Settings, contentDescription = null) },
-                label = { Text(io.acr.i18n.t("nav.settings"), maxLines = 1) },
-            )
-        }
-        Row(
-            Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 2.dp),
-            horizontalArrangement = Arrangement.SpaceEvenly,
-        ) {
-            NavigationRailItem(
-                selected = selection.current is Selection.People,
-                onClick = { selection.go(Selection.People) },
-                icon = { Icon(Icons.Default.People, contentDescription = null) },
-                label = { Text(io.acr.i18n.t("nav.people"), maxLines = 1) },
-            )
-        }
     }
 }
 
