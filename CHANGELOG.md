@@ -3,6 +3,17 @@
 Reglas de numeración en [CLAUDE.md](CLAUDE.md): un requerimiento **nuevo** incrementa *major*;
 cambiar uno **existente** incrementa *patch*.
 
+## 51.0.1
+
+Ajuste: **las tarjetas de repositorio tienen todas el mismo tamaño.**
+
+Antes cada una crecía según cuánto tuviera para mostrar —un repositorio sin deuda y sin historia
+ocupaba bastante menos que uno con las dos cosas— y la grilla quedaba escalonada. Comparar de un
+vistazo es justo para lo que sirve verlos todos juntos, y con alturas distintas eso se pierde.
+
+Las acciones quedan ancladas al pie, así están a la misma altura en todas las tarjetas y el ojo no
+tiene que buscarlas una por una.
+
 ## 51.0.0
 
 Requerimiento nuevo: **cada repositorio con su estado, y el histórico para ver tendencias**.

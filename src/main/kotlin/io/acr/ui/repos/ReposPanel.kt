@@ -133,8 +133,12 @@ private fun RepoCard(
         ctx.health.history(repo.id)
     }
 
+    // Alto fijo y no según el contenido: un repositorio sin deuda y sin historia todavía ocupa
+    // menos que uno con las dos cosas, y con alturas distintas la grilla queda escalonada y cuesta
+    // comparar de un vistazo, que es justo para lo que sirve verlos todos juntos.
     Column(
         Modifier.width(330.dp)
+            .height(310.dp)
             .clip(RoundedCornerShape(10.dp))
             .background(MaterialTheme.colorScheme.surfaceVariant)
             .clickable(onClick = onOpen)
@@ -184,6 +188,9 @@ private fun RepoCard(
                 ).joinToString(" · "),
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
+                // Con el alto fijo, una tercera línea acá empujaría las acciones fuera de la
+                // tarjeta. Dos alcanzan para las tres clases de deuda.
+                maxLines = 2,
             )
         } else {
             Text(
@@ -229,11 +236,14 @@ private fun RepoCard(
         Text(
             h.oldestPrDays?.let { t("repos.oldest", it) } ?: t("repos.neverReviewed"),
             style = MaterialTheme.typography.labelSmall,
+            maxLines = 1,
             color = if ((h.oldestPrDays ?: 0) > 14) MaterialTheme.colorScheme.error
             else MaterialTheme.colorScheme.onSurfaceVariant,
         )
 
-        Spacer(Modifier.height(4.dp))
+        // Empuja las acciones al pie: con el alto fijo, los botones de todas las tarjetas quedan
+        // en la misma línea y el ojo no tiene que buscarlos tarjeta por tarjeta.
+        Spacer(Modifier.weight(1f))
         Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
             TextButton(onClick = onOpen) { Text(t("repos.openPrsAction")) }
             TextButton(onClick = onEdit) { Text(t("common.edit")) }
