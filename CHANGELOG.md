@@ -3,6 +3,29 @@
 Reglas de numeración en [CLAUDE.md](CLAUDE.md): un requerimiento **nuevo** incrementa *major*;
 cambiar uno **existente** incrementa *patch*.
 
+## 44.0.0
+
+Requerimiento nuevo: **estadísticas por persona — ficha individual**.
+
+Al hacer click en una persona se abre su ficha: sus números del período y, debajo de cada uno, la
+lista que lo compone.
+
+- **Todo número se puede abrir.** Si la ficha dice "8 pull requests, mediana 4 días", ahí mismo
+  está cuáles fueron y cuál es el que tardó veinte. Un agregado que no se puede auditar sólo sirve
+  para tener una impresión, que es lo que este módulo no debería producir.
+- La lista va **completa y no un top**: el PR que explica la cola del percentil 90 puede ser
+  cualquiera, y esconderlo dejaría el número sin la única fila que lo justifica.
+- La **participación revisando va arriba**, con el mismo peso que el volumen. Al pie se leería
+  como un apéndice, y es la mitad del trabajo.
+- **Copiar como texto**: la ficha entera con período, listas y la advertencia, para pegar en una
+  conversación. Una uno a uno se prepara con datos, no con capturas de pantalla — y una captura
+  pierde el contexto justo cuando el número se discute.
+- Si la persona tiene identidades unidas automáticamente, la ficha lo avisa: es la primera cosa a
+  revisar cuando un número sorprende.
+
+La ficha reemplaza la tabla en vez de abrirse en un modal: acá se viene a leer, y un diálogo
+obligaría a cerrarlo para volver a mirar la lista.
+
 ## 43.0.0
 
 Requerimiento nuevo: **gráficos en las estadísticas**.

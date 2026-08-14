@@ -63,6 +63,7 @@ fun TeamPanel(ctx: AppContext) {
     var preset by remember { mutableStateOf(PeriodPreset.LAST_90) }
     var orden by remember { mutableStateOf(Orden.TOUCHED) }
     var verEvolucion by remember { mutableStateOf(false) }
+    var ficha by remember { mutableStateOf<Person?>(null) }
 
     val periodo = remember(preset) { resolvePreset(preset) }
     val personas = io.acr.ui.dbState(initial = emptyList<Person>()) { ctx.persons.all() }
@@ -90,6 +91,13 @@ fun TeamPanel(ctx: AppContext) {
     // Una sola escala para todas las barras: si cada fila se normalizara a su propio máximo,
     // todas se verían iguales y el gráfico diría que todos hicieron lo mismo.
     val escala = remember(filas) { filas.maxOfOrNull { it.second.touched }?.toDouble() ?: 0.0 }
+
+    // La ficha reemplaza a la tabla en vez de abrirse en un modal: acá se viene a leer, y un
+    // diálogo obligaría a cerrarlo para volver a mirar la lista.
+    ficha?.let { p ->
+        PersonCard(ctx, p, p.displayName, periodo) { ficha = null }
+        return
+    }
 
     Column(Modifier.fillMaxWidth().padding(16.dp)) {
         Text(t("team.title"), style = MaterialTheme.typography.titleMedium)
@@ -168,7 +176,9 @@ fun TeamPanel(ctx: AppContext) {
         Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState())) {
             filas.forEach { (p, v) ->
                 Row(
-                    Modifier.fillMaxWidth().padding(vertical = 6.dp),
+                    Modifier.fillMaxWidth()
+                        .clickable { ficha = p }
+                        .padding(vertical = 6.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Row(Modifier.width(220.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -235,6 +245,11 @@ fun TeamPanel(ctx: AppContext) {
         }
 
         Spacer(Modifier.height(10.dp))
+        Text(
+            t("team.openCard"),
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
         Text(
             t("team.coverage"),
             style = MaterialTheme.typography.labelSmall,

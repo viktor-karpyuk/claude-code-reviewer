@@ -353,6 +353,42 @@ class ReviewStatsRepository(private val store: Store) {
         }
 
     /**
+     * Los hallazgos concretos que recibió alguien, con su PR y su veredicto.
+     *
+     * Es lo que convierte "4 sin resolver" en algo sobre lo que se puede hablar: cuáles fueron, en
+     * qué PR y qué decía cada uno.
+     */
+    fun findingsFor(author: String, desde: String, hasta: String): List<FindingRow> =
+        store.stmt(
+            """SELECT r.repo_id, r.pr_id, f.severity, f.title, f.file_path, f.resolution
+                 FROM finding f
+                 JOIN review r ON r.id = f.review_id
+                WHERE r.pr_author = ? AND r.created_at >= ? AND r.created_at <= ?
+                  AND f.dismissed_at IS NULL
+                ORDER BY CASE f.severity WHEN 'blocker' THEN 0 WHEN 'major' THEN 1 ELSE 2 END""",
+        ) { ps ->
+            ps.setString(1, author)
+            ps.setString(2, desde)
+            ps.setString(3, hasta)
+            ps.executeQuery().use { rs ->
+                buildList {
+                    while (rs.next()) {
+                        add(
+                            FindingRow(
+                                repoId = rs.getString(1),
+                                prId = rs.getLong(2),
+                                severity = rs.getString(3),
+                                title = rs.getString(4).orEmpty(),
+                                filePath = rs.getString(5).orEmpty(),
+                                resolution = rs.getString(6),
+                            ),
+                        )
+                    }
+                }
+            }
+        }
+
+    /**
      * Sobre qué parte de lo revisado se puede atribuir a alguien.
      *
      * Se muestra siempre al lado de los números: una tabla que dice "3 bloqueantes" sin aclarar
@@ -456,6 +492,44 @@ class PrStatRepository(private val store: Store) {
             }
         }
 
+    /**
+     * Los pull requests concretos que componen el número de alguien.
+     *
+     * Un agregado que no se puede abrir no sirve para conversar: si la ficha dice "8 PRs, mediana
+     * 4 días", lo primero que uno quiere ver es cuáles, y cuál fue el que tardó veinte.
+     */
+    fun listByAuthor(author: String, desde: String, hasta: String): List<PrRow> =
+        store.stmt(
+            """SELECT repo_id, pr_id, title, state, created_on, closed_on,
+                      CASE WHEN closed_on IS NULL THEN NULL
+                           ELSE julianday(closed_on) - julianday(created_on) END
+                 FROM pr_stat
+                WHERE author = ? AND created_on >= ? AND created_on <= ?
+                ORDER BY created_on DESC""",
+        ) { ps ->
+            ps.setString(1, author)
+            ps.setString(2, desde)
+            ps.setString(3, hasta)
+            ps.executeQuery().use { rs ->
+                buildList {
+                    while (rs.next()) {
+                        val d = rs.getDouble(7)
+                        add(
+                            PrRow(
+                                repoId = rs.getString(1),
+                                prId = rs.getLong(2),
+                                title = rs.getString(3).orEmpty(),
+                                state = rs.getString(4),
+                                createdOn = rs.getString(5),
+                                closedOn = rs.getString(6),
+                                days = if (rs.wasNull() || d < 0) null else d,
+                            ),
+                        )
+                    }
+                }
+            }
+        }
+
     /** Rellena el autor de las reviews viejas con lo que trajo el histórico. */
     fun backfillReviewAuthors(): Int =
         store.stmt(
@@ -468,6 +542,17 @@ class PrStatRepository(private val store: Store) {
                )""",
         ) { it.executeUpdate() }
 }
+
+/** Un pull request concreto de la lista que hay detrás de un número. */
+data class PrRow(
+    val repoId: String,
+    val prId: Long,
+    val title: String,
+    val state: String,
+    val createdOn: String,
+    val closedOn: String?,
+    val days: Double?,
+)
 
 /** PRs abiertos por alguien en un período, y en qué terminaron. */
 data class PrCount(val opened: Int, val merged: Int, val declined: Int)
@@ -491,6 +576,16 @@ fun percentiles(dias: List<Double>): Pair<Double, Double>? {
     }
     return p(0.5) to p(0.9)
 }
+
+/** Un hallazgo concreto de los que componen el número de gravedad de alguien. */
+data class FindingRow(
+    val repoId: String,
+    val prId: Long,
+    val severity: String,
+    val title: String,
+    val filePath: String,
+    val resolution: String?,
+)
 
 /** Cuánto participó alguien revisando: comentarios dejados y en cuántos PRs distintos. */
 data class Participation(val comments: Int, val prs: Int)

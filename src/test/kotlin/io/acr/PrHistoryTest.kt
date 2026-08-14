@@ -182,3 +182,81 @@ class PrHistoryTest {
         assertEquals(1, ctx.prStats.openedByAuthor("2026-07-01", "2026-09-30").getValue("Ana Gómez").opened)
     }
 }
+
+/**
+ * El detalle que hay detrás de cada número de la ficha.
+ *
+ * Un agregado que no se puede abrir sólo sirve para tener una impresión, que es justo lo que este
+ * módulo no debería producir.
+ */
+class PersonDetailTest {
+
+    private fun conRepo(block: (AppContext, String) -> Unit) {
+        val dir = java.nio.file.Files.createTempDirectory("acr-detail")
+        val ctx = AppContext.bootstrap(dir)
+        try {
+            val repoId = ctx.repos.create(
+                "tmp-d-${System.nanoTime()}", Provider.BITBUCKET, "acme", "demo",
+                System.getProperty("java.io.tmpdir"), null, null, null, "", false,
+                io.acr.forge.SkipRules(), io.acr.forge.ReplyMode.OFF,
+            )
+            block(ctx, repoId)
+        } finally {
+            ctx.close()
+            dir.toFile().deleteRecursively()
+        }
+    }
+
+    private fun pr(id: Long, autor: String, creado: String, estado: PrState, cerrado: String? = null) =
+        PullRequest(
+            id = id, title = "PR $id", author = autor, sourceBranch = "f", targetBranch = "d",
+            headSha = "sha$id", commentCount = 0, updatedOn = cerrado ?: creado, url = "",
+            createdOn = creado, state = estado,
+        )
+
+    @Test
+    fun theListBehindTheNumberIsComplete() = conRepo { ctx, repoId ->
+        // La lista entera y no un top: el PR que explica la cola del percentil 90 puede ser
+        // cualquiera, y esconderlo dejaría el número sin la fila que lo justifica.
+        ctx.prStats.upsert(repoId, pr(1, "Ana Gómez", "2026-08-01", PrState.MERGED, "2026-08-02"))
+        ctx.prStats.upsert(repoId, pr(2, "Ana Gómez", "2026-08-01", PrState.MERGED, "2026-08-21"))
+        ctx.prStats.upsert(repoId, pr(3, "Ana Gómez", "2026-08-03", PrState.OPEN))
+        ctx.prStats.upsert(repoId, pr(4, "Beto Pérez", "2026-08-01", PrState.MERGED, "2026-08-02"))
+
+        val filas = ctx.prStats.listByAuthor("Ana Gómez", "2026-01-01", "2026-12-31")
+        assertEquals(3, filas.size, "los tres de Ana, no los de Beto")
+        assertEquals(listOf(3L, 2L, 1L), filas.map { it.prId }, "el más reciente primero")
+        assertNull(filas.first { it.prId == 3L }.days, "uno abierto todavía no tiene duración")
+        assertEquals(20.0, filas.first { it.prId == 2L }.days, "y el que tardó veinte está a la vista")
+    }
+
+    @Test
+    fun theFindingsBehindTheSeverityAreListedWithTheirVerdict() = conRepo { ctx, repoId ->
+        val id = ctx.reviews.start(
+            repoId, 7, "t", "sha", ReviewDepth.LIGHT, ProjectKind.BACKEND, "m", false,
+            prAuthor = "Ana Gómez",
+        )
+        ctx.findings.replaceForReview(
+            id, repoId, 7,
+            listOf(
+                io.acr.data.Finding("", "", 7, "a.kt", 1, "minor", "menor", "x", null, null),
+                io.acr.data.Finding("", "", 7, "b.kt", 2, "blocker", "grave", "y", null, null),
+            ),
+        )
+        ctx.reviews.finish(id, "cuerpo", null, 1.0)
+        val grave = ctx.findings.forReview(id).first { it.title == "grave" }
+        ctx.findings.setResolution(grave.id, io.acr.data.Resolution.UNRESOLVED, "sigue")
+
+        val filas = ctx.reviewStats.findingsFor("Ana Gómez", "1970-01-01", "2999-12-31")
+        assertEquals(2, filas.size)
+        assertEquals("blocker", filas.first().severity, "lo más grave primero, que es lo que se mira")
+        assertEquals("UNRESOLVED", filas.first().resolution)
+        assertEquals(7L, filas.first().prId, "con el PR donde está, para poder ir a verlo")
+    }
+
+    @Test
+    fun theDetailOfSomeoneElseIsNotMixedIn() = conRepo { ctx, repoId ->
+        ctx.prStats.upsert(repoId, pr(1, "Ana Gómez", "2026-08-01", PrState.MERGED, "2026-08-02"))
+        assertTrue(ctx.prStats.listByAuthor("Beto Pérez", "2026-01-01", "2026-12-31").isEmpty())
+    }
+}
