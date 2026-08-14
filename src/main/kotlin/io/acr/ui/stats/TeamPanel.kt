@@ -87,6 +87,10 @@ fun TeamPanel(ctx: AppContext) {
             )
     }
 
+    // Una sola escala para todas las barras: si cada fila se normalizara a su propio máximo,
+    // todas se verían iguales y el gráfico diría que todos hicieron lo mismo.
+    val escala = remember(filas) { filas.maxOfOrNull { it.second.touched }?.toDouble() ?: 0.0 }
+
     Column(Modifier.fillMaxWidth().padding(16.dp)) {
         Text(t("team.title"), style = MaterialTheme.typography.titleMedium)
 
@@ -153,6 +157,10 @@ fun TeamPanel(ctx: AppContext) {
             Encabezado(t("team.touched"), 100.dp, Orden.TOUCHED, orden) { orden = it }
             Encabezado(t("team.generated"), 110.dp, null, orden) {}
         }
+        Legend(
+            listOf(t("team.added") to ChartColors.added, t("team.deleted") to ChartColors.deleted),
+            Modifier.padding(vertical = 4.dp),
+        )
         HorizontalDivider()
 
         // La tabla puede crecer más que la pantalla: el scroll va acá adentro y no en toda la
@@ -185,21 +193,38 @@ fun TeamPanel(ctx: AppContext) {
                     // Lo excluido se dice, no se esconde: es el 25,6% de las líneas y sin verlo no
                     // se puede juzgar si la lista de patrones está bien puesta.
                     Numero(if (v.generated > 0) v.generated.toString() else "—", 110.dp, atenuado = true)
+                    Spacer(Modifier.width(12.dp))
+                    // Agregado y borrado en la misma barra, no sumados: un refactor que borra dos
+                    // mil líneas se vería como producción pura si se sumaran.
+                    BarRow(
+                        segments = listOf(
+                            Segment(v.added.toDouble(), ChartColors.added, "+"),
+                            Segment(v.deleted.toDouble(), ChartColors.deleted, "−"),
+                        ),
+                        max = escala,
+                        modifier = Modifier.weight(1f),
+                    )
                 }
 
                 if (verEvolucion && trimestres.isNotEmpty()) {
-                    Row(Modifier.padding(start = 36.dp, bottom = 6.dp)) {
-                        trimestres.forEach { q ->
-                            val vq = porTrimestre[q.label]?.get(p.id)
-                            Column(Modifier.width(96.dp)) {
+                    // El tiempo se lee de izquierda a derecha, así que acá las barras van
+                    // verticales. El trimestre en curso sale más tenue: a mitad de camino
+                    // siempre parece una caída si no se marca.
+                    Row(Modifier.padding(start = 36.dp, bottom = 8.dp, end = 16.dp)) {
+                        MiniBars(
+                            values = trimestres.map { (porTrimestre[it.label]?.get(p.id)?.touched ?: 0).toDouble() },
+                            labels = trimestres.map { it.label },
+                            lastIsPartial = trimestres.last().partial,
+                            modifier = Modifier.width(360.dp),
+                        )
+                        Spacer(Modifier.width(12.dp))
+                        Column {
+                            trimestres.forEach { q ->
+                                val vq = porTrimestre[q.label]?.get(p.id)
                                 Text(
-                                    q.label + if (q.partial) " *" else "",
+                                    "${q.label}: " + if (vq == null) "—" else "${vq.commits}c · ${vq.touched}",
                                     style = MaterialTheme.typography.labelSmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                )
-                                Text(
-                                    if (vq == null) "—" else "${vq.commits}c · ${vq.touched}",
-                                    style = MaterialTheme.typography.labelSmall,
                                 )
                             }
                         }

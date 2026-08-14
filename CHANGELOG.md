@@ -3,6 +3,35 @@
 Reglas de numeración en [CLAUDE.md](CLAUDE.md): un requerimiento **nuevo** incrementa *major*;
 cambiar uno **existente** incrementa *patch*.
 
+## 43.0.0
+
+Requerimiento nuevo: **gráficos en las estadísticas**.
+
+Barras al lado de cada tabla, para comparar tamaños de un vistazo sin dejar de tener los números
+exactos a la izquierda.
+
+- **Volumen**: una barra por persona con agregado y borrado como tramos separados, no sumados. Un
+  refactor que borra 2.000 líneas se vería como producción pura si se sumaran.
+- **Evolución por trimestre**: barras verticales, porque el eje que importa ahí es el tiempo y el
+  tiempo se lee de izquierda a derecha. El trimestre en curso sale más tenue: a mitad de camino
+  siempre parece una caída si no se marca.
+- **Hallazgos**: barra apilada por gravedad. Tres menores y tres bloqueantes son el mismo número y
+  no son lo mismo, que es la única diferencia que importa ahí.
+- **Pull requests**: mergeados, rechazados y todavía abiertos en la misma barra.
+
+Dos decisiones que hacen que los gráficos digan la verdad:
+
+- **Una sola escala para todas las barras.** Si cada fila se normalizara a su propio máximo, todas
+  quedarían del mismo largo y el gráfico diría que todos hicieron lo mismo. Es la forma más fácil
+  de mentir con barras, y hay tests que la cubren.
+- **Sin eje numérico dibujado.** Los números exactos están en la tabla de al lado; un eje
+  aproximado invita a leer cifras del gráfico cuando están escritas ahí mismo.
+
+Los colores no salen del tema: el primario es azul y se usa para navegar, y reusarlo mezclaría dos
+significados. Los pares que van juntos se distinguen por tono y por claridad a la vez.
+
+Todo dibujado con el Canvas de Compose, sin dependencias nuevas.
+
 ## 42.0.0
 
 Requerimiento nuevo: **estadísticas por persona — fase 4: histórico de pull requests**.

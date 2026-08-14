@@ -155,7 +155,16 @@ fun ReviewStatsPanel(ctx: AppContext) {
                 Col(t("rstats.median"), 110.dp)
                 Col(t("rstats.p90"), 110.dp)
             }
+            Legend(
+                listOf(
+                    t("rstats.merged") to ChartColors.added,
+                    t("rstats.declined") to ChartColors.deleted,
+                    t("rstats.stillOpen") to ChartColors.minor,
+                ),
+                Modifier.padding(vertical = 4.dp),
+            )
             HorizontalDivider()
+            val maxPrs = abiertos.values.maxOfOrNull { it.opened }?.toDouble() ?: 0.0
             abiertos.entries.sortedByDescending { it.value.opened }.forEach { (nombre, c) ->
                 val (mostrar, _) = etiqueta(nombre)
                 // Mediana y percentil 90, nunca el promedio: un PR olvidado tres meses corre el
@@ -175,6 +184,16 @@ fun ReviewStatsPanel(ctx: AppContext) {
                     Num(if (c.declined > 0) c.declined.toString() else "—", 90.dp)
                     Num(p?.let { "%.1f d".format(it.first) } ?: "—", 110.dp)
                     Num(p?.let { "%.1f d".format(it.second) } ?: "—", 110.dp)
+                    Spacer(Modifier.width(12.dp))
+                    BarRow(
+                        segments = listOf(
+                            Segment(c.merged.toDouble(), ChartColors.added, ""),
+                            Segment(c.declined.toDouble(), ChartColors.deleted, ""),
+                            Segment((c.opened - c.merged - c.declined).coerceAtLeast(0).toDouble(), ChartColors.minor, ""),
+                        ),
+                        max = maxPrs,
+                        modifier = Modifier.weight(1f),
+                    )
                 }
                 HorizontalDivider()
             }
@@ -207,6 +226,7 @@ fun ReviewStatsPanel(ctx: AppContext) {
                 Col(t("rstats.onPrs"), 110.dp)
             }
             HorizontalDivider()
+            val maxComentarios = comentarios.values.maxOfOrNull { it.comments }?.toDouble() ?: 0.0
             comentarios.entries.sortedByDescending { it.value.comments }.forEach { (nombre, p) ->
                 val (mostrar, enganchado) = etiqueta(nombre)
                 Row(
@@ -229,6 +249,12 @@ fun ReviewStatsPanel(ctx: AppContext) {
                     }
                     Num(p.comments.toString(), 110.dp)
                     Num(p.prs.toString(), 110.dp)
+                    Spacer(Modifier.width(12.dp))
+                    BarRow(
+                        segments = listOf(Segment(p.comments.toDouble(), ChartColors.neutral, "")),
+                        max = maxComentarios,
+                        modifier = Modifier.weight(1f),
+                    )
                 }
                 HorizontalDivider()
             }
@@ -259,7 +285,16 @@ fun ReviewStatsPanel(ctx: AppContext) {
                 Col(t("rstats.perPr"), 90.dp)
                 Col(t("rstats.notFixed"), 130.dp)
             }
+            Legend(
+                listOf(
+                    t("rstats.blocker") to ChartColors.blocker,
+                    t("rstats.major") to ChartColors.major,
+                    t("rstats.minor") to ChartColors.minor,
+                ),
+                Modifier.padding(vertical = 4.dp),
+            )
             HorizontalDivider()
+            val maxHallazgos = hallazgos.values.maxOfOrNull { it.total }?.toDouble() ?: 0.0
             hallazgos.entries.sortedByDescending { it.value.total }.forEach { (nombre, s) ->
                 val (mostrar, _) = etiqueta(nombre)
                 Row(
@@ -279,6 +314,18 @@ fun ReviewStatsPanel(ctx: AppContext) {
                     // quien mandó uno, y eso no dice nada de ninguno de los dos.
                     Num(if (s.prs > 0) "%.1f".format(s.total.toDouble() / s.prs) else "—", 90.dp)
                     Num(if (s.notFixedFirstTime > 0) s.notFixedFirstTime.toString() else "—", 130.dp)
+                    Spacer(Modifier.width(12.dp))
+                    // Apilada y no un total: tres menores y tres bloqueantes son el mismo número
+                    // y no son lo mismo, y esa diferencia es la única que importa acá.
+                    BarRow(
+                        segments = listOf(
+                            Segment(s.blocker.toDouble(), ChartColors.blocker, ""),
+                            Segment(s.major.toDouble(), ChartColors.major, ""),
+                            Segment(s.minor.toDouble(), ChartColors.minor, ""),
+                        ),
+                        max = maxHallazgos,
+                        modifier = Modifier.weight(1f),
+                    )
                 }
                 HorizontalDivider()
             }
