@@ -1,6 +1,7 @@
 package io.acr.ui.code
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -311,6 +312,12 @@ fun CodePanel(
                         .forEach { f ->
                             FindingCard(
                                 finding = f,
+                                // Cuál es el que el recorrido está señalando ahora. Con varios
+                                // comentarios en el mismo archivo, resaltar sólo la línea no
+                                // alcanza para saber de cuál se está hablando.
+                                active = anchors.getOrNull(cursor)?.id == f.id,
+                                posicion = anchors.indexOfFirst { it.id == f.id }.takeIf { it >= 0 },
+                                total = anchors.size,
                                 busy = publishingIds.contains(f.id),
                                 onPublish = {
                                     if (publishingIds.contains(f.id)) return@FindingCard
@@ -333,6 +340,7 @@ fun CodePanel(
                         .forEach { note ->
                             NoteCard(
                                 note = note,
+                                active = anchors.getOrNull(cursor)?.id == note.id,
                                 onEdit = { editing = note },
                                 onDelete = {
                                     scope.launch {
@@ -501,24 +509,48 @@ internal fun DiffRow(
 }
 
 @Composable
-private fun FindingCard(finding: io.acr.data.Finding, busy: Boolean, onPublish: () -> Unit) {
+private fun FindingCard(
+    finding: io.acr.data.Finding,
+    busy: Boolean,
+    active: Boolean = false,
+    posicion: Int? = null,
+    total: Int = 0,
+    onPublish: () -> Unit,
+) {
     val accent = io.acr.ui.Severity.of(finding.severity).color()
     Column(
         Modifier.fillMaxWidth().padding(start = 110.dp, top = 4.dp, bottom = 4.dp, end = 8.dp)
             .clip(RoundedCornerShape(6.dp))
-            .background(MaterialTheme.colorScheme.surfaceVariant)
+            // El que se está recorriendo lleva borde del color de su gravedad y fondo más marcado:
+            // es lo que hace que "Siguiente" señale algo y no sólo mueva el scroll.
+            .then(
+                if (active) {
+                    Modifier.border(2.dp, accent, RoundedCornerShape(6.dp))
+                        .background(accent.copy(alpha = 0.10f))
+                } else {
+                    Modifier.background(MaterialTheme.colorScheme.surfaceVariant)
+                },
+            )
             .padding(8.dp),
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             io.acr.ui.SeverityBadge(finding.severity)
             Spacer(Modifier.width(8.dp))
-            Text(finding.title, style = MaterialTheme.typography.bodySmall)
+            Text(finding.title, style = MaterialTheme.typography.bodySmall, modifier = Modifier.weight(1f))
+            // "3 de 7" en la tarjeta activa: dice dónde estás parado sin mirar la barra de arriba.
+            if (active && posicion != null) {
+                io.acr.ui.StatusBadge(
+                    io.acr.i18n.t("code.walkAt", posicion + 1, total),
+                    color = accent,
+                )
+            }
         }
         Text(
             finding.body,
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
+        io.acr.ui.SuggestionBlock(finding.suggestion)
         if (finding.publishedId == null) {
             TextButton(enabled = !busy, onClick = onPublish) {
                 Text(if (busy) "Publicando…" else "Publicar inline")
@@ -526,7 +558,7 @@ private fun FindingCard(finding: io.acr.data.Finding, busy: Boolean, onPublish: 
         } else {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
-                    "publicado",
+                    io.acr.i18n.t("common.published"),
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.primary,
                 )
@@ -539,11 +571,26 @@ private fun FindingCard(finding: io.acr.data.Finding, busy: Boolean, onPublish: 
 }
 
 @Composable
-private fun NoteCard(note: LocalNote, busy: Boolean, onEdit: () -> Unit, onDelete: () -> Unit, onPublish: () -> Unit) {
+private fun NoteCard(
+    note: LocalNote,
+    busy: Boolean,
+    active: Boolean = false,
+    onEdit: () -> Unit,
+    onDelete: () -> Unit,
+    onPublish: () -> Unit,
+) {
+    val accent = MaterialTheme.colorScheme.primary
     Column(
         Modifier.fillMaxWidth().padding(start = 110.dp, top = 4.dp, bottom = 4.dp, end = 8.dp)
             .clip(RoundedCornerShape(6.dp))
-            .background(MaterialTheme.colorScheme.surfaceVariant)
+            .then(
+                if (active) {
+                    Modifier.border(2.dp, accent, RoundedCornerShape(6.dp))
+                        .background(accent.copy(alpha = 0.10f))
+                } else {
+                    Modifier.background(MaterialTheme.colorScheme.surfaceVariant)
+                },
+            )
             .padding(8.dp),
     ) {
         Text(note.body, style = MaterialTheme.typography.bodySmall)

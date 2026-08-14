@@ -353,6 +353,20 @@ fun RepoFormPanel(
         }
     }
 
+    val convenciones: @Composable () -> Unit = {
+        // Sólo al editar: hace falta el id del repositorio para asociarlas.
+        if (existing != null) {
+            FormCard(t("guide.title"), t("guide.note")) {
+                io.acr.ui.GuidelinesSection(
+                    repo = ctx.guidelines,
+                    repoId = existing.id,
+                    titulo = "",
+                    nota = "",
+                )
+            }
+        }
+    }
+
     val replies: @Composable () -> Unit = {
         FormCard(t("repo.replyMode"), t("repo.replyModeNote")) {
             FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -403,6 +417,7 @@ fun RepoFormPanel(
                         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(14.dp)) {
                             connection()
                             replies()
+                            convenciones()
                         }
                         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(14.dp)) {
                             profile()
@@ -418,6 +433,7 @@ fun RepoFormPanel(
                         profile()
                         automatic()
                         replies()
+                        convenciones()
                     }
                 }
             }

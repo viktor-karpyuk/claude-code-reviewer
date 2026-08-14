@@ -9,7 +9,7 @@ plugins {
 
 group = "io.acr"
 // Fuente ÚNICA de la versión. Ver CLAUDE.md para cuándo incrementar qué.
-version = "22.0.4"
+version = "35.0.0"
 
 repositories {
     mavenCentral()
@@ -53,10 +53,17 @@ val generateVersionResource by tasks.registering {
     val outDir = layout.buildDirectory.dir("generated/version")
     val v = project.version.toString()
     outputs.dir(outDir)
+    // El changelog viaja adentro del paquete: la pantalla de novedades tiene que funcionar sin
+    // red, y una app que para contarte qué cambió necesita internet no sirve justo cuando algo
+    // anda mal.
+    val changelog = layout.projectDirectory.file("CHANGELOG.md")
+    inputs.file(changelog)
     doLast {
         val f = outDir.get().file("acr-version.properties").asFile
         f.parentFile.mkdirs()
         f.writeText("version=$v\n")
+        outDir.get().file("acr-changelog.md").asFile
+            .writeText(changelog.asFile.readText())
     }
 }
 

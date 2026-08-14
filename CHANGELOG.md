@@ -3,6 +3,288 @@
 Reglas de numeración en [CLAUDE.md](CLAUDE.md): un requerimiento **nuevo** incrementa *major*;
 cambiar uno **existente** incrementa *patch*.
 
+## 35.0.0
+
+Requerimiento nuevo: **novedades de cada versión dentro de la app**.
+
+- La pantalla de Info suma una sección **Novedades** con lo que trajo cada versión, la instalada
+  marcada, y links a esa versión y a todas las publicadas en GitHub.
+- El changelog **viaja dentro del paquete**, no se descarga: la pantalla tiene que funcionar sin
+  red, que es justo cuando uno mira qué cambió porque algo anda mal.
+- El parseo es tolerante: si el archivo falta o el formato cambia, la sección muestra los links y
+  nada más. Que una pantalla informativa rompa la app sería absurdo.
+- Hay un test que exige que la versión que está corriendo figure en el changelog: si se bumpea sin
+  anotar el cambio, falla.
+
+## 34.0.0
+
+Requerimiento nuevo: **subir convenciones y guías de arquitectura**.
+
+- Se pueden subir documentos `.md` que la review tiene que respetar: cómo se nombran las
+  interfaces, dónde va la lógica, qué patrón usa cada capa. Sin ellos la review marca como problema
+  lo que es una decisión ya tomada, y ese ruido hace que se deje de leer lo que dice.
+- **Dos alcances**: en Ajustes, las que valen para todos los repositorios; en el formulario de cada
+  repositorio, las suyas. Las generales entran primero y las del repositorio después, y el prompt
+  dice explícitamente que ante una contradicción manda la del repositorio.
+- El prompt no se limita a incluirlas: aclara que son decisiones y no sugerencias, que **no** hay
+  que reportar el código que las cumple, y que sí hay que marcar el que las contradice citando qué
+  regla incumple.
+- La pasada final también las respeta, para no terminar frenando un merge por una convención.
+- Cada documento se puede desactivar sin borrarlo, y se ve su tamaño: hay un tope de 60.000
+  caracteres porque el contexto no es gratis —una guía de cien páginas empujaría afuera el diff,
+  que es lo que hay que revisar—. Si se recorta, se dice; callarlo sería peor.
+- El contenido se guarda en la base y no como ruta a un archivo: con una ruta, mover o borrar el
+  archivo cambiaría en silencio el criterio con el que se revisa.
+
+## 33.0.0
+
+Requerimiento nuevo: **retomar el trabajo que quedó a medias al cerrar la app**.
+
+- Una review interrumpida ya no se pierde: se guardan sus parámetros —repositorio, PR, profundidad,
+  tipo, modelo— y al abrir la app se vuelve a lanzar. Antes se marcaba fallida y ahí moría; había
+  **16 así** en la base real.
+- No es una reanudación literal y conviene decirlo: el subproceso de Claude Code murió con su
+  contexto y no hay nada que retomar. Lo que se conserva es la orden, para volver a correrla igual.
+- Se saltea sola si mientras tanto alguien ya revisó ese commit, o si el repositorio ya no está.
+- Cuenta contra el mismo tope que el barrido: reanudar diez de golpe al abrir sería peor que
+  haberlas perdido. Y corre aunque el automático esté pausado, porque es trabajo que ya pediste.
+- Se abandona después de tres intentos: una review que revienta siempre —un binario roto, un repo
+  que ya no está— reintentada en cada arranque sería un bucle que gasta plata y nunca termina.
+
+Arreglo:
+
+- **Las pestañas de Código y Commits habían desaparecido.** Al unificar el diálogo de merge en la
+  32.0.0, el reemplazo se llevó por delante las dos ramas que las dibujan, así que desde esa
+  versión ninguna de las dos mostraba nada. Restauradas, con el botón de volver a la conversación.
+
+## 32.0.1
+
+- Cada PR muestra las dos fechas con su etiqueta: **creado** y **actualizado**, con hora. La de
+  actualización iba detrás de un "↻" que había que adivinar, y la de creación mostraba sólo el día
+  sin la hora.
+- Vale en la lista y en la cabecera del PR. Si nunca se actualizó desde que se creó, no se repite
+  la misma fecha dos veces.
+
+## 32.0.0
+
+Requerimiento nuevo: **el diálogo de merge con la misma información que Bitbucket**.
+
+- Ahora muestra **Origen**, **Destino**, **Estrategia**, **Mensaje del commit** editable y la opción
+  de borrar la rama de origen, con el mismo orden y las mismas etiquetas.
+- El mensaje viene prellenado con el formato exacto que usa Bitbucket al mergear —"Merged in
+  <rama> (pull request #N)"— verificado contra los merges reales del repositorio, para que la
+  historia se lea igual venga de donde venga.
+- El diálogo **vive en un solo lugar**: se abría desde la lista y desde el PR con dos copias del
+  mismo código. Duplicado, la que se tocara primero se llevaría las mejoras y la otra quedaría
+  vieja sin que nadie lo note — y acá la diferencia entre las dos versiones sería un merge hecho
+  con opciones distintas de las que uno creía.
+- Lo que queda sin resolver se sigue enumerando ahí adentro. Desde la lista se arma con los
+  conteos, que es lo que hay sin pagar una consulta por fila.
+
+## 31.0.0
+
+Requerimientos nuevos: **estrategias de merge** y **copiar el link del PR**.
+
+- La confirmación de merge deja elegir entre las tres que ofrece Bitbucket: **commit de merge**,
+  **squash** y **fast forward**. La elección se recuerda: en un equipo se usa casi siempre la misma.
+- Qué estrategias están habilitadas lo decide el repositorio y la API **no lo publica** en ningún
+  endpoint consultable —lo verifiqué contra el repo real—, así que se ofrecen las tres y el
+  proveedor rechaza la que no corresponda. Es preferible a esconder una que sí estaba permitida.
+- El mapeo a GitHub no es exacto y está dicho en el código: su `rebase` reescribe los commits sobre
+  la punta del destino, que se parece a un fast-forward pero no es lo mismo. Se elige el más
+  cercano.
+- Ante un valor guardado inválido se cae en commit de merge, que es la que menos rompe: conserva la
+  historia de la rama, mientras squash y fast-forward la pierden o la reescriben.
+- **Copiar el link del PR** desde la pantalla del PR y desde cada fila de la lista, sin salir de la
+  app —que es lo que uno hace para pegarlo en un chat o en un ticket—. Si todavía no cargaron los
+  datos vivos, se arma con las coordenadas del repositorio en vez de no ofrecer nada.
+
+## 30.0.0
+
+Requerimiento nuevo: **mergear cuando quieras, sin tener todo resuelto**.
+
+- El botón de mergear está **siempre habilitado** en un PR abierto. Mergear con cosas pendientes es
+  una decisión legítima —una urgencia, comentarios que ya no aplican, un fix que no puede esperar—
+  y la app no está para impedirla.
+- Las seis condiciones dejan de bloquear y pasan a ser información: se siguen viendo al lado del
+  botón, y **la confirmación enumera qué estás salteando** antes de mergear. Es el último momento
+  en que sirve verlo.
+- En la lista, el botón aparece en toda fila abierta. Cuando está todo resuelto va relleno; cuando
+  falta algo, con contorno. La diferencia se ve sin leer, y el detalle está en la confirmación.
+- El porcentaje de "listo" no cambia: sigue diciendo cuánto falta. Lo que cambia es que ahora es un
+  dato y no una traba.
+
+## 29.0.0
+
+Requerimiento nuevo: **el círculo dice la postura, sin texto**.
+
+- El color del círculo reemplaza al texto: **verde** aprobó, **rojo** pidió cambios, **gris**
+  participa sin haberse pronunciado. Con varias personas, el texto al lado ocupaba toda la fila.
+- Para poder mostrar el gris hubo que guardar también a los participantes que **no** se
+  pronunciaron, que antes se descartaban.
+- El nombre y la postura aparecen al pasar el mouse: el color se reconoce de reojo, pero hay que
+  poder confirmar sin adivinar.
+- Se sacó el badge "aprobado por X" de la lista: los círculos ya lo dicen, y repetirlo tapaba el
+  estado de la review, que es lo otro que hay que ver en esa fila.
+- **Un participante sin postura nunca cuenta como aprobación.** Es el riesgo de guardarlos: si
+  contara, el barrido dejaría de revisar un PR que nadie aprobó. Las reglas leen sólo a quienes se
+  pronunciaron, y hay un test que lo fija.
+
+## 28.0.1
+
+- Los círculos de persona pasan al doble de tamaño: 36 puntos en las filas y 44 en la pantalla del
+  PR.
+- Las iniciales y el borde crecen con el círculo. Unas iniciales chicas dentro de un círculo grande
+  se ven perdidas, y son lo que se lee cuando el color no alcanza para distinguir.
+
+## 28.0.0
+
+Requerimientos nuevos: **cerrar respuestas sin contestarlas** y **círculos por persona**.
+
+- Una respuesta se puede dar por **cerrada sin contestar**, y hay un botón para cerrar todas las de
+  un PR de una vez. No toda respuesta pide una contestación —"corregido", "gracias", "dale"— y sin
+  una salida esas bloqueaban el merge para siempre: había 24 así en un solo PR, y la única forma de
+  destrabarlo era escribir algo que nadie necesitaba leer. Es reversible.
+- Una respuesta cerrada deja de contar como pendiente en el panel, en la conversación y en la
+  condición para mergear.
+- **Círculos con las iniciales de cada persona**, con su nombre completo al pasar el mouse. Están
+  en la lista de PRs —el autor y quiénes se pronunciaron—, en la pantalla del PR, en cada mensaje
+  de la conversación y en el historial.
+- El borde del círculo dice qué opinó: verde aprobó, rojo pidió cambios. Con varias personas, una
+  lista de nombres ocupa toda la fila; los círculos entran en el ancho de un badge.
+- El color de cada persona es estable entre aperturas: si cambiara, el círculo dejaría de servir
+  para reconocer a alguien de un vistazo, que es lo único que hace.
+- Detalle que encontró un test: con una paleta de ocho colores y `hashCode()`, el equipo real de
+  cinco personas caía en **tres** colores —esos nombres comparten prefijos y longitud, que es justo
+  lo que ese hash agrupa—. Con doce colores y FNV, los cinco quedan distintos.
+
+## 27.0.0
+
+Requerimientos nuevos: **cabecera redimensionable** y **pantalla completa**.
+
+- La línea que separa la cabecera del PR —acciones, porcentaje, verificación— del contenido se
+  puede **arrastrar arriba y abajo**, hasta dejarla en cero. Cuánto espacio merece cada zona
+  depende de qué estés haciendo, y por eso lo decide quien mira y no el layout. La altura se
+  guarda.
+- Botón de **pantalla completa**: esconde todo lo de arriba de un click y le da el alto entero al
+  contenido. Otro click vuelve.
+- La tarjeta del **porcentaje también se pliega**, como las otras dos. Plegada sigue diciendo lo
+  único que se mira de reojo —"85% · todavía no está listo"— y esconde el detalle de qué falta.
+
+Arreglo:
+
+- **Tus acciones se guardaban como "nosotros" en vez de con tu nombre.** Eso creaba una persona
+  fantasma: la misma aprobación figuraba dos veces, una registrada por la app y otra como "Viktor
+  Karpyuk" cuando el sync la traía de la API —así estaba en la base, con las dos filas—. Ahora se
+  usa el nombre con el que el proveedor te nombra, sacado de los comentarios que ya sabemos
+  tuyos, y una migración unifica lo ya guardado.
+- Por eso ahora dice "aprobado por Viktor Karpyuk" también cuando la aprobación es tuya.
+
+## 26.0.0
+
+Requerimiento nuevo: **pedir cambios, y el mismo control que da Bitbucket**.
+
+- Los botones ahora reflejan lo que ya dijiste, en vez de ofrecer siempre lo mismo:
+  - Sin opinar: **Aprobar** · **Pedir cambios**
+  - Ya aprobaste: se ve "lo aprobaste" y quedan **Retirar aprobación** · **Pedir cambios**
+  - Pediste cambios: se ve "pediste cambios" y quedan **Aprobar** · **Retirar el pedido**
+- Ofrecer "Aprobar" a quien ya aprobó no dice nada y esconde la acción que sí sirve.
+- Las dos posturas son **excluyentes**, como las modela Bitbucket en `participants[].state`:
+  approved, changes_requested o nada. Pedir cambios después de aprobar reemplaza, no suma.
+- Se registran también las posturas de los demás: al abrir un PR se ve quién aprobó y quién pidió
+  cambios. Verificado contra la API: en el `#151` ya figuraban dos aprobaciones, una tuya.
+- Retirar la propia no toca la de los otros.
+- En GitHub, "retirar el pedido de cambios" no existe como operación —una review enviada no se
+  borra— así que se resuelve con lo más cercano, igual que ya se hacía con la aprobación.
+
+## 25.0.3
+
+- **Los botones de verificar, aprobar, declinar y mergear ya no desaparecen.** Se escondían por
+  completo cuando no cargaban los datos vivos del PR —algo común con el 401 intermitente de
+  Bitbucket— o cuando el PR todavía no tenía review. Esconderlos hacía imposible saber si la
+  función existía.
+- Si falta el dato vivo del PR, ahora se dice por qué y hay un botón para **reintentar**. Antes la
+  única forma era salir de la pantalla y volver a entrar.
+- Aprobar y declinar aparecen aunque no haya review: no la necesitan. Mergear la sigue exigiendo,
+  pero eso lo dice su propia condición en vez de hacer desaparecer los cuatro botones.
+- Si el PR está cerrado o mergeado se dice, en vez de mostrar una zona vacía.
+
+## 25.0.2
+
+- **Un PR cuya review no encontró nada ya se puede mergear.** La condición "tiene que haber commits
+  desde la review" se exigía siempre, incluso cuando no habíamos publicado ni un comentario: si no
+  pedimos ningún cambio no hay nada que corregir, y exigir un commit dejaba ese PR sin poder
+  mergearse **nunca**. Es el caso de `talos-apirest #1517`, con cero hallazgos y todo lo demás en
+  orden.
+- El porcentaje de "listo para mergear" ya tenía esa condición bien; el botón no. Eran dos reglas
+  que debían coincidir y no coincidían: el mismo PR figuraba al 100% y con el botón deshabilitado.
+  Ahora la excepción está en la regla compartida y hay un test que la fija.
+
+## 25.0.1
+
+- Las tarjetas de la pantalla del PR —porcentaje de listo, pasada final, verificación— se **pliegan
+  y tienen scroll propio**. El resumen de la pasada final del PR #149 son 3.728 caracteres: en una
+  tarjeta rígida eso empujaba hacia abajo la verificación, las pestañas y todo el contenido, y para
+  llegar abajo había que scrollear la pantalla entera pasando por un muro de texto.
+- La pasada final y la verificación **arrancan plegadas**, pero su conclusión sigue a la vista en
+  el título: "nada que frene el merge", "2 bloqueantes", "quedó vieja". Se ve el veredicto sin el
+  texto completo, y se abre lo que interesa.
+- El porcentaje queda siempre visible —es el titular— y lo que se acota es la lista de lo que
+  falta, que además ya no se corta en seis: se ven todas con scroll.
+- El plegado de cada tarjeta se recuerda entre arranques.
+
+## 25.0.0
+
+Requerimientos nuevos: **autor visible**, **aprobación persistida** y **secciones plegables**.
+
+- En la lista de PRs el autor va con etiqueta y color propio —"autor: Nombre Apellido"— en vez de
+  mezclado entre las ramas y la fecha. Es el dato que uno busca al barrer la lista.
+- **Las aprobaciones se guardan, y un PR aprobado ya no se revisa.** La aprobación es la señal de
+  que se terminó de mirar; seguir revisándolo gasta una corrida del modelo en algo ya decidido. El
+  barrido lo saltea diciendo quién aprobó.
+- Se registran tanto las nuestras —al aprobar desde la app— como las de otros, que se ven al abrir
+  un PR. El listado de Bitbucket **no** trae las aprobaciones: sólo el PR individual, en
+  `participants`. Pedirlo por fila sería una llamada de red por PR, así que se guardan localmente
+  y la lista lee de ahí en una sola consulta.
+- Retirar una aprobación la borra, para que el PR vuelva al circuito. La propia nunca se borra por
+  un sync vacío: la conocemos de primera mano y la API puede tardar en reflejarla.
+- Las secciones del panel se **pliegan** y cada una tiene su color: rojo para "te respondieron",
+  verde para lo cerrado, azul para lo que está en curso. Con seis listas del mismo gris, encontrar
+  una era scrollear y leer. El plegado se guarda.
+
+## 24.0.0
+
+Requerimiento nuevo: **el recorrido señala el comentario, no sólo la línea**.
+
+- "Anterior" y "Siguiente" ahora resaltan la **tarjeta del comentario** al que apuntan: borde del
+  color de su gravedad y fondo marcado. Antes sólo se resaltaba la línea, y en un archivo con
+  varios comentarios no se distinguía de cuál se estaba hablando —que es exactamente el caso que
+  más se da.
+- La tarjeta activa lleva su posición, "3 de 7", así se sabe dónde estás parado sin mirar la barra
+  de arriba.
+- Vale igual para los hallazgos de la review y para las notas propias, que comparten el recorrido.
+
+## 23.0.0
+
+Requerimiento nuevo: **cada hallazgo puede proponer cómo se resuelve**.
+
+- Además de señalar el problema, la review propone el arreglo: concreto, mínimo, coherente con el
+  código de alrededor, y en un bloque de código cuando corresponde. Señalar sin proponer deja todo
+  el trabajo de pensar la solución del otro lado.
+- La propuesta **va en el comentario que se publica**, no sólo en la app: el valor de proponer cómo
+  se arregla es que lo lea quien tiene que arreglarlo.
+- Se muestra en bloque aparte —fondo propio, monoespaciada— porque son dos cosas distintas: el
+  cuerpo dice qué está mal y esto dice qué hacer. Mezclados, la propuesta se pierde justo cuando es
+  lo más accionable.
+- **El campo es opcional a propósito.** El prompt pide dejarlo vacío cuando no se puede sostener
+  una propuesta, y el esquema no lo exige: si fuera obligatorio, el CLI reintentaría hasta que el
+  modelo invente una. Una sugerencia inventada es peor que ninguna.
+- Cuando la decisión depende de contexto que la review no tiene —una regla de negocio, una
+  preferencia del equipo— lo dice en el cuerpo y no propone.
+
+Además: se agregó la especificación del módulo de estadísticas por persona en
+`docs/specs/`, con casos de uso, métricas definidas y decisiones tomadas. Sin implementar.
+
 ## 22.0.4
 
 - En el resumen de hallazgos de la review, el `archivo:línea` de cada uno es ahora un **link al

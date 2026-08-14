@@ -77,6 +77,14 @@ fun DashboardPanel(ctx: AppContext, onOpenPr: (repoId: String, prId: Long) -> Un
     // eran la misma cosa, pero la lista quedaba enterrada bajo los gráficos.
     var focus by remember { mutableStateOf<String?>(null) }
     var showHistory by remember { mutableStateOf(false) }
+    // Qué secciones están plegadas. Se guarda: qué te interesa mirar no cambia entre arranques.
+    var plegadas by remember {
+        mutableStateOf(ctx.prefs.get(AppContext.PREF_DASH_COLLAPSED).orEmpty().split(",").toSet())
+    }
+    fun alternar(clave: String) {
+        plegadas = if (clave in plegadas) plegadas - clave else plegadas + clave
+        ctx.prefs.put(AppContext.PREF_DASH_COLLAPSED, plegadas.joinToString(","))
+    }
     // Los pendientes salen de consultar a los proveedores, así que NO se refrescan con el tic:
     // sería una ráfaga de llamadas cada 10s contra un token que ya limita por frecuencia.
     var pending by remember { mutableStateOf<List<PendingPr>?>(null) }
@@ -280,11 +288,11 @@ fun DashboardPanel(ctx: AppContext, onOpenPr: (repoId: String, prId: Long) -> Un
             }
 
             if (focus == null || focus == "ready") {
-            item { Section("Listas para publicar (${snapshot.ready.size})") }
-            if (snapshot.ready.isEmpty()) {
+            item { Section(collapsed = "ready" in plegadas, onToggle = { alternar("ready") }, accent = MaterialTheme.colorScheme.primary, text = "Listas para publicar (${snapshot.ready.size})") }
+            if (snapshot.ready.isEmpty() && "ready" !in plegadas) {
                 item { Empty(io.acr.i18n.t("dash.noneReady")) }
             }
-            items(snapshot.ready, key = { "r-${it.id}" }) { r ->
+            items(if ("ready" in plegadas) emptyList() else snapshot.ready, key = { "r-${it.id}" }) { r ->
                 ReviewRow(r, snapshot.repoNames[r.repoId] ?: r.repoId) { onOpenPr(r.repoId, r.prId) }
             }
             }
@@ -295,13 +303,19 @@ fun DashboardPanel(ctx: AppContext, onOpenPr: (repoId: String, prId: Long) -> Un
             if (focus == null || focus == "awaiting") {
             item {
                 Section(
-                    io.acr.i18n.t("dash.awaitingThem") + " (${snapshot.awaitingThem.size})",
+                    text = io.acr.i18n.t("dash.awaitingThem") + " (${snapshot.awaitingThem.size})",
+                    accent = io.acr.ui.VERDE_OK,
+                    collapsed = "awaiting" in plegadas,
+                    onToggle = { alternar("awaiting") },
                 )
             }
-            if (snapshot.awaitingThem.isEmpty()) {
+            if (snapshot.awaitingThem.isEmpty() && "awaiting" !in plegadas) {
                 item { Empty(io.acr.i18n.t("dash.awaitingThemNote")) }
             }
-            items(snapshot.awaitingThem, key = { "aw-${it.id}" }) { r ->
+            items(
+                if ("awaiting" in plegadas) emptyList() else snapshot.awaitingThem,
+                key = { "aw-${it.id}" },
+            ) { r ->
                 ReviewRow(r, snapshot.repoNames[r.repoId] ?: r.repoId) { onOpenPr(r.repoId, r.prId) }
             }
             }
@@ -314,14 +328,20 @@ fun DashboardPanel(ctx: AppContext, onOpenPr: (repoId: String, prId: Long) -> Un
                 .sortedByDescending { (_, v) -> v.size }
             item {
                 Section(
-                    io.acr.i18n.t("dash.repliedToYou") +
+                    text = io.acr.i18n.t("dash.repliedToYou") +
                         " (${porPr.size} PR · ${snapshot.replies.size})",
+                    accent = MaterialTheme.colorScheme.error,
+                    collapsed = "replies" in plegadas,
+                    onToggle = { alternar("replies") },
                 )
             }
             if (snapshot.replies.isEmpty()) {
                 item { Empty(io.acr.i18n.t("dash.noReplies")) }
             }
-            items(porPr, key = { (k, _) -> "rp-${k.first}-${k.second}" }) { (clave, delPr) ->
+            items(
+                if ("replies" in plegadas) emptyList() else porPr,
+                key = { (k, _) -> "rp-${k.first}-${k.second}" },
+            ) { (clave, delPr) ->
                 val (repoId, prId) = clave
                 val redactadas = delPr.count { !it.body.isNullOrBlank() }
                 Row(
@@ -356,11 +376,14 @@ fun DashboardPanel(ctx: AppContext, onOpenPr: (repoId: String, prId: Long) -> Un
             }
 
             if (focus == null || focus == "running") {
-            item { Section("Revisándose ahora (${running.size})") }
+            item { Section(collapsed = "running" in plegadas, onToggle = { alternar("running") }, accent = MaterialTheme.colorScheme.primary, text = "Revisándose ahora (${running.size})") }
             if (running.isEmpty()) {
                 item { Empty(io.acr.i18n.t("dash.nothingRunning")) }
             }
-            items(running, key = { it.prId }) { p ->
+            items(
+                if ("running" in plegadas) emptyList() else running,
+                key = { it.prId },
+            ) { p ->
                 RunningCard(
                     p = p,
                     elapsed = elapsed(p.startedAt),
@@ -414,18 +437,37 @@ fun DashboardPanel(ctx: AppContext, onOpenPr: (repoId: String, prId: Long) -> Un
             }
 
             if (focus == "published") {
-                item { Section(io.acr.i18n.t("dash.publishedSection") + " (${snapshot.published.size})") }
+                item {
+                    Section(
+                        text = io.acr.i18n.t("dash.publishedSection") + " (${snapshot.published.size})",
+                        accent = io.acr.ui.VERDE_OK,
+                        collapsed = "published" in plegadas,
+                        onToggle = { alternar("published") },
+                    )
+                }
                 if (snapshot.published.isEmpty()) {
                     item { Empty(io.acr.i18n.t("dash.publishedNone")) }
                 }
-                items(snapshot.published, key = { "pub-${it.id}" }) { r ->
+                items(
+                    if ("published" in plegadas) emptyList() else snapshot.published,
+                    key = { "pub-${it.id}" },
+                ) { r ->
                     ReviewRow(r, snapshot.repoNames[r.repoId] ?: r.repoId) { onOpenPr(r.repoId, r.prId) }
                 }
             }
 
             if (focus == null || focus == "recent") {
-            item { Section(io.acr.i18n.t("dash.recent")) }
-            items(snapshot.recent, key = { "h-${it.id}" }) { r ->
+            item {
+                Section(
+                    text = io.acr.i18n.t("dash.recent"),
+                    collapsed = "recent" in plegadas,
+                    onToggle = { alternar("recent") },
+                )
+            }
+            items(
+                if ("recent" in plegadas) emptyList() else snapshot.recent,
+                key = { "h-${it.id}" },
+            ) { r ->
                 ReviewRow(r, snapshot.repoNames[r.repoId] ?: r.repoId) { onOpenPr(r.repoId, r.prId) }
             }
             }
@@ -726,11 +768,39 @@ private fun ReviewRow(r: ReviewRecord, repoName: String, onOpen: () -> Unit) {
     }
 }
 
+/**
+ * Cabecera de sección: plegable y con color propio.
+ *
+ * Con seis listas una debajo de otra, todas con el mismo título gris, encontrar "te respondieron"
+ * era scrollear y leer. El color distingue de qué se trata cada una y el plegado deja esconder lo
+ * que hoy no importa.
+ *
+ * @param accent el color de la sección. Es el mismo criterio que usa el resto de la app: lo que
+ *   espera algo tuyo se ve, lo cerrado se apaga.
+ */
 @Composable
-private fun Section(text: String) {
+private fun Section(
+    text: String,
+    accent: androidx.compose.ui.graphics.Color = MaterialTheme.colorScheme.onSurface,
+    collapsed: Boolean? = null,
+    onToggle: (() -> Unit)? = null,
+) {
     Column {
         Spacer(Modifier.height(10.dp))
-        Text(text, style = MaterialTheme.typography.titleSmall)
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = if (onToggle == null) Modifier else Modifier.clickableText(onToggle),
+        ) {
+            if (collapsed != null) {
+                Text(
+                    if (collapsed) "▸" else "▾",
+                    style = MaterialTheme.typography.titleSmall,
+                    color = accent,
+                    modifier = Modifier.width(18.dp),
+                )
+            }
+            Text(text, style = MaterialTheme.typography.titleSmall, color = accent)
+        }
         Spacer(Modifier.height(4.dp))
     }
 }

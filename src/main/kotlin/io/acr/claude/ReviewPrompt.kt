@@ -18,7 +18,8 @@ object ReviewPrompt {
         "line":{"type":["integer","null"]},
         "severity":{"type":"string","enum":["blocker","major","minor"]},
         "title":{"type":"string"},
-        "body":{"type":"string"}
+        "body":{"type":"string"},
+        "suggestion":{"type":["string","null"]}
       },"required":["file","severity","title","body"]}}
     },"required":["summary","findings"]}
     """.trimIndent()
@@ -139,6 +140,51 @@ object ReviewPrompt {
         - Escribí en $language.
     """.trimIndent()
 
+    /**
+     * Cuánto texto de convenciones entra en el prompt.
+     *
+     * Hay tope porque el contexto no es gratis: una guía de arquitectura de cien páginas empujaría
+     * afuera el diff, que es lo que hay que revisar. Se recorta y se avisa, en vez de fallar o de
+     * mandar todo y que la review pierda foco.
+     */
+    const val MAX_GUIDELINES_CHARS = 60_000
+
+    /**
+     * Las convenciones del equipo, para que la review no marque como problema lo que es una
+     * decisión tomada.
+     *
+     * Las globales van primero y las del repositorio después: lo último que se lee es lo que
+     * manda, así que un repositorio puede contradecir la regla general sin tener que editarla.
+     */
+    fun guidelinesSection(docs: List<io.acr.data.Guideline>): String {
+        if (docs.isEmpty()) return ""
+        val sb = StringBuilder()
+        var restante = MAX_GUIDELINES_CHARS
+        var recortados = 0
+        docs.forEach { d ->
+            if (restante <= 0) { recortados++; return@forEach }
+            val ambito = if (d.global) "todos los repositorios" else "este repositorio"
+            val cuerpo = if (d.content.length <= restante) d.content else {
+                recortados++
+                d.content.take(restante) + "\n[…recortado…]"
+            }
+            restante -= cuerpo.length
+            sb.append("\n### ").append(d.name).append(" (").append(ambito).append(")\n")
+            sb.append(cuerpo).append('\n')
+        }
+        val aviso = if (recortados > 0) {
+            "\n(Se recortaron $recortados documento(s) por tamaño; puede faltar contexto.)\n"
+        } else ""
+        return """
+        CONVENCIONES Y ARQUITECTURA DE ESTE EQUIPO
+        Lo que sigue son decisiones ya tomadas, no sugerencias. NO las reportes como problemas:
+        un nombre, una estructura o un patrón que las cumple está bien aunque vos harías otra cosa.
+        Sí reportá el código que las CONTRADICE, citando cuál regla incumple.
+        Cuando una regla de este repositorio contradiga una general, manda la del repositorio.
+        $sb$aviso
+        """.trimIndent()
+    }
+
     /** Escribir en el árbol o salir a la red está fuera de alcance en cualquier nivel. */
     val DISALLOWED_TOOLS = listOf("Edit", "Write", "WebFetch", "WebSearch")
 
@@ -214,6 +260,7 @@ object ReviewPrompt {
         depth: ReviewDepth,
         kind: ProjectKind,
         existing: List<StoredComment> = emptyList(),
+        guidelines: List<io.acr.data.Guideline> = emptyList(),
     ): String {
         val range = "origin/${pr.targetBranch}...origin/${pr.sourceBranch}"
         val blocks = listOf(
@@ -241,9 +288,24 @@ object ReviewPrompt {
 
             depth.instructions(),
             kind.focus(),
+            guidelinesSection(guidelines),
             threadSection(existing),
 
             """
+            CÓMO DEBERÍA RESOLVERSE
+            Cuando puedas, además de señalar el problema decí cómo se arregla, en el campo
+            `suggestion`. Señalar sin proponer deja todo el trabajo de pensar la solución del otro
+            lado, y muchas veces el que encontró el problema ya sabe cómo se resuelve.
+
+            - Concreto y mínimo: el cambio más chico que resuelve lo señalado, no un rediseño.
+            - Si es código, un bloque corto en Markdown con el lenguaje declarado. Nada de
+              archivos enteros ni de pseudocódigo.
+            - Coherente con el código que está alrededor: mismas convenciones, mismos helpers.
+            - **Dejalo en null si no podés proponer algo que sostengas.** Una sugerencia inventada
+              es peor que ninguna: hace perder tiempo a quien la lee y desprestigia al resto de la
+              review. Si la decisión depende de contexto que no tenés —una regla de negocio, una
+              preferencia del equipo— decilo en el `body` y no propongas.
+
             QUÉ NO REPORTAR
             - Problemas preexistentes en líneas que el PR no tocó.
             - Cosas que un linter, el compilador o el type-checker ya detectan.

@@ -64,6 +64,7 @@ interface Forge {
         prId: Long,
         message: String,
         closeSourceBranch: Boolean,
+        strategy: MergeStrategy = MergeStrategy.MERGE_COMMIT,
     ): String
 
     /**
@@ -76,6 +77,15 @@ interface Forge {
 
     /** Retira la aprobación. */
     suspend fun unapprove(repo: RepoRecord, prId: Long)
+
+    /**
+     * Pide cambios. Es excluyente con aprobar: el proveedor reemplaza un estado por el otro.
+     * Como aprobar, se puede deshacer, así que tampoco necesita confirmación.
+     */
+    suspend fun requestChanges(repo: RepoRecord, prId: Long)
+
+    /** Retira el pedido de cambios. */
+    suspend fun undoRequestChanges(repo: RepoRecord, prId: Long)
 
     /**
      * Rechaza el pull request y lo cierra.
@@ -352,6 +362,15 @@ class BitbucketForge : Forge {
         ).mapNotNull { toPr(it) }
     }
 
+    /** Los participantes en un estado dado. `state` es approved, changes_requested o nulo. */
+    private fun participantesEn(pr: JsonObject, estado: String?): List<String> =
+        (pr["participants"] as? kotlinx.serialization.json.JsonArray).orEmpty().mapNotNull { p ->
+            val o = p.jsonObject
+            // `state` viene nulo o ausente para quien todavía no se pronunció.
+            val actual = o["state"]?.jsonPrimitive?.contentOrNull?.takeIf { it != "null" }
+            if (actual == estado) o.str("user", "display_name") else null
+        }
+
     /** Un PR del JSON de Bitbucket. Devuelve null si le falta el id: se saltea, no rompe la lista. */
     private fun toPr(pr: JsonObject): PullRequest? {
         val id = pr.long("id") ?: return null
@@ -415,13 +434,14 @@ class BitbucketForge : Forge {
         prId: Long,
         message: String,
         closeSourceBranch: Boolean,
+        strategy: MergeStrategy,
     ): String {
         val url = "$API/repositories/${repo.owner}/${repo.slug}/pullrequests/$prId/merge"
         val payload = JsonObject(
             mapOf(
                 "message" to kotlinx.serialization.json.JsonPrimitive(message),
                 "close_source_branch" to kotlinx.serialization.json.JsonPrimitive(closeSourceBranch),
-                "merge_strategy" to kotlinx.serialization.json.JsonPrimitive("merge_commit"),
+                "merge_strategy" to kotlinx.serialization.json.JsonPrimitive(strategy.bitbucket),
             ),
         )
         val body = send(
@@ -447,6 +467,22 @@ class BitbucketForge : Forge {
     override suspend fun unapprove(repo: RepoRecord, prId: Long) {
         send(
             request("$API/repositories/${repo.owner}/${repo.slug}/pullrequests/$prId/approve", repo.token)
+                .DELETE().build(),
+            idempotent = false, context = ctx(repo),
+        )
+    }
+
+    override suspend fun requestChanges(repo: RepoRecord, prId: Long) {
+        send(
+            request("$API/repositories/${repo.owner}/${repo.slug}/pullrequests/$prId/request-changes", repo.token)
+                .POST(HttpRequest.BodyPublishers.noBody()).build(),
+            idempotent = false, context = ctx(repo),
+        )
+    }
+
+    override suspend fun undoRequestChanges(repo: RepoRecord, prId: Long) {
+        send(
+            request("$API/repositories/${repo.owner}/${repo.slug}/pullrequests/$prId/request-changes", repo.token)
                 .DELETE().build(),
             idempotent = false, context = ctx(repo),
         )
@@ -480,6 +516,10 @@ class BitbucketForge : Forge {
             updatedOn = pr.str("updated_on")?.take(16)?.replace('T', ' ') ?: "",
                 createdOn = pr.str("created_on")?.take(16)?.replace('T', ' ') ?: "",
                 state = PrState.fromApi(pr.str("state")),
+            // `participants` sólo viene en el PR individual, no en el listado.
+            approvedBy = participantesEn(pr, "approved"),
+            changesRequestedBy = participantesEn(pr, "changes_requested"),
+            participantsIdle = participantesEn(pr, null),
             url = pr.str("links", "html", "href") ?: "",
         )
     }
@@ -677,6 +717,7 @@ class GitHubForge : Forge {
         prId: Long,
         message: String,
         closeSourceBranch: Boolean,
+        strategy: MergeStrategy,
     ): String {
         // GitHub no borra la rama al mergear: es una llamada aparte que no hacemos. Borrar una
         // rama ajena sin pedirlo sería pasarse de lo que el usuario aceptó.
@@ -684,7 +725,7 @@ class GitHubForge : Forge {
         val payload = JsonObject(
             mapOf(
                 "commit_title" to kotlinx.serialization.json.JsonPrimitive(message),
-                "merge_method" to kotlinx.serialization.json.JsonPrimitive("merge"),
+                "merge_method" to kotlinx.serialization.json.JsonPrimitive(strategy.github),
             ),
         )
         val body = send(
@@ -726,6 +767,23 @@ class GitHubForge : Forge {
                 .POST(HttpRequest.BodyPublishers.ofString(payload.toString())).build(),
             idempotent = false, context = ctx(repo),
         )
+    }
+
+    override suspend fun requestChanges(repo: RepoRecord, prId: Long) {
+        val payload = JsonObject(
+            mapOf("event" to kotlinx.serialization.json.JsonPrimitive("REQUEST_CHANGES")),
+        )
+        send(
+            request("$API/repos/${repo.owner}/${repo.slug}/pulls/$prId/reviews", repo.token)
+                .header("Content-Type", "application/json")
+                .POST(HttpRequest.BodyPublishers.ofString(payload.toString())).build(),
+            idempotent = false, context = ctx(repo),
+        )
+    }
+
+    override suspend fun undoRequestChanges(repo: RepoRecord, prId: Long) {
+        // GitHub no permite retirar una review enviada; lo más cercano es dejar constancia.
+        unapprove(repo, prId)
     }
 
     override suspend fun decline(repo: RepoRecord, prId: Long, reason: String?) {

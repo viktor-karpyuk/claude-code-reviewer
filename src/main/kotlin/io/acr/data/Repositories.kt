@@ -339,18 +339,22 @@ class ReviewRepository(private val store: Store) {
             ps.executeUpdate() > 0
         }
 
+    /** Por PR: sin verificar, sin resolver, y cuántos se publicaron en total. */
+    data class ResolutionCounts(val sinVerificar: Int, val noResueltos: Int, val publicados: Int)
+
     /**
      * Por PR: cuántos comentarios publicados están sin verificar y cuántos dieron "no resuelto".
      *
      * La lista necesita los mismos números que la pantalla del PR para decidir si se puede
      * mergear, pero sin cargar los hallazgos fila por fila.
      */
-    fun resolutionCountsByPr(repoId: String): Map<Long, Pair<Int, Int>> =
+    fun resolutionCountsByPr(repoId: String): Map<Long, ResolutionCounts> =
         store.stmt(
             """SELECT f.pr_id,
                       SUM(CASE WHEN f.resolution IS NULL THEN 1 ELSE 0 END),
                       SUM(CASE WHEN f.resolution IS NOT NULL AND f.resolution <> 'RESOLVED'
-                               THEN 1 ELSE 0 END)
+                               THEN 1 ELSE 0 END),
+                      COUNT(*)
                  FROM finding f
                 WHERE f.repo_id = ? AND f.published_id IS NOT NULL AND f.dismissed_at IS NULL AND f.closed_at IS NULL
                   AND f.review_id = (
@@ -362,7 +366,11 @@ class ReviewRepository(private val store: Store) {
         ) { ps ->
             ps.setString(1, repoId)
             ps.executeQuery().use { rs ->
-                buildMap { while (rs.next()) put(rs.getLong(1), rs.getInt(2) to rs.getInt(3)) }
+                buildMap {
+                    while (rs.next()) {
+                        put(rs.getLong(1), ResolutionCounts(rs.getInt(2), rs.getInt(3), rs.getInt(4)))
+                    }
+                }
             }
         }
 
@@ -439,10 +447,13 @@ class ReviewRepository(private val store: Store) {
      * de una review, la fila queda en RUNNING para siempre y el panel la muestra como activa
      * aunque no haya ningún proceso detrás. Al arrancar, ninguna puede seguir viva.
      */
+    /** Las que quedaron corriendo, con sus parámetros, para poder volver a lanzarlas. */
+    fun orphanedRunning(): List<ReviewRecord> = query("WHERE status = 'RUNNING'") {}
+
     fun failOrphanedRunning(): Int =
         store.stmt(
             """UPDATE review SET status = 'FAILED',
-                   error = COALESCE(error, 'Interrumpida: la app se cerró mientras corría.'),
+                   error = COALESCE(error, 'Interrumpida: la app se cerró mientras corría. Se reanuda al abrir.'),
                    finished_at = ?
                WHERE status = 'RUNNING'""",
         ) { ps ->
@@ -801,6 +812,24 @@ class PrCommentRepository(private val store: Store) {
         }
     }
 
+    /**
+     * Cómo nos nombra el proveedor: el autor más frecuente entre los comentarios que sabemos
+     * nuestros.
+     *
+     * Hace falta porque las acciones sobre el PR —aprobar, pedir cambios— se guardan con un
+     * nombre, y usar "nosotros" creaba una persona fantasma: la misma aprobación aparecía dos
+     * veces, una como "nosotros" y otra como "Viktor Karpyuk" cuando el sync la traía de la API.
+     *
+     * Null si todavía no publicamos nada en ningún PR.
+     */
+    fun ourDisplayName(): String? =
+        store.stmt(
+            """SELECT author FROM pr_comment WHERE is_ours = 1
+               GROUP BY author ORDER BY COUNT(*) DESC LIMIT 1""",
+        ) { ps ->
+            ps.executeQuery().use { if (it.next()) it.getString(1) else null }
+        }
+
     fun forPr(repoId: String, prId: Long, includeDeleted: Boolean = false): List<StoredComment> {
         val filter = if (includeDeleted) "" else " AND is_deleted = 0"
         return store.stmt(
@@ -946,6 +975,8 @@ data class Finding(
     val followedUpAt: String? = null,
     /** Cerrado en la conversación: se habló y no espera ningún cambio en el código. */
     val closedAt: String? = null,
+    /** Cómo debería resolverse, si la review pudo proponer algo que sostenga. */
+    val suggestion: String? = null,
 ) {
     /** Ya no espera nada: se publicó o se descartó a propósito. */
     val settled: Boolean get() = publishedId != null || dismissedAt != null || closedAt != null
@@ -970,8 +1001,8 @@ class FindingRepository(private val store: Store) {
             findings.forEach { f ->
                 conn.prepareStatement(
                     """INSERT INTO finding(id, review_id, repo_id, pr_id, file_path, line_no,
-                                           severity, title, body, created_at)
-                       VALUES (?,?,?,?,?,?,?,?,?,?)""",
+                                           severity, title, body, created_at, suggestion)
+                       VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
                 ).use { ps ->
                     ps.setString(1, UlidCreator.getUlid().toString())
                     ps.setString(2, reviewId)
@@ -983,6 +1014,7 @@ class FindingRepository(private val store: Store) {
                     ps.setString(8, f.title)
                     ps.setString(9, f.body)
                     ps.setString(10, Instant.now().toString())
+                    ps.setString(11, f.suggestion)
                     ps.executeUpdate()
                 }
             }
@@ -1090,7 +1122,7 @@ class FindingRepository(private val store: Store) {
         store.stmt(
             """SELECT id, review_id, pr_id, file_path, line_no, severity, title, body, published_id,
                       published_url, dismissed_at, publish_error, resolution, resolution_note,
-                      followed_up_at, closed_at
+                      followed_up_at, closed_at, suggestion
                FROM finding $tail ORDER BY file_path, line_no""",
         ) { ps ->
             bind(ps)
@@ -1116,6 +1148,7 @@ class FindingRepository(private val store: Store) {
                             resolutionNote = rs.getString(14),
                             followedUpAt = rs.getString(15),
                             closedAt = rs.getString(16),
+                            suggestion = rs.getString(17),
                         ),
                     )
                 }
@@ -1142,7 +1175,12 @@ data class ReplyDraft(
     val publishedId: String?,
     val publishedUrl: String?,
     val createdAt: String,
-)
+    /** Cerrada sin contestar: no toda respuesta pide una contestación. */
+    val dismissedAt: String? = null,
+) {
+    /** Ya no espera nada nuestro: se contestó o se dio por cerrada. */
+    val settled: Boolean get() = status == ReplyStatus.PUBLISHED || dismissedAt != null
+}
 
 /**
  * Respuestas que alguien dejó a un comentario nuestro, y la contestación que preparamos.
@@ -1214,6 +1252,27 @@ class ReplyRepository(private val store: Store) {
         }
     }
 
+    /** Da por cerrada una respuesta sin contestarla. Reversible. */
+    fun dismiss(id: String, cerrada: Boolean) {
+        store.stmt("UPDATE reply_draft SET dismissed_at = ? WHERE id = ?") { ps ->
+            ps.setString(1, if (cerrada) Instant.now().toString() else null)
+            ps.setString(2, id)
+            ps.executeUpdate()
+        }
+    }
+
+    /** Cierra todas las que quedan de un PR. Con 24 pendientes, una por una no es una opción. */
+    fun dismissAllForPr(repoId: String, prId: Long): Int =
+        store.stmt(
+            """UPDATE reply_draft SET dismissed_at = ?
+               WHERE repo_id = ? AND pr_id = ? AND status != 'PUBLISHED' AND dismissed_at IS NULL""",
+        ) { ps ->
+            ps.setString(1, Instant.now().toString())
+            ps.setString(2, repoId)
+            ps.setLong(3, prId)
+            ps.executeUpdate()
+        }
+
     fun updateBody(id: String, body: String) {
         store.stmt("UPDATE reply_draft SET body = ? WHERE id = ?") { ps ->
             ps.setString(1, body)
@@ -1227,7 +1286,10 @@ class ReplyRepository(private val store: Store) {
 
     /** Todo lo que espera atención: respuestas sin contestar o con borrador sin publicar. */
     fun openOnes(): List<ReplyDraft> =
-        query("WHERE status IN ('PENDING','DRAFTED','FAILED') ORDER BY created_at DESC LIMIT 50") {}
+        query(
+            """WHERE status IN ('PENDING','DRAFTED','FAILED') AND dismissed_at IS NULL
+               ORDER BY created_at DESC LIMIT 50""",
+        ) {}
 
     fun get(id: String): ReplyDraft? = query("WHERE id = ?") { it.setString(1, id) }.firstOrNull()
 
@@ -1238,7 +1300,8 @@ class ReplyRepository(private val store: Store) {
     fun openCountsByPr(repoId: String): Map<Long, Int> =
         store.stmt(
             """SELECT pr_id, COUNT(*) FROM reply_draft
-               WHERE repo_id = ? AND status != 'PUBLISHED' GROUP BY pr_id""",
+               WHERE repo_id = ? AND status != 'PUBLISHED' AND dismissed_at IS NULL
+               GROUP BY pr_id""",
         ) { ps ->
             ps.setString(1, repoId)
             ps.executeQuery().use { rs ->
@@ -1270,7 +1333,7 @@ class ReplyRepository(private val store: Store) {
         store.stmt(
             """SELECT id, repo_id, pr_id, their_comment_id, their_author, their_body,
                       our_comment_id, our_body, file_path, line_no, body, status, error,
-                      published_url, created_at, published_id
+                      published_url, created_at, published_id, dismissed_at
                FROM reply_draft $tail""",
         ) { ps ->
             bind(ps)
@@ -1295,6 +1358,7 @@ class ReplyRepository(private val store: Store) {
                             publishedUrl = rs.getString(14),
                             createdAt = rs.getString(15),
                             publishedId = rs.getString(16),
+                            dismissedAt = rs.getString(17),
                         ),
                     )
                 }
@@ -1430,4 +1494,314 @@ class PrefsRepo(private val store: Store) {
             ps.executeUpdate()
         }
     }
+}
+
+/**
+ * Qué opinó cada persona sobre un PR. Excluyentes, como los modela el proveedor.
+ *
+ * [NONE] es participar sin pronunciarse: figura en el PR pero todavía no aprobó ni pidió cambios.
+ * Existe para poder mostrarlo —un círculo gris dice "está, no opinó" mejor que una ausencia— pero
+ * **no cuenta como pronunciamiento** en ninguna regla.
+ */
+enum class ReviewStance { APPROVED, CHANGES_REQUESTED, NONE }
+
+/** Quién se pronunció sobre cada pull request, hasta donde sabemos. */
+data class PrApproval(
+    val prId: Long,
+    val approvedBy: String,
+    val byUs: Boolean,
+    val approvedAt: String,
+    val stance: ReviewStance = ReviewStance.APPROVED,
+)
+
+/**
+ * Aprobaciones conocidas.
+ *
+ * "Hasta donde sabemos" no es una salvedad menor: el listado de PRs no trae las aprobaciones, así
+ * que sólo se registran las que hicimos nosotros y las que se ven al abrir un PR. Un PR aprobado
+ * por otro que nunca abrimos no figura acá, y eso es preferible a pagar una llamada por fila.
+ */
+class ApprovalRepository(private val store: Store) {
+
+    fun record(
+        repoId: String,
+        prId: Long,
+        by: String,
+        byUs: Boolean,
+        stance: ReviewStance = ReviewStance.APPROVED,
+    ) {
+        store.stmt(
+            """INSERT INTO pr_approval(repo_id, pr_id, approved_by, by_us, approved_at, state)
+               VALUES (?,?,?,?,?,?)
+               ON CONFLICT(repo_id, pr_id, approved_by) DO UPDATE SET
+                   by_us = MAX(pr_approval.by_us, excluded.by_us),
+                   state = excluded.state,
+                   approved_at = excluded.approved_at""",
+        ) { ps ->
+            ps.setString(1, repoId)
+            ps.setLong(2, prId)
+            ps.setString(3, by)
+            ps.setInt(4, if (byUs) 1 else 0)
+            ps.setString(5, Instant.now().toString())
+            ps.setString(6, stance.name)
+            ps.executeUpdate()
+        }
+    }
+
+    /** Borra lo que opinamos: al retirar una aprobación o un pedido de cambios. */
+    fun clearOurs(repoId: String, prId: Long) {
+        store.stmt("DELETE FROM pr_approval WHERE repo_id = ? AND pr_id = ? AND by_us = 1") { ps ->
+            ps.setString(1, repoId); ps.setLong(2, prId); ps.executeUpdate()
+        }
+    }
+
+    /** Se borran las que ya no están: alguien puede retirar su aprobación. */
+    fun sync(
+        repoId: String,
+        prId: Long,
+        aprobadores: List<String>,
+        pidieronCambios: List<String> = emptyList(),
+        sinPronunciarse: List<String> = emptyList(),
+    ) {
+        store.transaction { conn ->
+            conn.prepareStatement(
+                "DELETE FROM pr_approval WHERE repo_id = ? AND pr_id = ? AND by_us = 0",
+            ).use { ps ->
+                ps.setString(1, repoId); ps.setLong(2, prId); ps.executeUpdate()
+            }
+            val todos = aprobadores.map { it to ReviewStance.APPROVED } +
+                pidieronCambios.map { it to ReviewStance.CHANGES_REQUESTED } +
+                sinPronunciarse.map { it to ReviewStance.NONE }
+            todos.forEach { (quien, postura) ->
+                conn.prepareStatement(
+                    """INSERT INTO pr_approval(repo_id, pr_id, approved_by, by_us, approved_at, state)
+                       VALUES (?,?,?,0,?,?) ON CONFLICT DO NOTHING""",
+                ).use { ps ->
+                    ps.setString(1, repoId); ps.setLong(2, prId)
+                    ps.setString(3, quien); ps.setString(4, Instant.now().toString())
+                    ps.setString(5, postura.name)
+                    ps.executeUpdate()
+                }
+            }
+        }
+    }
+
+    /** Por PR: quiénes aprobaron. Una consulta para toda la lista, no una por fila. */
+    fun byPr(repoId: String): Map<Long, List<PrApproval>> =
+        store.stmt(
+            """SELECT pr_id, approved_by, by_us, approved_at, state FROM pr_approval
+               WHERE repo_id = ? ORDER BY approved_at""",
+        ) { ps ->
+            ps.setString(1, repoId)
+            ps.executeQuery().use { rs ->
+                buildList {
+                    while (rs.next()) {
+                        add(
+                            PrApproval(
+                                rs.getLong(1), rs.getString(2), rs.getInt(3) == 1, rs.getString(4),
+                                runCatching { ReviewStance.valueOf(rs.getString(5)) }
+                                    .getOrDefault(ReviewStance.APPROVED),
+                            ),
+                        )
+                    }
+                }
+            }.groupBy { it.prId }
+        }
+
+    fun forPr(repoId: String, prId: Long): List<PrApproval> =
+        byPr(repoId)[prId].orEmpty()
+
+    /**
+     * Sólo quienes se pronunciaron. Es lo que miran las reglas —saltear la revisión, el badge de
+     * la lista—: contar a quien todavía no opinó como si hubiera aprobado sería exactamente al
+     * revés de lo que significa.
+     */
+    fun statedByPr(repoId: String): Map<Long, List<PrApproval>> =
+        byPr(repoId).mapValues { (_, v) -> v.filter { it.stance != ReviewStance.NONE } }
+            .filterValues { it.isNotEmpty() }
+}
+
+/** Una review que quedó a medias y hay que volver a correr. */
+data class PendingJob(
+    val id: String,
+    val repoId: String,
+    val prId: Long,
+    val depth: io.acr.claude.ReviewDepth?,
+    val kind: io.acr.claude.ProjectKind?,
+    val model: String,
+    val auto: Boolean,
+    val attempts: Int,
+)
+
+/**
+ * Trabajo pendiente de retomar tras cerrar la app.
+ *
+ * No es una cola de tareas general: es exactamente el conjunto de reviews que estaban corriendo
+ * cuando el proceso murió. El subproceso de Claude Code se fue con su contexto, así que lo que se
+ * guarda son los parámetros para volver a lanzarla, no un estado a medio camino.
+ */
+class PendingJobRepository(private val store: Store) {
+
+    fun enqueue(
+        repoId: String,
+        prId: Long,
+        depth: io.acr.claude.ReviewDepth?,
+        kind: io.acr.claude.ProjectKind?,
+        model: String,
+        auto: Boolean,
+    ) {
+        store.stmt(
+            """INSERT INTO pending_job(id, repo_id, pr_id, depth, kind, model, auto, created_at)
+               VALUES (?,?,?,?,?,?,?,?)
+               ON CONFLICT(repo_id, pr_id) DO UPDATE SET attempts = pending_job.attempts + 1""",
+        ) { ps ->
+            ps.setString(1, UlidCreator.getUlid().toString())
+            ps.setString(2, repoId)
+            ps.setLong(3, prId)
+            ps.setString(4, depth?.name)
+            ps.setString(5, kind?.name)
+            ps.setString(6, model)
+            ps.setInt(7, if (auto) 1 else 0)
+            ps.setString(8, Instant.now().toString())
+            ps.executeUpdate()
+        }
+    }
+
+    fun remove(repoId: String, prId: Long) {
+        store.stmt("DELETE FROM pending_job WHERE repo_id = ? AND pr_id = ?") { ps ->
+            ps.setString(1, repoId); ps.setLong(2, prId); ps.executeUpdate()
+        }
+    }
+
+    /**
+     * Los que todavía vale la pena reintentar.
+     *
+     * Con un tope de intentos: si una review revienta siempre —un repo que ya no está, un binario
+     * roto— reintentarla en cada arranque sería un bucle que gasta plata y nunca termina.
+     */
+    fun pending(maxAttempts: Int = 3): List<PendingJob> =
+        store.stmt(
+            """SELECT id, repo_id, pr_id, depth, kind, model, auto, attempts
+               FROM pending_job WHERE attempts < ? ORDER BY created_at""",
+        ) { ps ->
+            ps.setInt(1, maxAttempts)
+            ps.executeQuery().use { rs ->
+                buildList {
+                    while (rs.next()) add(
+                        PendingJob(
+                            id = rs.getString(1),
+                            repoId = rs.getString(2),
+                            prId = rs.getLong(3),
+                            depth = rs.getString(4)?.let {
+                                runCatching { io.acr.claude.ReviewDepth.valueOf(it) }.getOrNull()
+                            },
+                            kind = rs.getString(5)?.let {
+                                runCatching { io.acr.claude.ProjectKind.valueOf(it) }.getOrNull()
+                            },
+                            model = rs.getString(6).orEmpty(),
+                            auto = rs.getInt(7) == 1,
+                            attempts = rs.getInt(8),
+                        ),
+                    )
+                }
+            }
+        }
+
+    /** Los que agotaron los intentos, para poder decirlo en vez de que desaparezcan. */
+    fun givenUp(maxAttempts: Int = 3): Int =
+        store.stmt("SELECT COUNT(*) FROM pending_job WHERE attempts >= ?") { ps ->
+            ps.setInt(1, maxAttempts)
+            ps.executeQuery().use { if (it.next()) it.getInt(1) else 0 }
+        }
+}
+
+/** Un documento de convenciones o de arquitectura que la review tiene que respetar. */
+data class Guideline(
+    val id: String,
+    val repoId: String?,
+    val name: String,
+    val content: String,
+    val enabled: Boolean,
+    val source: String?,
+    val createdAt: String,
+) {
+    /** Aplica a todos los repositorios. */
+    val global: Boolean get() = repoId == null
+}
+
+/**
+ * Convenciones y guías propias del equipo.
+ *
+ * Existen porque sin ellas la review marca como problema lo que es una decisión tomada: cómo se
+ * nombran las interfaces, dónde va la lógica, qué patrón usa cada capa. Un revisor que no las
+ * conoce genera ruido, y el ruido hace que se deje de leer lo que dice.
+ *
+ * El contenido se guarda acá y no como ruta a un archivo: con una ruta, mover o borrar el archivo
+ * cambiaría en silencio el criterio con el que se revisa, y nadie se enteraría hasta ver una
+ * review rara.
+ */
+class GuidelineRepository(private val store: Store) {
+
+    fun add(repoId: String?, name: String, content: String, source: String?): String {
+        val id = UlidCreator.getUlid().toString()
+        store.stmt(
+            """INSERT INTO guideline(id, repo_id, name, content, enabled, source, created_at)
+               VALUES (?,?,?,?,1,?,?)""",
+        ) { ps ->
+            ps.setString(1, id)
+            ps.setString(2, repoId)
+            ps.setString(3, name)
+            ps.setString(4, content)
+            ps.setString(5, source)
+            ps.setString(6, Instant.now().toString())
+            ps.executeUpdate()
+        }
+        return id
+    }
+
+    fun setEnabled(id: String, enabled: Boolean) {
+        store.stmt("UPDATE guideline SET enabled = ? WHERE id = ?") { ps ->
+            ps.setInt(1, if (enabled) 1 else 0)
+            ps.setString(2, id)
+            ps.executeUpdate()
+        }
+    }
+
+    fun delete(id: String) {
+        store.stmt("DELETE FROM guideline WHERE id = ?") { ps ->
+            ps.setString(1, id); ps.executeUpdate()
+        }
+    }
+
+    /** Los globales más los del repositorio. Los globales primero: son el marco general. */
+    fun forRepo(repoId: String, onlyEnabled: Boolean = true): List<Guideline> =
+        query(
+            "WHERE (repo_id IS NULL OR repo_id = ?)" +
+                (if (onlyEnabled) " AND enabled = 1" else "") +
+                " ORDER BY repo_id IS NOT NULL, created_at",
+        ) { it.setString(1, repoId) }
+
+    fun globals(): List<Guideline> = query("WHERE repo_id IS NULL ORDER BY created_at") {}
+
+    private fun query(tail: String, bind: (java.sql.PreparedStatement) -> Unit): List<Guideline> =
+        store.stmt(
+            "SELECT id, repo_id, name, content, enabled, source, created_at FROM guideline $tail",
+        ) { ps ->
+            bind(ps)
+            ps.executeQuery().use { rs ->
+                buildList {
+                    while (rs.next()) add(
+                        Guideline(
+                            id = rs.getString(1),
+                            repoId = rs.getString(2),
+                            name = rs.getString(3),
+                            content = rs.getString(4),
+                            enabled = rs.getInt(5) == 1,
+                            source = rs.getString(6),
+                            createdAt = rs.getString(7),
+                        ),
+                    )
+                }
+            }
+        }
 }

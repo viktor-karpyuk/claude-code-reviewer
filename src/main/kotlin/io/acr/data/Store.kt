@@ -474,6 +474,116 @@ class Store(private val dbPath: Path) : AutoCloseable {
             ALTER TABLE review ADD COLUMN final_pass_summary TEXT;--split--
             ALTER TABLE review ADD COLUMN final_pass_blockers INTEGER NOT NULL DEFAULT 0
             """.trimIndent(),
+
+            // v28 — cómo debería resolverse el hallazgo.
+            //
+            // Señalar un problema sin decir cómo se arregla deja todo el trabajo de pensar la
+            // solución del otro lado. Va en su propia columna y no dentro del cuerpo para poder
+            // mostrarla aparte, publicarla con formato propio y saber cuántos hallazgos traen una.
+            "ALTER TABLE finding ADD COLUMN suggestion TEXT",
+
+            // v29 — quién aprobó cada PR.
+            //
+            // El listado de Bitbucket NO trae las aprobaciones: sólo el PR individual, en
+            // `participants`. Pedir uno por uno sería una llamada por fila, y con el 401
+            // intermitente que ya conocemos eso es inviable. Se registra lo que se sabe —cuando
+            // aprobamos desde la app, y cuando se abre un PR y se ven sus participantes— y la
+            // lista lee de acá, gratis.
+            """
+            CREATE TABLE pr_approval (
+                repo_id     TEXT NOT NULL REFERENCES repo(id) ON DELETE CASCADE,
+                pr_id       INTEGER NOT NULL,
+                approved_by TEXT NOT NULL,
+                by_us       INTEGER NOT NULL DEFAULT 0,
+                approved_at TEXT NOT NULL,
+                PRIMARY KEY (repo_id, pr_id, approved_by)
+            )
+            """.trimIndent(),
+
+            // v30 — "aprobado" no es el único estado: también se pueden pedir cambios.
+            //
+            // Bitbucket lo modela así en `participants[].state` —approved, changes_requested o
+            // nada— y son excluyentes. Con una sola columna booleana, pedir cambios se veía igual
+            // que no haber opinado, y el botón seguía ofreciendo "Aprobar" a quien ya aprobó.
+            "ALTER TABLE pr_approval ADD COLUMN state TEXT NOT NULL DEFAULT 'APPROVED'",
+
+            // v31 — nuestras acciones se guardaban bajo el nombre genérico "nosotros".
+            //
+            // Eso creaba una persona fantasma: la misma aprobación figuraba dos veces, una como
+            // "nosotros" —la que registró la app— y otra con el nombre real, cuando el sync la
+            // traía de la API. Se unifican usando el nombre con el que el proveedor nos nombra,
+            // que sale de los comentarios que ya sabemos nuestros.
+            """
+            UPDATE pr_approval SET approved_by = (
+                SELECT author FROM pr_comment WHERE is_ours = 1
+                 GROUP BY author ORDER BY COUNT(*) DESC LIMIT 1
+            )
+             WHERE approved_by = 'nosotros'
+               AND NOT EXISTS (
+                   SELECT 1 FROM pr_approval x
+                    WHERE x.repo_id = pr_approval.repo_id AND x.pr_id = pr_approval.pr_id
+                      AND x.approved_by = (SELECT author FROM pr_comment WHERE is_ours = 1
+                                            GROUP BY author ORDER BY COUNT(*) DESC LIMIT 1)
+               );--split--
+            UPDATE pr_approval SET by_us = 1
+             WHERE approved_by = (SELECT author FROM pr_comment WHERE is_ours = 1
+                                   GROUP BY author ORDER BY COUNT(*) DESC LIMIT 1)
+               AND EXISTS (
+                   SELECT 1 FROM pr_approval x
+                    WHERE x.repo_id = pr_approval.repo_id AND x.pr_id = pr_approval.pr_id
+                      AND x.approved_by = 'nosotros'
+               );--split--
+            DELETE FROM pr_approval WHERE approved_by = 'nosotros'
+            """.trimIndent(),
+
+            // v32 — una respuesta se puede dar por cerrada sin contestarla.
+            //
+            // No toda respuesta pide una contestación: "corregido", "gracias", "dale". Sin una
+            // salida, esas quedaban bloqueando el merge para siempre —24 así en un solo PR— y la
+            // única forma de destrabarlo era escribir algo que nadie necesitaba leer.
+            "ALTER TABLE reply_draft ADD COLUMN dismissed_at TEXT",
+
+            // v33 — trabajo que quedó a medias cuando se cerró la app.
+            //
+            // Hasta acá una review interrumpida se marcaba fallida y ahí moría: había 16 así. El
+            // subproceso muerto no se puede retomar —se fue con su contexto— así que "continuar"
+            // sólo puede significar volver a correrla con los mismos parámetros. Se guardan acá
+            // para poder hacerlo al abrir, en vez de perder el trabajo en silencio.
+            """
+            CREATE TABLE pending_job (
+                id         TEXT PRIMARY KEY,
+                repo_id    TEXT NOT NULL REFERENCES repo(id) ON DELETE CASCADE,
+                pr_id      INTEGER NOT NULL,
+                depth      TEXT,
+                kind       TEXT,
+                model      TEXT NOT NULL DEFAULT '',
+                auto       INTEGER NOT NULL DEFAULT 0,
+                attempts   INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL,
+                UNIQUE (repo_id, pr_id)
+            )
+            """.trimIndent(),
+
+            // v34 — convenciones y guías de arquitectura propias del equipo.
+            //
+            // Sin esto, la review marca como problema lo que en realidad es una decisión tomada:
+            // cómo se nombran las interfaces, dónde va la lógica, qué patrón usa cada capa. El
+            // texto se guarda en la base y no como ruta a un archivo: si fuera una ruta, mover o
+            // borrar el archivo cambiaría en silencio con qué criterio se revisa.
+            //
+            // `repo_id` nulo significa que aplica a todos los repositorios.
+            """
+            CREATE TABLE guideline (
+                id         TEXT PRIMARY KEY,
+                repo_id    TEXT REFERENCES repo(id) ON DELETE CASCADE,
+                name       TEXT NOT NULL,
+                content    TEXT NOT NULL,
+                enabled    INTEGER NOT NULL DEFAULT 1,
+                source     TEXT,
+                created_at TEXT NOT NULL
+            );--split--
+            CREATE INDEX ix_guideline_repo ON guideline(repo_id, enabled)
+            """.trimIndent(),
         )
     }
 }

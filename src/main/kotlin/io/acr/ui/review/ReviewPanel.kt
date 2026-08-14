@@ -10,6 +10,8 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
@@ -63,6 +65,7 @@ import java.net.URI
 
 private enum class Tab { Review, Codigo, Commits, Conversacion, Historial }
 
+@OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
 @Composable
 fun ReviewPanel(
     ctx: AppContext,
@@ -89,9 +92,26 @@ fun ReviewPanel(
     var mergeando by remember(repo.id, prId) { mutableStateOf(false) }
     var verificando by remember(repo.id, prId) { mutableStateOf(false) }
     var aprobando by remember(repo.id, prId) { mutableStateOf(false) }
+    // Lo que ya dijimos sobre este PR, si dijimos algo: aprobado, cambios pedidos, o nada.
+    val miPostura = io.acr.ui.dbState(repo.id, prId, reload, initial = null) {
+        ctx.approvals.forPr(repo.id, prId).firstOrNull { it.byUs }?.stance
+    }
+    val nuestroNombre = io.acr.ui.dbState(repo.id, reload, initial = null) {
+        ctx.comments.ourDisplayName()
+    }
+    val posturas = io.acr.ui.dbState(repo.id, prId, reload, initial = emptyList()) {
+        ctx.approvals.forPr(repo.id, prId)
+    }
     var confirmarDeclinar by remember(repo.id, prId) { mutableStateOf(false) }
+    // La estrategia elegida se recuerda: en un equipo se usa casi siempre la misma.
+    var estrategia by remember {
+        mutableStateOf(io.acr.forge.MergeStrategy.fromName(ctx.prefs.get(AppContext.PREF_MERGE_STRATEGY)))
+    }
     // Salto pendiente al visor de código, pedido desde la conversación.
     var codeFocus by remember(repo.id, prId) { mutableStateOf<io.acr.ui.code.CodeFocus?>(null) }
+    // Pantalla completa: esconde todo lo de arriba y deja las pestañas con el alto entero.
+    var pantallaCompleta by remember(repo.id, prId) { mutableStateOf(false) }
+    val altoCabecera = io.acr.ui.rememberPaneWidth(ctx.prefs, "prHeader", 300.dp)
     // De qué hilo se salió al código, para poder volver exactamente ahí. Null = se entró al
     // código de frente por la pestaña, y entonces no hay a dónde volver.
     var volverAlHilo by remember(repo.id, prId) { mutableStateOf<String?>(null) }
@@ -151,17 +171,29 @@ fun ReviewPanel(
         }
     }
 
-    LaunchedEffect(repo.id, prId) {
+    var cargandoPr by remember(repo.id, prId) { mutableStateOf(false) }
+
+    // Extraída del efecto para poder reintentar: con el 401 intermitente de Bitbucket, que la
+    // primera carga falle es común, y hasta ahora la única forma de reintentar era salir y volver.
+    suspend fun cargarPr() {
+        cargandoPr = true
+        loadError = null
         // Un solo request por el PR puntual, en vez de paginar la lista entera para descartarla.
         runCatching { Forges.of(repo.provider).getPullRequest(repo, prId) }
             .onSuccess { found ->
                 pr = found
+                // El PR individual sí trae quiénes aprobaron; se guardan para que la lista lo
+                // sepa sin tener que pedir cada PR por separado.
+                if (found != null) ctx.engine.rememberApprovals(repo.id, found)
                 if (found == null) loadError = "El PR #$prId ya no existe en ${repo.owner}/${repo.slug}."
             }
             .onFailure { loadError = it.message ?: "No pude traer el PR #$prId." }
+        cargandoPr = false
         ctx.engine.syncComments(repo, prId)
         reload++
     }
+
+    LaunchedEffect(repo.id, prId) { cargarPr() }
 
     // La conversación se arma acá porque la usan tanto el contador de la pestaña como la vista.
     val hilos = buildConversation(findings, thread, replies)
@@ -184,6 +216,21 @@ fun ReviewPanel(
     LaunchedEffect(tab) { if (tab != Tab.Codigo) volverAlHilo = null }
 
     Column(Modifier.fillMaxSize().padding(20.dp)) {
+        val bloqueo = mergeBlocker(pr, review, findings, localNotes, replies)
+        // La pasada final sólo vale para el commit sobre el que corrió: si el PR avanzó, quedó
+        // vieja y vuelve a faltar.
+        val finalHecha = review?.finalPassHead != null && pr != null &&
+            review!!.finalPassHead == pr!!.headSha
+        val listo = mergeReadiness(
+            pr, review, hilos, findings,
+            finalPassDone = finalHecha,
+            finalPassBlockers = if (finalHecha) review!!.finalPassBlockers else 0,
+        )
+        // La fila de acciones NO se esconde cuando faltan datos: esconderla hacía imposible saber
+        // si la función existe. Se muestra el motivo y, si es un fallo de red, cómo reintentar.
+        // Sólo cuando ya terminó de intentar: durante la carga inicial `pr` es null un instante
+        // y mostrar "reintentar" ahí sería un parpadeo.
+
         Row(verticalAlignment = Alignment.CenterVertically) {
             TextButton(
                 onClick = {
@@ -199,11 +246,32 @@ fun ReviewPanel(
                 },
             ) { Text(io.acr.i18n.t("common.back")) }
             Spacer(Modifier.weight(1f))
+            // El link del PR: se copia sin salir de la app, que es lo que uno hace para pegarlo
+            // en un chat o en un ticket.
+            val urlPr = pr?.url?.takeIf { it.isNotBlank() }
+                ?: "https://bitbucket.org/${repo.owner}/${repo.slug}/pull-requests/$prId"
+            val portapapeles = androidx.compose.ui.platform.LocalClipboardManager.current
+            TextButton(onClick = {
+                portapapeles.setText(androidx.compose.ui.text.AnnotatedString(urlPr))
+                scope.launch { snackbar.showSnackbar(io.acr.i18n.t2("common.urlCopied")) }
+            }) { Text(io.acr.i18n.t("common.copyUrl")) }
             pr?.url?.takeIf { it.isNotBlank() }?.let { url ->
                 TextButton(onClick = { openInBrowser(url) }) { Text(io.acr.i18n.t("common.openBrowser")) }
             }
+            // Un click para dedicarle toda la pantalla al contenido; otro para volver.
+            TextButton(onClick = { pantallaCompleta = !pantallaCompleta }) {
+                Text(
+                    if (pantallaCompleta) io.acr.i18n.t("pr.exitFullScreen")
+                    else io.acr.i18n.t("pr.fullScreen"),
+                )
+            }
         }
 
+        if (!pantallaCompleta) {
+        Column(
+            Modifier.fillMaxWidth().height(altoCabecera.value)
+                .verticalScroll(rememberScrollState()),
+        ) {
         Text("#$prId ${pr?.title ?: review?.prTitle ?: ""}", style = MaterialTheme.typography.headlineSmall)
         // Si lo último que corrió falló pero hay una review buena anterior, se muestra esa y se
         // dice por qué, en vez de dejar la pantalla en un error sin contenido.
@@ -238,7 +306,10 @@ fun ReviewPanel(
             io.acr.ui.prs.ageInDays(it.createdOn, java.time.LocalDate.now())?.let { dias ->
                 val nivel = io.acr.ui.prs.Urgency.fromDays(dias)!!
                 Text(
-                    io.acr.i18n.t("prs.ageTitle", dias) + " · " + it.createdOn.take(10) +
+                    io.acr.i18n.t("prs.created") + " " + it.createdOn +
+                        (it.updatedOn.takeIf { u -> u.isNotBlank() && u != it.createdOn }
+                            ?.let { u -> " · " + io.acr.i18n.t("prs.updated") + " " + u } ?: "") +
+                        " · " + io.acr.i18n.t("prs.ageTitle", dias) +
                         nivel.mark().let { m -> if (m.isBlank()) "" else "  $m " } +
                         (if (nivel == io.acr.ui.prs.Urgency.FRESCO) "" else io.acr.i18n.t(nivel.labelKey)),
                     style = MaterialTheme.typography.labelSmall,
@@ -257,17 +328,33 @@ fun ReviewPanel(
         // Mergear: la única acción de la app que cambia el repositorio y no se puede deshacer.
         // Se habilita sólo cuando no queda nada esperando y el autor subió código después de la
         // review; en cualquier otro caso el botón dice por qué no.
-        val bloqueo = mergeBlocker(pr, review, findings, localNotes, replies)
-        // La pasada final sólo vale para el commit sobre el que corrió: si el PR avanzó, quedó
-        // vieja y vuelve a faltar.
-        val finalHecha = review?.finalPassHead != null && pr != null &&
-            review!!.finalPassHead == pr!!.headSha
-        val listo = mergeReadiness(
-            pr, review, hilos, findings,
-            finalPassDone = finalHecha,
-            finalPassBlockers = if (finalHecha) review!!.finalPassBlockers else 0,
-        )
-        if (pr != null && pr!!.state == io.acr.forge.PrState.OPEN && review != null) {
+        if (pr == null && !cargandoPr) {
+            Spacer(Modifier.height(10.dp))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                OutlinedButton(
+                    enabled = !cargandoPr,
+                    onClick = { scope.launch { cargarPr() } },
+                ) { Text(if (cargandoPr) io.acr.i18n.t("prs.loading") else io.acr.i18n.t("common.retry")) }
+                Spacer(Modifier.width(10.dp))
+                Text(
+                    io.acr.i18n.t("merge.actionsHidden"),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.error,
+                )
+            }
+        }
+        if (pr != null && pr!!.state != io.acr.forge.PrState.OPEN) {
+            Spacer(Modifier.height(10.dp))
+            Text(
+                io.acr.i18n.t("merge.notOpen"),
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        // Sin exigir que haya review: aprobar y declinar no la necesitan, y esconder los cuatro
+        // botones porque falta uno dejaba sin acciones a un PR todavía sin revisar. Mergear sigue
+        // pidiéndola, pero eso ya lo dice su propia condición.
+        if (pr != null && pr!!.state == io.acr.forge.PrState.OPEN) {
             Spacer(Modifier.height(10.dp))
             Row(verticalAlignment = Alignment.CenterVertically) {
                 // Verificar va antes de mergear en el orden de lectura porque ese es el orden
@@ -299,28 +386,88 @@ fun ReviewPanel(
                     }
                     Spacer(Modifier.width(8.dp))
                 }
-                // Aprobar es una opinión y se puede retirar, así que va sin confirmación y sin
-                // depender de la verificación: puede que quieras aprobar y que mergee otro.
-                OutlinedButton(
-                    enabled = !aprobando,
-                    onClick = {
-                        aprobando = true
-                        ctx.appScope.launch {
-                            runCatching {
-                                kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
-                                    Forges.of(repo.provider).approve(repo, prId)
-                                }
-                            }
-                                .onSuccess { snackbar.showSnackbar(io.acr.i18n.t2("approve.done")) }
-                                .onFailure {
-                                    snackbar.showSnackbar(
-                                        io.acr.i18n.t2("approve.failed") + ": " + it.message?.take(160),
-                                    )
-                                }
-                            aprobando = false
+                // Aprobar y pedir cambios son excluyentes y las dos se pueden retirar, igual que
+                // en Bitbucket. Los botones cambian según lo que ya dijiste: ofrecer "Aprobar" a
+                // quien ya aprobó no dice nada y esconde la acción que sí sirve.
+                fun accion(bloque: suspend () -> Unit, ok: String) {
+                    aprobando = true
+                    ctx.appScope.launch {
+                        runCatching {
+                            kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { bloque() }
                         }
-                    },
-                ) { Text(if (aprobando) io.acr.i18n.t("approve.running") else io.acr.i18n.t("approve.action")) }
+                            .onSuccess { snackbar.showSnackbar(io.acr.i18n.t2(ok)) }
+                            .onFailure {
+                                snackbar.showSnackbar(
+                                    io.acr.i18n.t2("approve.failed") + ": " + it.message?.take(160),
+                                )
+                            }
+                        aprobando = false
+                        reload++
+                    }
+                }
+                // El nombre con el que el proveedor nos nombra, no un genérico: es el que va a
+                // aparecer en "aprobado por …" y el que hace que coincida con lo que trae la API.
+                val yo = nuestroNombre ?: io.acr.i18n.t("msg.us")
+                // Los círculos de todos los que se pronunciaron, no sólo el nuestro.
+                if (posturas.isNotEmpty()) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(3.dp),
+                        modifier = Modifier.padding(end = 8.dp),
+                    ) {
+                        posturas.forEach { p ->
+                            io.acr.ui.PersonAvatar(p.approvedBy, stance = p.stance)
+                        }
+                    }
+                }
+                if (miPostura == io.acr.data.ReviewStance.APPROVED) {
+                    Spacer(Modifier.width(4.dp))
+                    OutlinedButton(
+                        enabled = !aprobando,
+                        onClick = {
+                            accion({
+                                ctx.engine.withdrawStance(repo, prId, io.acr.data.ReviewStance.APPROVED)
+                                    .getOrThrow()
+                            }, "approve.withdrawn")
+                        },
+                    ) { Text(io.acr.i18n.t("approve.withdraw")) }
+                } else {
+                    OutlinedButton(
+                        enabled = !aprobando,
+                        onClick = { accion({ ctx.engine.approve(repo, prId, yo).getOrThrow() }, "approve.done") },
+                    ) {
+                        Text(
+                            if (aprobando) io.acr.i18n.t("approve.running")
+                            else io.acr.i18n.t("approve.action"),
+                        )
+                    }
+                }
+                Spacer(Modifier.width(8.dp))
+                if (miPostura == io.acr.data.ReviewStance.CHANGES_REQUESTED) {
+                    Text(
+                        io.acr.i18n.t("changes.mine"),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                    Spacer(Modifier.width(8.dp))
+                    OutlinedButton(
+                        enabled = !aprobando,
+                        onClick = {
+                            accion({
+                                ctx.engine.withdrawStance(
+                                    repo, prId, io.acr.data.ReviewStance.CHANGES_REQUESTED,
+                                ).getOrThrow()
+                            }, "changes.withdrawn")
+                        },
+                    ) { Text(io.acr.i18n.t("changes.withdraw")) }
+                } else {
+                    OutlinedButton(
+                        enabled = !aprobando,
+                        onClick = {
+                            accion({ ctx.engine.requestChanges(repo, prId, yo).getOrThrow() }, "changes.done")
+                        },
+                    ) { Text(io.acr.i18n.t("changes.action")) }
+                }
                 Spacer(Modifier.width(8.dp))
                 OutlinedButton(onClick = { confirmarDeclinar = true }) {
                     Text(io.acr.i18n.t("decline.action"), color = MaterialTheme.colorScheme.error)
@@ -349,8 +496,12 @@ fun ReviewPanel(
                     )
                 }
                 Spacer(Modifier.width(8.dp))
+                // Siempre habilitado: mergear con cosas sin resolver es una decisión legítima
+                // —urgencias, comentarios que ya no aplican, un fix que no puede esperar— y la app
+                // no está para impedirla. Lo que sí hace es decir qué se saltea, en el botón y de
+                // nuevo en la confirmación, para que sea una decisión y no un descuido.
                 Button(
-                    enabled = bloqueo == null && !mergeando,
+                    enabled = !mergeando,
                     onClick = { confirmarMerge = true },
                 ) { Text(if (mergeando) io.acr.i18n.t("merge.merging") else io.acr.i18n.t("merge.action")) }
                 Spacer(Modifier.width(10.dp))
@@ -363,21 +514,25 @@ fun ReviewPanel(
             }
 
             Spacer(Modifier.height(8.dp))
-            ReadinessCard(listo)
+            ReadinessCard(listo, ctx.prefs)
 
             review?.finalPassSummary?.takeIf { it.isNotBlank() && finalHecha }?.let { resumen ->
                 Spacer(Modifier.height(8.dp))
-                Card {
-                    Text(
-                        io.acr.i18n.t("final.title") +
-                            if (review!!.finalPassBlockers > 0) {
-                                " · " + io.acr.i18n.t("final.blockers", review!!.finalPassBlockers)
-                            } else " · " + io.acr.i18n.t("final.clean"),
-                        style = MaterialTheme.typography.titleSmall,
-                        color = if (review!!.finalPassBlockers > 0) MaterialTheme.colorScheme.error
-                        else MaterialTheme.colorScheme.primary,
-                    )
-                    Spacer(Modifier.height(4.dp))
+                val conBloqueantes = review!!.finalPassBlockers > 0
+                io.acr.ui.CollapsibleCard(
+                    title = io.acr.i18n.t("final.title"),
+                    prefs = ctx.prefs,
+                    key = "finalPass",
+                    accent = if (conBloqueantes) MaterialTheme.colorScheme.error else io.acr.ui.VERDE_OK,
+                    trailing = if (conBloqueantes) {
+                        io.acr.i18n.t("final.blockers", review!!.finalPassBlockers)
+                    } else io.acr.i18n.t("final.clean"),
+                    // Arranca plegada: el resumen de la pasada final del PR #149 son 3.728
+                    // caracteres, y abierto por defecto empuja abajo todo el resto de la
+                    // pantalla. La conclusión —"nada que frene el merge" o "2 bloqueantes"— sigue
+                    // a la vista en el título, que es lo que uno mira primero.
+                    defaultCollapsed = true,
+                ) {
                     SelectionContainer {
                         Text(resumen, style = MaterialTheme.typography.bodySmall)
                     }
@@ -386,24 +541,21 @@ fun ReviewPanel(
 
             review?.resolutionSummary?.takeIf { it.isNotBlank() }?.let { resumen ->
                 Spacer(Modifier.height(8.dp))
-                Card {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text(io.acr.i18n.t("verify.title"), style = MaterialTheme.typography.titleSmall)
-                        // Una verificación vieja es peor que ninguna: dice "corregido" sobre un
-                        // código que ya cambió. Si llegaron commits después, se avisa.
-                        val vieja = review!!.resolutionHead != null &&
-                            pr != null && pr!!.headSha.isNotBlank() &&
-                            review!!.resolutionHead != pr!!.headSha
-                        if (vieja) {
-                            Spacer(Modifier.width(8.dp))
-                            Text(
-                                io.acr.i18n.t("verify.stale"),
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.error,
-                            )
-                        }
-                    }
-                    Spacer(Modifier.height(4.dp))
+                // Una verificación vieja es peor que ninguna: dice "corregido" sobre un código
+                // que ya cambió. Si llegaron commits después, se avisa en el título.
+                val vieja = review!!.resolutionHead != null &&
+                    pr != null && pr!!.headSha.isNotBlank() &&
+                    review!!.resolutionHead != pr!!.headSha
+                io.acr.ui.CollapsibleCard(
+                    title = io.acr.i18n.t("verify.title"),
+                    prefs = ctx.prefs,
+                    key = "verify",
+                    accent = if (vieja) MaterialTheme.colorScheme.error else io.acr.ui.VERDE_OK,
+                    trailing = if (vieja) io.acr.i18n.t("verify.stale") else null,
+                    trailingColor = MaterialTheme.colorScheme.error,
+                    // Igual que la anterior: el aviso de "quedó vieja" se ve plegada.
+                    defaultCollapsed = true,
+                ) {
                     SelectionContainer {
                         Text(resumen, style = MaterialTheme.typography.bodySmall)
                     }
@@ -411,7 +563,14 @@ fun ReviewPanel(
             }
         }
 
-        Spacer(Modifier.height(12.dp))
+        }
+        // Arrastrable: cuánto se lleva la cabecera y cuánto queda para el código lo decide quien
+        // mira, no el layout. Se puede bajar hasta cero, y el botón de pantalla completa hace lo
+        // mismo de un click.
+        io.acr.ui.HorizontalSplitter(altoCabecera, ctx.prefs, "prHeader", min = 0.dp, max = 620.dp)
+        }
+
+        Spacer(Modifier.height(4.dp))
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             FilterChip(tab == Tab.Review, { tab = Tab.Review }, { Text(io.acr.i18n.t("tab.review")) })
             FilterChip(
@@ -551,63 +710,42 @@ fun ReviewPanel(
         }
 
         // Confirmación: mergear es irreversible y hacia afuera. Es el caso donde un modal
-        // corresponde, porque interrumpe a propósito.
+        // corresponde, porque interrumpe a propósito. El diálogo es compartido con la lista.
         if (confirmarMerge && pr != null) {
             val objetivo = pr!!
-            var borrarRama by remember { mutableStateOf(false) }
-            androidx.compose.material3.AlertDialog(
-                onDismissRequest = { confirmarMerge = false },
-                title = { Text(io.acr.i18n.t("merge.confirmTitle", prId)) },
-                text = {
-                    Column {
-                        Text(
-                            io.acr.i18n.t(
-                                "merge.confirmBody", objetivo.sourceBranch, objetivo.targetBranch,
-                            ),
-                        )
-                        Spacer(Modifier.height(8.dp))
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            androidx.compose.material3.Checkbox(
-                                checked = borrarRama,
-                                onCheckedChange = { borrarRama = it },
-                            )
-                            Text(
-                                io.acr.i18n.t("merge.closeBranch"),
-                                style = MaterialTheme.typography.bodySmall,
-                            )
-                        }
-                    }
+            io.acr.ui.MergeDialog(
+                pr = objetivo,
+                strategy = estrategia,
+                onStrategy = {
+                    estrategia = it
+                    ctx.prefs.put(AppContext.PREF_MERGE_STRATEGY, it.name)
                 },
-                confirmButton = {
-                    TextButton(onClick = {
-                        confirmarMerge = false
-                        mergeando = true
-                        ctx.appScope.launch {
-                            runCatching {
-                                kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
-                                    Forges.of(repo.provider).merge(
-                                        repo, prId,
-                                        "Merge pull request #$prId: ${objetivo.title}",
-                                        borrarRama,
-                                    )
-                                }
+                pendientes = listo.missing.map {
+                    io.acr.i18n.t(it.key) + if (it.detail.isBlank()) "" else " (${it.detail})"
+                },
+                onDismiss = { confirmarMerge = false },
+                onConfirm = { eleccion ->
+                    confirmarMerge = false
+                    mergeando = true
+                    ctx.appScope.launch {
+                        runCatching {
+                            kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                                Forges.of(repo.provider).merge(
+                                    repo, prId, eleccion.message,
+                                    eleccion.closeSourceBranch, eleccion.strategy,
+                                )
                             }
-                                .onSuccess {
-                                    snackbar.showSnackbar(io.acr.i18n.t2("merge.done"))
-                                    reload++
-                                }
-                                .onFailure {
-                                    snackbar.showSnackbar(
-                                        io.acr.i18n.t2("merge.failed") + ": " + it.message?.take(160),
-                                    )
-                                }
-                            mergeando = false
                         }
-                    }) { Text(io.acr.i18n.t("merge.confirm")) }
-                },
-                dismissButton = {
-                    TextButton(onClick = { confirmarMerge = false }) {
-                        Text(io.acr.i18n.t("common.cancel"))
+                            .onSuccess {
+                                snackbar.showSnackbar(io.acr.i18n.t2("merge.done"))
+                                reload++
+                            }
+                            .onFailure {
+                                snackbar.showSnackbar(
+                                    io.acr.i18n.t2("merge.failed") + ": " + it.message?.take(160),
+                                )
+                            }
+                        mergeando = false
                     }
                 },
             )
@@ -691,6 +829,23 @@ fun ReviewPanel(
                 followUpAfterDays = diasParaRecordar,
                 onFollowUp = { seguimientoDe = it },
                 publishingIds = publicandoIds,
+                onDismissReply = { d ->
+                    scope.launch {
+                        kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                            ctx.replies.dismiss(d.id, true)
+                        }
+                        reload++
+                    }
+                },
+                onDismissAllReplies = {
+                    scope.launch {
+                        val n = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                            ctx.replies.dismissAllForPr(repo.id, prId)
+                        }
+                        reload++
+                        snackbar.showSnackbar(io.acr.i18n.t2("replies.dismissedN", n))
+                    }
+                },
                 onCloseThread = { id, cerrar ->
                     scope.launch {
                         kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
@@ -1009,6 +1164,8 @@ private fun TimelineRow(e: TimelineEvent, onOpen: (String) -> Unit) {
             )
             if (e.author.isNotBlank()) {
                 Spacer(Modifier.width(8.dp))
+                io.acr.ui.PersonAvatar(e.author, size = 36.dp)
+                Spacer(Modifier.width(4.dp))
                 Text(e.author, style = MaterialTheme.typography.labelSmall)
             }
             e.anchor?.let {
@@ -1403,6 +1560,8 @@ private fun ConversationList(
     followUpAfterDays: Long,
     onFollowUp: (ConversationThread) -> Unit,
     onCloseThread: (String, Boolean) -> Unit,
+    onDismissReply: (io.acr.data.ReplyDraft) -> Unit,
+    onDismissAllReplies: () -> Unit,
 ) {
     if (threads.isEmpty()) {
         Box(Modifier.fillMaxSize()) {
@@ -1443,6 +1602,11 @@ private fun ConversationList(
                     Spacer(Modifier.width(10.dp))
                     Button(onClick = onDraftAll) {
                         Text(io.acr.i18n.t("replies.analyzeAll", porContestar))
+                    }
+                    Spacer(Modifier.width(8.dp))
+                    // Con 24 respuestas del tipo "corregido", cerrarlas una por una no es opción.
+                    OutlinedButton(onClick = onDismissAllReplies) {
+                        Text(io.acr.i18n.t("replies.dismissAll", porContestar))
                     }
                 }
             }
@@ -1497,6 +1661,7 @@ private fun ConversationList(
                     body = h.question,
                     ours = true,
                 )
+                io.acr.ui.SuggestionBlock(h.suggestion)
 
                 // El ida y vuelta, en orden. Es "por dónde arranqué y qué me contestaron".
                 h.entries.forEach { e ->
@@ -1592,11 +1757,16 @@ private fun ConversationList(
                 if (d != null && d.status != io.acr.data.ReplyStatus.PUBLISHED) {
                     Spacer(Modifier.height(8.dp))
                     if (d.body.isNullOrBlank()) {
-                        Button(enabled = d.id !in busy, onClick = { onDraft(d) }) {
-                            Text(
-                                if (d.id in busy) io.acr.i18n.t("replies.analyzing")
-                                else io.acr.i18n.t("replies.analyze"),
-                            )
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Button(enabled = d.id !in busy, onClick = { onDraft(d) }) {
+                                Text(
+                                    if (d.id in busy) io.acr.i18n.t("replies.analyzing")
+                                    else io.acr.i18n.t("replies.analyze"),
+                                )
+                            }
+                            OutlinedButton(onClick = { onDismissReply(d) }) {
+                                Text(io.acr.i18n.t("replies.dismiss"))
+                            }
                         }
                     } else {
                         var texto by remember(d.id, d.body) { mutableStateOf(d.body.orEmpty()) }
@@ -1613,6 +1783,9 @@ private fun ConversationList(
                                 enabled = d.id !in busy && texto.isNotBlank(),
                                 onClick = { onPublish(d, texto) },
                             ) { Text(io.acr.i18n.t("replies.publishReply")) }
+                            OutlinedButton(onClick = { onDismissReply(d) }) {
+                                Text(io.acr.i18n.t("replies.dismiss"))
+                            }
                             OutlinedButton(onClick = { onEdit(d, texto) }) {
                                 Text(io.acr.i18n.t("common.saveDraft"))
                             }
@@ -1782,10 +1955,13 @@ internal fun mergeBlocker(
     hayReview = review != null,
     hallazgosPendientes = findings.count { !it.settled },
     notasPendientes = notes.count { it.publishedId == null },
-    respuestasPendientes = replies.count { it.status != io.acr.data.ReplyStatus.PUBLISHED },
+    respuestasPendientes = replies.count { !it.settled },
     // `settled` cubre los tres cierres —publicado, descartado y cerrado en la conversación—; acá
     // hay que excluir explícitamente los dos últimos, porque un hilo cerrado hablando no espera
     // ninguna verificación contra el código.
+    comentariosPublicados = findings.count {
+        it.publishedId != null && it.dismissedAt == null && it.closedAt == null
+    },
     sinVerificar = findings.count {
         it.publishedId != null && it.dismissedAt == null && it.closedAt == null &&
             it.resolution == null
@@ -1812,14 +1988,19 @@ internal fun mergeBlocker(
     respuestasPendientes: Int,
     sinVerificar: Int = 0,
     noResueltos: Int = 0,
+    /** Cuántos comentarios llegamos a publicar. Cero significa que no pedimos ningún cambio. */
+    comentariosPublicados: Int = 0,
 ): String? = when {
     prHeadSha == null -> "merge.noPr"
     !hayReview -> "merge.noReview"
     hallazgosPendientes > 0 -> "merge.pendingFindings"
     notasPendientes > 0 -> "merge.pendingNotes"
     respuestasPendientes > 0 -> "merge.pendingReplies"
-    // El head del PR es el mismo que se revisó: no hubo cambios después de los comentarios.
-    !reviewHeadSha.isNullOrBlank() && reviewHeadSha == prHeadSha -> "merge.noNewCommits"
+    // Exigir commits nuevos sólo tiene sentido si pedimos algún cambio. Si la review no publicó
+    // nada —no encontró qué decir— no hay nada que corregir, y pedir un commit dejaría ese PR
+    // sin poder mergearse nunca. Es el caso de talos-apirest #1517, con cero hallazgos.
+    comentariosPublicados > 0 &&
+        !reviewHeadSha.isNullOrBlank() && reviewHeadSha == prHeadSha -> "merge.noNewCommits"
     // Publicado no es resuelto. Sin verificar contra el código, mergear es confiar en que
     // alguien lo arregló porque lo dijo.
     noResueltos > 0 -> "merge.notResolved"
@@ -1834,42 +2015,41 @@ internal fun mergeBlocker(
  * falta, ordenado por cuánto pesa, así se sabe qué mover para que suba.
  */
 @Composable
-private fun ReadinessCard(r: Readiness) {
-    Card {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Text(
-                "${r.percent}%",
-                style = MaterialTheme.typography.headlineSmall,
-                color = when {
-                    r.percent == 100 -> MaterialTheme.colorScheme.primary
-                    r.percent >= 70 -> androidx.compose.ui.graphics.Color(0xFFD98324)
-                    else -> MaterialTheme.colorScheme.error
-                },
-            )
-            Spacer(Modifier.width(10.dp))
-            Text(
-                if (r.ready) io.acr.i18n.t("ready.yes") else io.acr.i18n.t("ready.no"),
-                style = MaterialTheme.typography.titleSmall,
-            )
-        }
+private fun ReadinessCard(r: Readiness, prefs: io.acr.data.PrefsRepo) {
+    val color = when {
+        r.percent == 100 -> io.acr.ui.VERDE_OK
+        r.percent >= 70 -> androidx.compose.ui.graphics.Color(0xFFD98324)
+        else -> MaterialTheme.colorScheme.error
+    }
+    // El porcentaje va en el título: plegada, la tarjeta sigue diciendo lo único que se mira de
+    // reojo —"85% · todavía no está listo"— y lo que se esconde es el detalle de qué falta.
+    io.acr.ui.CollapsibleCard(
+        title = "${r.percent}% · " +
+            (if (r.ready) io.acr.i18n.t("ready.yes") else io.acr.i18n.t("ready.no")),
+        prefs = prefs,
+        key = "readiness",
+        accent = color,
+        maxHeight = null,
+    ) {
         androidx.compose.material3.LinearProgressIndicator(
             progress = { r.percent / 100f },
             modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp)
                 .clip(RoundedCornerShape(4.dp)),
         )
-        r.missing.take(6).forEach { item ->
-            Text(
-                "· " + io.acr.i18n.t(item.key) + if (item.detail.isBlank()) "" else " (${item.detail})",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        }
-        if (r.missing.size > 6) {
-            Text(
-                "· +${r.missing.size - 6}",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
+        if (r.missing.isNotEmpty()) {
+            Column(
+                Modifier.fillMaxWidth().heightIn(max = 140.dp)
+                    .verticalScroll(rememberScrollState()),
+            ) {
+                r.missing.forEach { item ->
+                    Text(
+                        "· " + io.acr.i18n.t(item.key) +
+                            if (item.detail.isBlank()) "" else " (${item.detail})",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
         }
     }
 }

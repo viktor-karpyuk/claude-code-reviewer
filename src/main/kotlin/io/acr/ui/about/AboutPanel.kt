@@ -17,6 +17,7 @@ import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -92,6 +93,59 @@ fun AboutPanel(ctx: AppContext) {
                     }
                     items(rows) { (k, v) -> InfoRow(k, v) }
                 }
+                // Novedades: qué trajo esta versión y cómo llegar a las demás. Va antes del
+                // bloque de "cómo trabaja" porque es lo que uno viene a mirar tras actualizar.
+                item {
+                    Spacer(Modifier.height(14.dp))
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(t("about.releases"), style = MaterialTheme.typography.titleSmall)
+                        Spacer(Modifier.weight(1f))
+                        OutlinedButton(onClick = { abrir(io.acr.Releases.urlFor(AppVersion.value)) }) {
+                            Text(t("about.thisRelease"))
+                        }
+                        Spacer(Modifier.width(8.dp))
+                        OutlinedButton(onClick = { abrir(io.acr.Releases.URL) }) {
+                            Text(t("about.allReleases"))
+                        }
+                    }
+                    Spacer(Modifier.height(6.dp))
+                }
+                if (io.acr.Releases.all().isEmpty()) {
+                    item {
+                        Text(
+                            t("about.noNotes"),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
+                items(io.acr.Releases.all().take(12)) { r ->
+                    Column(Modifier.padding(bottom = 8.dp)) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(
+                                r.version,
+                                style = MaterialTheme.typography.labelLarge,
+                                color = if (r.version == AppVersion.value) {
+                                    MaterialTheme.colorScheme.primary
+                                } else MaterialTheme.colorScheme.onSurface,
+                            )
+                            if (r.version == AppVersion.value) {
+                                Spacer(Modifier.width(6.dp))
+                                io.acr.ui.StatusBadge(t("about.installed"))
+                            }
+                            Spacer(Modifier.width(8.dp))
+                            TextButton(onClick = { abrir(io.acr.Releases.urlFor(r.version)) }) {
+                                Text(t("common.inBrowser"), style = MaterialTheme.typography.labelSmall)
+                            }
+                        }
+                        Text(
+                            r.body,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
+
                 item {
                     Spacer(Modifier.height(14.dp))
                     Column(
@@ -107,6 +161,14 @@ fun AboutPanel(ctx: AppContext) {
                 }
             }
         }
+    }
+}
+
+/** Abre una URL en el navegador del sistema. */
+private fun abrir(url: String) {
+    runCatching {
+        val d = java.awt.Desktop.getDesktop()
+        if (d.isSupported(java.awt.Desktop.Action.BROWSE)) d.browse(java.net.URI(url))
     }
 }
 

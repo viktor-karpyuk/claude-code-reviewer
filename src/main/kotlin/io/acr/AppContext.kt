@@ -3,6 +3,9 @@ package io.acr
 import io.acr.claude.AutoReviewer
 import io.acr.claude.ReviewEngine
 import io.acr.crypto.Secrets
+import io.acr.data.ApprovalRepository
+import io.acr.data.GuidelineRepository
+import io.acr.data.PendingJobRepository
 import io.acr.data.FindingRepository
 import io.acr.data.LocalNoteRepository
 import io.acr.data.PrCommentRepository
@@ -28,6 +31,9 @@ class AppContext private constructor(
     val comments: PrCommentRepository,
     val notes: LocalNoteRepository,
     val findings: FindingRepository,
+    val approvals: ApprovalRepository,
+    val jobs: PendingJobRepository,
+    val guidelines: GuidelineRepository,
     val replies: ReplyRepository,
     val seenPrs: io.acr.data.SeenPrRepository,
     val prCache: io.acr.data.PrCacheRepository,
@@ -62,6 +68,8 @@ class AppContext private constructor(
         const val PREF_CLOSE_ACTION = "ui.closeAction"
         const val PREF_PR_SORT = "ui.prSort"
         const val PREF_FOLLOWUP_DAYS = "followup.days"
+        const val PREF_DASH_COLLAPSED = "ui.dashCollapsed"
+        const val PREF_MERGE_STRATEGY = "merge.strategy"
 
         /**
          * @param dataDir dónde viven la base y la clave. Configurable para que los tests NO
@@ -78,6 +86,9 @@ class AppContext private constructor(
             val comments = PrCommentRepository(store)
             val notes = LocalNoteRepository(store)
             val findings = FindingRepository(store)
+            val approvals = ApprovalRepository(store)
+            val jobs = PendingJobRepository(store)
+            val guidelines = GuidelineRepository(store)
             val replies = ReplyRepository(store)
             val seenPrs = io.acr.data.SeenPrRepository(store)
             val prCache = io.acr.data.PrCacheRepository(store)
@@ -85,11 +96,18 @@ class AppContext private constructor(
             val prefs = PrefsRepo(store)
             // Ninguna review de una corrida anterior puede seguir viva: el estado del motor es
             // en memoria. Sin esto quedan como "corriendo" para siempre en el panel.
+            //
+            // Antes de cerrarlas se anotan sus parámetros: el subproceso murió con su contexto y
+            // no se puede retomar, pero sí volver a lanzarlas al abrir, que es lo que uno espera
+            // cuando cierra la app con trabajo en curso.
+            reviews.orphanedRunning().forEach { r ->
+                jobs.enqueue(r.repoId, r.prId, r.depth, r.projectKind, r.model.orEmpty(), r.auto)
+            }
             reviews.failOrphanedRunning()
             val notifier = io.acr.notify.Notifier(prefs)
-            val engine = ReviewEngine(reviews, publications, comments, findings, replies, prefs, notifier)
-            val auto = AutoReviewer(repos, reviews, prefs, engine, notifier, replies, seenPrs, prLoader, findings)
-            return AppContext(store, repos, reviews, publications, comments, notes, findings, replies, seenPrs, prCache, prLoader, prefs, engine, auto, notifier)
+            val engine = ReviewEngine(reviews, publications, comments, findings, replies, approvals, guidelines, prefs, notifier)
+            val auto = AutoReviewer(repos, reviews, prefs, engine, notifier, replies, seenPrs, prLoader, findings, approvals, jobs)
+            return AppContext(store, repos, reviews, publications, comments, notes, findings, approvals, jobs, guidelines, replies, seenPrs, prCache, prLoader, prefs, engine, auto, notifier)
         }
 
         /** La propiedad `acr.dataDir` gana sobre la ubicación estándar; la usan los tests. */

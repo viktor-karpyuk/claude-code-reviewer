@@ -92,6 +92,15 @@ data class PullRequest(
     val createdOn: String = "",
     /** OPEN, MERGED o DECLINED. Por defecto abierto: es lo único que se lista sin pedirlo. */
     val state: PrState = PrState.OPEN,
+    /**
+     * Quiénes aprobaron. Sólo viene poblado al pedir un PR puntual: el listado de Bitbucket no
+     * trae `participants`, y pedirlo por fila sería una llamada por PR.
+     */
+    val approvedBy: List<String> = emptyList(),
+    /** Quiénes pidieron cambios. Mismo origen y misma limitación que [approvedBy]. */
+    val changesRequestedBy: List<String> = emptyList(),
+    /** Quiénes figuran en el PR sin haberse pronunciado todavía. */
+    val participantsIdle: List<String> = emptyList(),
 )
 
 /**
@@ -131,3 +140,31 @@ data class PrComment(
     /** Comentario del que cuelga esta respuesta, si es una respuesta. */
     val parentId: String? = null,
 )
+
+/**
+ * Cómo se integra el PR a la rama destino.
+ *
+ * Son las tres que ofrece Bitbucket. Los nombres de GitHub son distintos y el mapeo no es exacto:
+ * su `rebase` reescribe los commits sobre la punta de la rama destino, que se parece a un
+ * fast-forward pero no es lo mismo. Se elige el más cercano y se dice en la etiqueta.
+ *
+ * Qué estrategias están habilitadas lo decide el repositorio y la API no lo publica en ningún
+ * endpoint que podamos consultar, así que se ofrecen las tres y el proveedor rechaza la que no
+ * corresponda. Es preferible a esconder una que sí estaba permitida.
+ */
+enum class MergeStrategy(val bitbucket: String, val github: String, val labelKey: String) {
+    /** Un commit de merge con dos padres. Conserva la historia de la rama tal cual. */
+    MERGE_COMMIT("merge_commit", "merge", "merge.strategy.mergeCommit"),
+
+    /** Todo el PR en un solo commit. La historia de la rama no queda en destino. */
+    SQUASH("squash", "squash", "merge.strategy.squash"),
+
+    /** Sin commit de merge. Requiere que la rama esté al día con el destino. */
+    FAST_FORWARD("fast_forward", "rebase", "merge.strategy.fastForward"),
+    ;
+
+    companion object {
+        fun fromName(value: String?): MergeStrategy =
+            entries.firstOrNull { it.name == value } ?: MERGE_COMMIT
+    }
+}

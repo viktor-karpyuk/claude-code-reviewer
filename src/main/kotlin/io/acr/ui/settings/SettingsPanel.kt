@@ -217,6 +217,14 @@ fun SettingsPanel(
 
         Spacer(Modifier.height(4.dp))
         HorizontalDivider()
+        io.acr.ui.GuidelinesSection(
+            repo = ctx.guidelines,
+            repoId = null,
+            titulo = io.acr.i18n.t("guide.globalTitle"),
+            nota = io.acr.i18n.t("guide.globalNote"),
+        )
+        Spacer(Modifier.height(16.dp))
+
         Text(io.acr.i18n.t("settings.permsTitle"), style = MaterialTheme.typography.titleSmall)
         Text(
             io.acr.i18n.t("settings.permsNote"),

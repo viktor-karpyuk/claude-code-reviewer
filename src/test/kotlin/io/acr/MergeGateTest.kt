@@ -88,6 +88,19 @@ class MergeGateTest {
     }
 
     @Test
+    fun aReviewThatFoundNothingCanBeMergedRightAway() {
+        // Exigir commits nuevos sólo tiene sentido si pedimos algún cambio. Con cero comentarios
+        // publicados no hay nada que corregir, y pedir un commit dejaba ese PR sin poder
+        // mergearse nunca. Es el caso real de talos-apirest #1517.
+        assertNull(
+            mergeBlocker(
+                pr, review(head = "nuevo"), emptyList(), emptyList(), emptyList(),
+            ),
+            "un PR sin observaciones quedó bloqueado para siempre",
+        )
+    }
+
+    @Test
     fun withoutNewCommitsItDoesNotMerge() {
         // El head del PR es el mismo que se revisó: nadie corrigió nada, así que mergear sería
         // aprobar sin verificar. Es la condición que el usuario pidió: "y el código actualizado".
@@ -118,6 +131,9 @@ class MergeGateTest {
                 hallazgosPendientes = f.count { !it.settled },
                 notasPendientes = n.count { it.publishedId == null },
                 respuestasPendientes = r.count { it.status != ReplyStatus.PUBLISHED },
+                comentariosPublicados = f.count {
+                    it.publishedId != null && it.dismissedAt == null && it.closedAt == null
+                },
                 sinVerificar = f.count {
                     it.publishedId != null && it.dismissedAt == null && it.closedAt == null &&
                         it.resolution == null

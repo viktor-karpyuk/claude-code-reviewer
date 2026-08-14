@@ -53,6 +53,8 @@ class ReviewEngine(
     private val comments: io.acr.data.PrCommentRepository,
     private val findings: io.acr.data.FindingRepository,
     private val replies: io.acr.data.ReplyRepository,
+    private val approvals: io.acr.data.ApprovalRepository,
+    private val guidelines: io.acr.data.GuidelineRepository,
     private val prefs: PrefsRepo,
     private val notifier: io.acr.notify.Notifier? = null,
 ) {
@@ -279,6 +281,35 @@ class ReviewEngine(
         posted.url
     }
 
+    /** Aprueba y deja registro local: la lista lo lee de acá sin pedir el PR uno por uno. */
+    suspend fun approve(repo: RepoRecord, prId: Long, quien: String): Result<Unit> = runCatching {
+        io.acr.forge.Forges.of(repo.provider).approve(repo, prId)
+        approvals.record(repo.id, prId, quien, byUs = true, io.acr.data.ReviewStance.APPROVED)
+    }
+
+    /** Pide cambios. Excluyente con aprobar: el proveedor reemplaza un estado por el otro. */
+    suspend fun requestChanges(repo: RepoRecord, prId: Long, quien: String): Result<Unit> = runCatching {
+        io.acr.forge.Forges.of(repo.provider).requestChanges(repo, prId)
+        approvals.record(repo.id, prId, quien, byUs = true, io.acr.data.ReviewStance.CHANGES_REQUESTED)
+    }
+
+    /** Retira lo que hayamos dicho —aprobación o pedido de cambios— y lo borra del registro. */
+    suspend fun withdrawStance(
+        repo: RepoRecord,
+        prId: Long,
+        actual: io.acr.data.ReviewStance,
+    ): Result<Unit> = runCatching {
+        val forge = io.acr.forge.Forges.of(repo.provider)
+        if (actual == io.acr.data.ReviewStance.APPROVED) forge.unapprove(repo, prId)
+        else forge.undoRequestChanges(repo, prId)
+        approvals.clearOurs(repo.id, prId)
+    }
+
+    /** Guarda lo que se ve al abrir un PR: quién aprobó y quién pidió cambios. */
+    fun rememberApprovals(repoId: String, pr: PullRequest) {
+        approvals.sync(repoId, pr.id, pr.approvedBy, pr.changesRequestedBy, pr.participantsIdle)
+    }
+
     /**
      * La última mirada antes de mergear: ¿hay algo en este PR que no deba entrar?
      *
@@ -310,7 +341,7 @@ class ReviewEngine(
             language = prefs.get(io.acr.AppContext.PREF_LANGUAGE) ?: "español",
             prTitle = pr.title,
             range = range,
-            yaDiscutido = discutido,
+            yaDiscutido = discutido + "\n\n" + ReviewPrompt.guidelinesSection(guidelines.forRepo(repo.id)),
         )
 
         return runCatching {
@@ -375,7 +406,15 @@ class ReviewEngine(
         finding: io.acr.data.Finding,
         headSha: String,
     ): Result<String> = runCatching {
-        val body = "**${finding.title}**\n\n${finding.body}"
+        // La sugerencia va en el comentario publicado, no sólo en la app: el valor de proponer
+        // cómo se arregla es que lo lea quien tiene que arreglarlo.
+        val body = buildString {
+            append("**").append(finding.title).append("**\n\n").append(finding.body)
+            finding.suggestion?.takeIf { it.isNotBlank() }?.let {
+                append("\n\n**").append(io.acr.i18n.t2("finding.suggestion")).append("**\n\n")
+                append(it)
+            }
+        }
         val posted = io.acr.forge.Forges.of(repo.provider)
             .postInlineComment(repo, prId, body, finding.filePath, finding.lineNo, headSha)
         findings.markPublished(finding.id, posted.id, posted.url)
@@ -570,7 +609,10 @@ class ReviewEngine(
             }
 
             val language = prefs.get(io.acr.AppContext.PREF_LANGUAGE) ?: "español"
-            val prompt = ReviewPrompt.build(pr, language, plan.depth, plan.kind, existing)
+            val prompt = ReviewPrompt.build(
+                pr, language, plan.depth, plan.kind, existing,
+                guidelines = guidelines.forRepo(repo.id),
+            )
 
             var proc: Process? = null
             val result = try {
@@ -703,6 +745,9 @@ class ReviewEngine(
                 body = o["body"]?.jsonPrimitive?.contentOrNull.orEmpty(),
                 publishedId = null,
                 publishedUrl = null,
+                // Vacío y null son lo mismo acá: el modelo tiene instrucción de dejarlo en null
+                // cuando no puede proponer algo que sostenga, y a veces manda "" en su lugar.
+                suggestion = o["suggestion"]?.jsonPrimitive?.contentOrNull?.takeIf { it.isNotBlank() },
             )
         }
         return summary to list

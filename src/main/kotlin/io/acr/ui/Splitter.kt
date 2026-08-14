@@ -6,6 +6,8 @@ import androidx.compose.foundation.gestures.draggable
 import androidx.compose.foundation.gestures.rememberDraggableState
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.width
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
@@ -84,6 +86,54 @@ fun VerticalSplitter(
             Modifier
                 .width(if (arrastrando) 2.dp else 1.dp)
                 .fillMaxHeight()
+                .background(
+                    if (arrastrando) MaterialTheme.colorScheme.primary
+                    else MaterialTheme.colorScheme.outlineVariant,
+                ),
+        )
+    }
+}
+
+/**
+ * La línea que separa dos zonas apiladas, arrastrable en vertical.
+ *
+ * Misma idea que [VerticalSplitter] pero para el otro eje: en la pantalla de un PR, decidir cuánto
+ * espacio se lleva la cabecera —acciones, porcentaje, verificación— y cuánto queda para el código.
+ * Lo que sirve depende de qué estés haciendo, y por eso lo elige quien mira, no el layout.
+ */
+@Composable
+fun HorizontalSplitter(
+    height: MutableState<Dp>,
+    prefs: PrefsRepo,
+    key: String,
+    min: Dp = 0.dp,
+    max: Dp = 600.dp,
+    modifier: Modifier = Modifier,
+) {
+    val density = LocalDensity.current
+    var arrastrando by remember { mutableStateOf(false) }
+    Box(
+        modifier
+            .fillMaxWidth()
+            .height(8.dp)
+            .pointerHoverIcon(PointerIcon(java.awt.Cursor(java.awt.Cursor.N_RESIZE_CURSOR)))
+            .draggable(
+                orientation = Orientation.Vertical,
+                state = rememberDraggableState { delta ->
+                    height.value = (height.value + with(density) { delta.toDp() }).coerceIn(min, max)
+                },
+                onDragStarted = { arrastrando = true },
+                onDragStopped = {
+                    arrastrando = false
+                    prefs.put("pane.$key", height.value.value.toString())
+                },
+            ),
+        contentAlignment = Alignment.Center,
+    ) {
+        Box(
+            Modifier
+                .fillMaxWidth()
+                .height(if (arrastrando) 2.dp else 1.dp)
                 .background(
                     if (arrastrando) MaterialTheme.colorScheme.primary
                     else MaterialTheme.colorScheme.outlineVariant,

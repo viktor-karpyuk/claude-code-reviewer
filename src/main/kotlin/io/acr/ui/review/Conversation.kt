@@ -60,6 +60,8 @@ data class ConversationThread(
     /** Gravedad tal como la devolvió la review: blocker, major o minor. */
     val severity: String,
     val question: String,
+    /** Cómo se resolvería, si la review propuso algo. */
+    val suggestion: String? = null,
     val entries: List<ThreadEntry>,
     val draft: ReplyDraft?,
     val resolution: Resolution?,
@@ -124,7 +126,9 @@ fun buildConversation(
                 .lastOrNull { it.status != ReplyStatus.PUBLISHED }
 
         val hayRespuestaSinContestar = ultimaAjena != null &&
-            (draft == null || draft.status != ReplyStatus.PUBLISHED) &&
+            // Una respuesta cerrada sin contestar deja de esperar algo nuestro: "corregido" o
+            // "gracias" no piden una contestación.
+            (draft == null || !draft.settled) &&
             cadena.none { it.ours && it.createdOn > ultimaAjena.createdOn }
 
         val estado = when {
@@ -159,6 +163,7 @@ fun buildConversation(
             title = f.title,
             severity = f.severity,
             question = raiz?.body ?: f.body,
+            suggestion = f.suggestion,
             entries = cadena.map { ThreadEntry(it.author, it.body, it.ours, it.createdOn) },
             draft = draft,
             resolution = f.resolution,

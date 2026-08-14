@@ -30,7 +30,48 @@ class AutoReviewer(
     private val seenPrs: io.acr.data.SeenPrRepository,
     private val prLoader: io.acr.forge.PrLoader,
     private val findings: io.acr.data.FindingRepository,
+    private val approvals: io.acr.data.ApprovalRepository,
+    private val jobs: io.acr.data.PendingJobRepository,
 ) {
+
+    /**
+     * Vuelve a lanzar las reviews que quedaron a medias al cerrar la app.
+     *
+     * No es una reanudación literal: el subproceso murió con su contexto y no hay nada que
+     * retomar. Lo que se conserva son los parámetros —repo, PR, profundidad, tipo, modelo— para
+     * volver a correrla igual, que es lo que uno espera al reabrir.
+     *
+     * Corre una sola vez, al arrancar, y cuenta contra el mismo tope que el barrido: reanudar diez
+     * reviews de golpe al abrir sería peor que haberlas perdido.
+     */
+    suspend fun resumePending(): Int {
+        val pendientes = jobs.pending()
+        if (pendientes.isEmpty()) return 0
+        var hechos = 0
+        val porRepo = repos.list().associateBy { it.id }
+        for (job in pendientes.take(maxPerCycle())) {
+            val repo = porRepo[job.repoId]
+            if (repo == null) {
+                // El repositorio ya no está: el trabajo no tiene a dónde volver.
+                jobs.remove(job.repoId, job.prId)
+                continue
+            }
+            // Si ya existe una review para el commit actual, alguien la corrió mientras tanto.
+            val pr = runCatching { prLoader.refresh(repo) }.getOrNull()
+                ?.firstOrNull { it.id == job.prId }
+            if (pr == null || reviews.existsForHead(repo.id, pr.id, pr.headSha)) {
+                jobs.remove(job.repoId, job.prId)
+                continue
+            }
+            _status.update { it.copy(lastMessage = "reanudando ${repo.name} #${job.prId}") }
+            engine.review(repo, pr, job.depth, job.kind, job.model, job.auto)
+            // Se saca pase lo que pase: si volvió a fallar, el contador de intentos ya subió y
+            // reintentarlo en bucle gastaría plata sin arreglar nada.
+            jobs.remove(job.repoId, job.prId)
+            hechos++
+        }
+        return hechos
+    }
 
     /**
      * Verifica los PRs a los que les llegaron commits después de nuestros comentarios.
@@ -154,6 +195,10 @@ class AutoReviewer(
         scope.launch(Dispatchers.IO) {
             // Un respiro inicial para no pelear con la carga de la primera pantalla.
             delay(15_000)
+            // Lo primero al arrancar: retomar lo que quedó a medias, aunque el automático esté
+            // pausado. Es trabajo que el usuario ya pidió, no trabajo nuevo.
+            runCatching { resumePending() }
+                .onSuccess { if (it > 0) notifier.notify("Reanudadas $it review(s)", "Habían quedado a medias al cerrar la app.") }
             while (isActive) {
                 if (enabled()) runCatching { runOnce() }
                 delay(intervalMinutes() * 60_000)
@@ -212,6 +257,8 @@ class AutoReviewer(
                 }
                 // Verificar va antes de revisar PRs nuevos: cerrar un PR que ya está casi listo
                 // vale más que empezar uno desde cero, y las dos cosas comparten el mismo tope.
+                // statedByPr y no byPr: quien participa sin opinar no aprueba nada.
+                val aprobados = approvals.statedByPr(repo.id)
                 val (usados, notasVerif) = verifyUpdated(repo, prs, maxPerCycle() - done)
                 done += usados
                 notes += notasVerif
@@ -230,6 +277,14 @@ class AutoReviewer(
                     }
                     // Idempotencia por commit: si ya hay una review de ese head —aunque haya
                     // fallado— no se repite. Reintentar es decisión del usuario.
+                    // Un PR aprobado ya no se revisa: la aprobación es la señal de que se
+                    // terminó de mirar, y seguir revisándolo gasta plata en algo ya decidido.
+                    // `if` y no `?.let`: continue dentro de un lambda inline es experimental.
+                    val aprobadoPor = aprobados[pr.id]?.firstOrNull()
+                    if (aprobadoPor != null) {
+                        skipped += "${repo.name} #${pr.id}: aprobado por ${aprobadoPor.approvedBy}"
+                        continue
+                    }
                     if (reviews.existsForHead(repo.id, pr.id, pr.headSha)) continue
                     if (engine.isRunning(pr.id)) continue
 
