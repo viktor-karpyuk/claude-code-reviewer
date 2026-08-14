@@ -770,6 +770,21 @@ class Store(private val dbPath: Path) : AutoCloseable {
                 PRIMARY KEY (repo_id, day)
             )
             """.trimIndent(),
+
+            // v43 — qué clase de problema es cada hallazgo.
+            //
+            // La gravedad dice cuán urgente y la categoría qué clase de cosa es: son ejes
+            // distintos y hacían falta los dos. Para quien recibe el comentario no es lo mismo
+            // "esto rompe la lógica de negocio" que "esto convendría resolverlo con otro patrón",
+            // aunque los dos lleguen marcados como importantes; lo primero se arregla antes de
+            // mergear y lo segundo se discute.
+            //
+            // Null en los hallazgos viejos: no se puede clasificar hacia atrás sin volver a correr
+            // la review, y adivinar la categoría a partir del título daría etiquetas equivocadas
+            // con aire de dato.
+            """
+            ALTER TABLE finding ADD COLUMN category TEXT
+            """.trimIndent(),
         )
     }
 }

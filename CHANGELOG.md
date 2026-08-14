@@ -3,6 +3,34 @@
 Reglas de numeración en [CLAUDE.md](CLAUDE.md): un requerimiento **nuevo** incrementa *major*;
 cambiar uno **existente** incrementa *patch*.
 
+## 52.0.0
+
+Requerimiento nuevo: **cada hallazgo dice qué clase de problema es**, no sólo cuán urgente.
+
+La gravedad y la categoría son ejes distintos y hacían falta los dos. Para quien recibe el
+comentario no es lo mismo "esto rompe la lógica de negocio" que "esto convendría resolverlo con
+otro patrón", aunque los dos lleguen marcados como importantes: lo primero se arregla antes de
+mergear y lo segundo se conversa.
+
+Cuatro categorías, y no más —cada una de más es una decisión que el modelo puede errar—:
+
+- **funcional**: cambia o rompe el comportamiento que el negocio espera.
+- **bug**: defecto de código, se rompe con cierta entrada o en cierto estado.
+- **diseño**: patrón, arquitectura, acoplamiento, buenas prácticas. Incluye lo que pidan las
+  convenciones cargadas.
+- **convención**: incumple una regla escrita en las guías del equipo.
+
+**Con precedencia explícita**: si un hallazgo entra en varias gana la primera de esa lista, porque
+algo que rompe el negocio se atiende como funcional aunque además sea un problema de diseño.
+
+La categoría **viaja en el comentario publicado**, no sólo en la app: quien lo recibe lo lee en
+Bitbucket, y ahí es donde tiene que poder distinguir un problema funcional de una sugerencia de
+diseño. Va en español en el comentario, porque lo lee una persona.
+
+Es obligatoria en el esquema de salida: si fuera opcional el modelo la omitiría en cuanto dudara y
+la mitad de los hallazgos llegarían sin clasificar. Los hallazgos anteriores quedan sin categoría
+en vez de recibir una adivinada a partir del título.
+
 ## 51.0.2
 
 Arreglo: en la conversación, el avatar de **"Lo que preguntamos"** mostraba **"LP"**.

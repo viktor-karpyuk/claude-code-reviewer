@@ -69,10 +69,12 @@ class SuggestionTest {
         // Si `suggestion` fuera obligatorio, el CLI reintentaría hasta que el modelo invente una.
         val esquema = io.acr.claude.ReviewPrompt.SCHEMA
         assertTrue(esquema.contains("\"suggestion\""), "el esquema no la contempla")
-        assertTrue(
-            esquema.contains("\"required\":[\"file\",\"severity\",\"title\",\"body\"]"),
-            "suggestion no puede ser obligatoria",
-        )
+        // Se afirma lo que importa —que no esté entre las obligatorias— y no la lista completa:
+        // fijarla entera hacía fallar este test al agregar un campo nuevo que no tiene nada que
+        // ver con las sugerencias.
+        val obligatorias = Regex("\"required\":\\[([^]]*)]").find(esquema)?.groupValues?.get(1).orEmpty()
+        assertTrue(obligatorias.isNotBlank(), "el esquema declara campos obligatorios")
+        assertTrue(!obligatorias.contains("suggestion"), "suggestion no puede ser obligatoria")
         assertTrue(esquema.contains("[\"string\",\"null\"]"), "tiene que poder venir nula")
     }
 

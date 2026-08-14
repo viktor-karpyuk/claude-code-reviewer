@@ -1068,6 +1068,8 @@ data class Finding(
     val followedUpAt: String? = null,
     /** Cerrado en la conversación: se habló y no espera ningún cambio en el código. */
     val closedAt: String? = null,
+    /** Qué clase de problema es. Null en los hallazgos anteriores a la clasificación. */
+    val category: FindingCategory? = null,
     /** Cómo debería resolverse, si la review pudo proponer algo que sostenga. */
     val suggestion: String? = null,
 ) {
@@ -1094,8 +1096,8 @@ class FindingRepository(private val store: Store) {
             findings.forEach { f ->
                 conn.prepareStatement(
                     """INSERT INTO finding(id, review_id, repo_id, pr_id, file_path, line_no,
-                                           severity, title, body, created_at, suggestion)
-                       VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
+                                           severity, title, body, created_at, suggestion, category)
+                       VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
                 ).use { ps ->
                     ps.setString(1, UlidCreator.getUlid().toString())
                     ps.setString(2, reviewId)
@@ -1108,6 +1110,7 @@ class FindingRepository(private val store: Store) {
                     ps.setString(9, f.body)
                     ps.setString(10, Instant.now().toString())
                     ps.setString(11, f.suggestion)
+                    ps.setString(12, f.category?.name)
                     ps.executeUpdate()
                 }
             }
@@ -1284,7 +1287,7 @@ class FindingRepository(private val store: Store) {
         store.stmt(
             """SELECT id, review_id, pr_id, file_path, line_no, severity, title, body, published_id,
                       published_url, dismissed_at, publish_error, resolution, resolution_note,
-                      followed_up_at, closed_at, suggestion
+                      followed_up_at, closed_at, suggestion, category
                FROM finding $tail ORDER BY file_path, line_no""",
         ) { ps ->
             bind(ps)
@@ -1311,6 +1314,7 @@ class FindingRepository(private val store: Store) {
                             followedUpAt = rs.getString(15),
                             closedAt = rs.getString(16),
                             suggestion = rs.getString(17),
+                            category = FindingCategory.fromApi(rs.getString(18)),
                         ),
                     )
                 }

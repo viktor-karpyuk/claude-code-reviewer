@@ -409,6 +409,9 @@ class ReviewEngine(
         // La sugerencia va en el comentario publicado, no sólo en la app: el valor de proponer
         // cómo se arregla es que lo lea quien tiene que arreglarlo.
         val body = buildString {
+            // La categoría va primero y en el comentario inline, que es donde el desarrollador lo
+            // lee: saber si es funcional o de diseño cambia si lo arregla ahora o lo conversa.
+            finding.category?.let { append("_").append(categoriaPublicada(it)).append("_ · ") }
             append("**").append(finding.title).append("**\n\n").append(finding.body)
             finding.suggestion?.takeIf { it.isNotBlank() }?.let {
                 append("\n\n**").append(io.acr.i18n.t2("finding.suggestion")).append("**\n\n")
@@ -803,6 +806,11 @@ class ReviewEngine(
                 filePath = file,
                 lineNo = o["line"]?.jsonPrimitive?.contentOrNull?.toIntOrNull(),
                 severity = o["severity"]?.jsonPrimitive?.contentOrNull ?: "minor",
+                // Null si no se entiende: inventar una categoría le pondría una etiqueta con aire
+                // de dato a algo que nadie clasificó.
+                category = io.acr.data.FindingCategory.fromApi(
+                    o["category"]?.jsonPrimitive?.contentOrNull,
+                ),
                 title = o["title"]?.jsonPrimitive?.contentOrNull.orEmpty(),
                 body = o["body"]?.jsonPrimitive?.contentOrNull.orEmpty(),
                 publishedId = null,
@@ -934,6 +942,19 @@ class ReviewEngine(
     }
 
     /** Markdown del comentario general, derivado de los mismos hallazgos que se anclan al código. */
+    /**
+     * Cómo se nombra la categoría en el comentario que se publica.
+     *
+     * En español y sin la constante cruda: el comentario lo lee una persona en el pull request, no
+     * la app, y "FUNCTIONAL" ahí adentro se ve como un detalle de implementación que se escapó.
+     */
+    private fun categoriaPublicada(c: io.acr.data.FindingCategory): String = when (c) {
+        io.acr.data.FindingCategory.FUNCTIONAL -> "funcional"
+        io.acr.data.FindingCategory.BUG -> "bug"
+        io.acr.data.FindingCategory.DESIGN -> "diseño"
+        io.acr.data.FindingCategory.CONVENTION -> "convención"
+    }
+
     private fun renderMarkdown(summary: String, list: List<io.acr.data.Finding>): String {
         if (list.isEmpty()) {
             return "### Code review\n\n" +
@@ -944,7 +965,11 @@ class ReviewEngine(
         sb.append("Encontré ${list.size} ").append(if (list.size == 1) "problema" else "problemas").append(":\n\n")
         list.forEachIndexed { i, f ->
             val anchor = f.filePath + (f.lineNo?.let { ":$it" } ?: "")
-            sb.append("${i + 1}. **${f.title}** _(${f.severity})_\n\n")
+            // La categoría viaja en el comentario publicado y no sólo en la app: quien lo recibe
+            // lo lee en Bitbucket, y ahí es donde tiene que poder distinguir un problema funcional
+            // de una sugerencia de diseño.
+            val etiquetas = listOfNotNull(f.severity, f.category?.let { categoriaPublicada(it) })
+            sb.append("${i + 1}. **${f.title}** _(${etiquetas.joinToString(" · ")})_\n\n")
             sb.append("`$anchor`\n\n")
             sb.append(f.body).append("\n\n")
         }

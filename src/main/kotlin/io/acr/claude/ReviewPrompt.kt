@@ -17,10 +17,11 @@ object ReviewPrompt {
         "file":{"type":"string"},
         "line":{"type":["integer","null"]},
         "severity":{"type":"string","enum":["blocker","major","minor"]},
+        "category":{"type":"string","enum":["FUNCTIONAL","BUG","DESIGN","CONVENTION"]},
         "title":{"type":"string"},
         "body":{"type":"string"},
         "suggestion":{"type":["string","null"]}
-      },"required":["file","severity","title","body"]}}
+      },"required":["file","severity","category","title","body"]}}
     },"required":["summary","findings"]}
     """.trimIndent()
 
@@ -38,10 +39,11 @@ object ReviewPrompt {
         "file":{"type":"string"},
         "line":{"type":["integer","null"]},
         "severity":{"type":"string","enum":["blocker","major","minor"]},
+        "category":{"type":"string","enum":["FUNCTIONAL","BUG","DESIGN","CONVENTION"]},
         "title":{"type":"string"},
         "body":{"type":"string"},
         "suggestion":{"type":["string","null"]}
-      },"required":["file","severity","title","body"]}},
+      },"required":["file","severity","category","title","body"]}},
       "carried":{"type":"array","items":{"type":"object","properties":{
         "id":{"type":"string"},
         "verdict":{"type":"string","enum":["STILL_OPEN","FIXED","OBSOLETE"]},
@@ -362,6 +364,7 @@ object ReviewPrompt {
             - "line": línea del LADO NUEVO, o null si es del archivo entero. Verificá el número
               contra el diff: uno equivocado ancla el comentario en otro lado.
             - "severity": "blocker" | "major" | "minor".
+            - "category": "FUNCTIONAL" | "BUG" | "DESIGN" | "CONVENTION", según el criterio de arriba.
             - "title": una línea, la afirmación concreta.
             - "body": 2-4 oraciones en $language con el escenario de falla.
             - "suggestion": cómo se arregla, o null si no podés proponer algo que sostengas.
@@ -457,6 +460,27 @@ object ReviewPrompt {
               review. Si la decisión depende de contexto que no tenés —una regla de negocio, una
               preferencia del equipo— decilo en el `body` y no propongas.
 
+
+            CÓMO CLASIFICAR CADA HALLAZGO
+            Además de la gravedad, cada hallazgo lleva una **categoría**. Son ejes distintos: la
+            gravedad dice cuán urgente es, la categoría qué clase de problema es. Quien recibe el
+            comentario necesita las dos para saber qué hacer: lo funcional se arregla antes de
+            mergear, lo de diseño se conversa.
+
+            - "FUNCTIONAL": cambia o rompe el comportamiento que el negocio espera. Un cálculo que
+              da otro resultado, una regla que deja de aplicarse, un estado que queda inconsistente.
+            - "BUG": defecto de código que se rompe con cierta entrada o en cierto estado —un nulo,
+              un índice, una condición de carrera— sin que la regla de negocio esté mal pensada.
+            - "DESIGN": patrón, arquitectura, acoplamiento, lógica en la capa equivocada, algo que
+              va a doler mantener. Incluye las buenas prácticas que pidan las convenciones.
+            - "CONVENTION": incumple una regla escrita en las convenciones del equipo, cuando el
+              problema es la regla incumplida y no una consecuencia técnica.
+
+            **Si entra en varias, gana la primera de esa lista**: algo que rompe el negocio se
+            reporta como FUNCTIONAL aunque además sea un problema de diseño, porque eso es lo que
+            define qué hacer con él. No uses DESIGN para un bug ni BUG para algo que simplemente no
+            sigue una convención.
+
             QUÉ NO REPORTAR
             - Problemas preexistentes en líneas que el PR no tocó.
             - Cosas que un linter, el compilador o el type-checker ya detectan.
@@ -477,6 +501,7 @@ object ReviewPrompt {
               lado. Si no estás seguro de la línea, poné null en vez de aproximar.
             - "severity": "blocker" si frena el merge, "major" si hay que arreglarlo pero no frena,
               "minor" para lo menor.
+            - "category": "FUNCTIONAL", "BUG", "DESIGN" o "CONVENTION", según el criterio de arriba.
             - "title": una línea, la afirmación concreta.
             - "body": 2-4 oraciones en $language con el escenario de falla: con qué entrada o en qué
               situación se rompe y qué pasa como consecuencia. Markdown permitido.

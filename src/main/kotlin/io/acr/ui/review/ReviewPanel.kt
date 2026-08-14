@@ -1504,6 +1504,21 @@ private fun FindingsSummary(
                     },
                     modifier = Modifier.width(36.dp),
                 )
+                // Qué clase de problema es, al lado de cuán urgente: son ejes distintos y el
+                // desarrollador necesita los dos para saber si lo arregla ahora o lo conversa.
+                f.category?.let { c ->
+                    Text(
+                        io.acr.i18n.t(c.labelKey),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = when (c) {
+                            io.acr.data.FindingCategory.FUNCTIONAL -> MaterialTheme.colorScheme.error
+                            io.acr.data.FindingCategory.BUG -> io.acr.ui.stats.ChartColors.major
+                            io.acr.data.FindingCategory.DESIGN -> io.acr.ui.stats.ChartColors.neutral
+                            io.acr.data.FindingCategory.CONVENTION -> MaterialTheme.colorScheme.onSurfaceVariant
+                        },
+                        modifier = Modifier.width(78.dp),
+                    )
+                }
                 // Link al código, como en la conversación: leer un hallazgo sin poder ver la
                 // línea que señala obliga a buscarla a mano en la otra pestaña.
                 Text(
