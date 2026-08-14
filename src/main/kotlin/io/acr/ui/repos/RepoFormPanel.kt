@@ -362,6 +362,9 @@ fun RepoFormPanel(
                     repoId = existing.id,
                     titulo = "",
                     nota = "",
+                    // El campo editable y no `existing.localPath`: si acabás de corregir la ruta,
+                    // buscar los CLAUDE.md en la vieja no encontraría nada y parecería un error.
+                    localPath = localPath.trim().takeIf { it.isNotBlank() },
                 )
             }
         }

@@ -51,6 +51,8 @@ fun GuidelinesSection(
     repoId: String?,
     titulo: String,
     nota: String,
+    /** Clon local del repositorio, para ofrecer los CLAUDE.md que ya viven ahí. Null en las globales. */
+    localPath: String? = null,
 ) {
     var version by remember { mutableStateOf(0) }
     val docs = io.acr.ui.dbState(repoId, version, initial = emptyList<Guideline>()) {
@@ -59,6 +61,7 @@ fun GuidelinesSection(
     var error by remember { mutableStateOf<String?>(null) }
     // `t()` es @Composable y esto se usa dentro de un onClick: se resuelve acá.
     val msgVacio = io.acr.i18n.t("guide.empty")
+    val msgSinClaude = io.acr.i18n.t("guide.noneFound")
 
     Column(Modifier.fillMaxWidth()) {
         Text(titulo, style = MaterialTheme.typography.labelLarge)
@@ -89,6 +92,36 @@ fun GuidelinesSection(
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
+                    // El archivo del que salió puede haber cambiado. No se re-lee solo —eso haría
+                    // que cambiar de rama cambiara las reglas sin aviso—, pero callarlo dejaría
+                    // revisando con un criterio viejo sin que nadie lo sepa.
+                    when (io.acr.data.linkStateOf(d.linkedPath, d.linkedHash)) {
+                        io.acr.data.LinkState.STALE -> Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(
+                                io.acr.i18n.t("guide.stale"),
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.error,
+                            )
+                            TextButton(onClick = {
+                                val f = File(d.linkedPath!!)
+                                runCatching { f.readText() }.onSuccess { texto ->
+                                    repo.importFromFile(
+                                        repoId,
+                                        io.acr.data.RepoGuide(d.name, f.absolutePath, texto),
+                                    )
+                                    version++
+                                }
+                            }) { Text(io.acr.i18n.t("guide.refresh")) }
+                        }
+
+                        io.acr.data.LinkState.MISSING -> Text(
+                            io.acr.i18n.t("guide.missing"),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+
+                        else -> Unit
+                    }
                 }
                 // Una guía global no se borra desde un repositorio: se administra donde vive.
                 if (repoId == null || !d.global) {
@@ -120,6 +153,18 @@ fun GuidelinesSection(
                 repo.add(repoId, f.name, texto, f.absolutePath)
                 version++
             }) { Text(io.acr.i18n.t("guide.upload")) }
+
+            // El repositorio ya suele traer sus convenciones escritas. Pedirle al usuario que
+            // busque a mano un archivo que está a dos directorios de acá es trabajo inventado.
+            if (localPath != null) {
+                OutlinedButton(onClick = {
+                    error = null
+                    val hallados = io.acr.data.findRepoGuides(localPath)
+                    if (hallados.isEmpty()) { error = msgSinClaude; return@OutlinedButton }
+                    hallados.forEach { repo.importFromFile(repoId, it) }
+                    version++
+                }) { Text(io.acr.i18n.t("guide.importRepo")) }
+            }
         }
         error?.let {
             Text(it, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.error)

@@ -1766,6 +1766,10 @@ data class Guideline(
     val enabled: Boolean,
     val source: String?,
     val createdAt: String,
+    /** Archivo del que se importó, si vino de uno. El contenido de arriba sigue siendo el que manda. */
+    val linkedPath: String? = null,
+    /** Huella del contenido al importarlo, para saber si el archivo cambió desde entonces. */
+    val linkedHash: String? = null,
 ) {
     /** Aplica a todos los repositorios. */
     val global: Boolean get() = repoId == null
@@ -1801,6 +1805,59 @@ class GuidelineRepository(private val store: Store) {
         return id
     }
 
+    /**
+     * Importa un documento encontrado en el repositorio, o actualiza el que ya se había importado
+     * de ese mismo archivo.
+     *
+     * Actualiza en vez de duplicar porque el caso normal es re-importar el mismo CLAUDE.md después
+     * de que cambió: dos filas del mismo archivo mandarían el criterio dos veces al prompt, y
+     * gastarían dos veces del tope de contexto para decir lo mismo.
+     *
+     * Conserva el `enabled` de la fila existente: si estaba apagada, actualizar el texto no es
+     * motivo para volver a encenderla.
+     */
+    fun importFromFile(repoId: String?, guide: RepoGuide): String {
+        val hash = guideHash(guide.content)
+        val existente = store.stmt(
+            "SELECT id FROM guideline WHERE linked_path = ? AND (repo_id IS ? OR repo_id = ?) LIMIT 1",
+        ) { ps ->
+            ps.setString(1, guide.path)
+            ps.setString(2, repoId)
+            ps.setString(3, repoId)
+            ps.executeQuery().use { if (it.next()) it.getString(1) else null }
+        }
+        if (existente != null) {
+            store.stmt(
+                "UPDATE guideline SET name = ?, content = ?, source = ?, linked_hash = ? WHERE id = ?",
+            ) { ps ->
+                ps.setString(1, guide.name)
+                ps.setString(2, guide.content)
+                ps.setString(3, guide.path)
+                ps.setString(4, hash)
+                ps.setString(5, existente)
+                ps.executeUpdate()
+            }
+            return existente
+        }
+        val id = UlidCreator.getUlid().toString()
+        store.stmt(
+            """INSERT INTO guideline(id, repo_id, name, content, enabled, source, created_at,
+                                     linked_path, linked_hash)
+               VALUES (?,?,?,?,1,?,?,?,?)""",
+        ) { ps ->
+            ps.setString(1, id)
+            ps.setString(2, repoId)
+            ps.setString(3, guide.name)
+            ps.setString(4, guide.content)
+            ps.setString(5, guide.path)
+            ps.setString(6, Instant.now().toString())
+            ps.setString(7, guide.path)
+            ps.setString(8, hash)
+            ps.executeUpdate()
+        }
+        return id
+    }
+
     fun setEnabled(id: String, enabled: Boolean) {
         store.stmt("UPDATE guideline SET enabled = ? WHERE id = ?") { ps ->
             ps.setInt(1, if (enabled) 1 else 0)
@@ -1827,7 +1884,8 @@ class GuidelineRepository(private val store: Store) {
 
     private fun query(tail: String, bind: (java.sql.PreparedStatement) -> Unit): List<Guideline> =
         store.stmt(
-            "SELECT id, repo_id, name, content, enabled, source, created_at FROM guideline $tail",
+            "SELECT id, repo_id, name, content, enabled, source, created_at, linked_path, linked_hash " +
+                "FROM guideline $tail",
         ) { ps ->
             bind(ps)
             ps.executeQuery().use { rs ->
@@ -1841,6 +1899,8 @@ class GuidelineRepository(private val store: Store) {
                             enabled = rs.getInt(5) == 1,
                             source = rs.getString(6),
                             createdAt = rs.getString(7),
+                            linkedPath = rs.getString(8),
+                            linkedHash = rs.getString(9),
                         ),
                     )
                 }

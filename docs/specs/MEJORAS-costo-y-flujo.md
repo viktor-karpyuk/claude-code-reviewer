@@ -126,9 +126,17 @@ más pesa es no esperar ~7 minutos para redescubrir un resultado ya guardado.
 repo con `source` = ruta del archivo. Al estar como guía, entra directo al prompt (tope
 `MAX_GUIDELINES_CHARS = 60.000` ya implementado) y Claude deja de gastar turnos buscándolo.
 
-**Decisión incluida:** marcar la guía importada como *vinculada al archivo* y re-leerla al
-disparar cada review (si la ruta sigue existiendo), para que no quede una copia congelada de un
-documento que vive en git y cambia. Si el archivo desapareció, se usa la última copia y se avisa.
+**Decisión revisada (ver D4′):** la primera versión de esta spec decía "re-leer el archivo en cada
+review". Eso **contradice** una decisión ya tomada y escrita en la migración v34: *"El texto se
+guarda en la base y no como ruta a un archivo: si fuera una ruta, mover o borrar el archivo
+cambiaría en silencio con qué criterio se revisa."* Y tiene razón: con re-lectura automática,
+un `git checkout` de otra rama cambiaría las reglas de la review sin que nadie se entere.
+
+Las dos preocupaciones son reales —la copia congelada miente, la re-lectura silenciosa también—
+y se resuelven juntas **avisando en vez de decidir por el usuario**: el contenido sigue viviendo
+en la base (la review usa siempre eso, nunca algo que cambió a espaldas), se guarda además la
+ruta de origen, y cuando el archivo difiere de la copia guardada la UI lo marca como
+*desactualizada* con un botón para actualizarla. Nada cambia solo; nada queda viejo en silencio.
 
 ### M4 — ~~Triage de hallazgos sin destino~~ *(descartada)*
 
@@ -206,5 +214,5 @@ Según su propia spec, empezando por resolución de identidad. Se re-planifica a
 | D1 | M4 descartada | 81/87 hallazgos "pendientes" son residuo; la UI ya los oculta |
 | D2 | Dedupe de hallazgos lo hace el modelo, no SQL | sólo 2/87 duplicados exactos; Claude reformula títulos |
 | D3 | M2 avisa, no bloquea | re-correr con otra profundidad/guías es un uso legítimo |
-| D4 | Guía importada de CLAUDE.md se re-lee del archivo | el documento vive en git; una copia congelada miente |
+| D4′ | La guía importada **no** se re-lee sola: se detecta la diferencia y se avisa | re-leer contradice la decisión de la migración v34 (un `checkout` cambiaría las reglas en silencio); congelar sin avisar deja criterios viejos. Avisar resuelve las dos |
 | D5 | Pasada final nunca es incremental | es el contrapeso de la deriva de N incrementales |

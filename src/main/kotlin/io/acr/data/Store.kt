@@ -584,6 +584,22 @@ class Store(private val dbPath: Path) : AutoCloseable {
             );--split--
             CREATE INDEX ix_guideline_repo ON guideline(repo_id, enabled)
             """.trimIndent(),
+
+            // v35 — de dónde salió una guía importada de un archivo del repositorio.
+            //
+            // El contenido sigue viviendo en la base, por lo que dice la v34: si la review leyera
+            // el archivo en cada corrida, cambiar de rama cambiaría las reglas de revisión sin
+            // que nadie se entere. Pero un CLAUDE.md vive en git y se edita, así que una copia
+            // congelada envejece igual de callada.
+            //
+            // La salida es avisar en vez de decidir por el usuario: se guarda la ruta y una huella
+            // del contenido importado, y cuando el archivo difiere la pantalla lo marca como
+            // desactualizado con un botón para actualizarlo. Nada cambia solo, nada queda viejo
+            // en silencio.
+            """
+            ALTER TABLE guideline ADD COLUMN linked_path TEXT;--split--
+            ALTER TABLE guideline ADD COLUMN linked_hash TEXT
+            """.trimIndent(),
         )
     }
 }

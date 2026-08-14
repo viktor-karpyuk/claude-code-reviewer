@@ -3,6 +3,26 @@
 Reglas de numeración en [CLAUDE.md](CLAUDE.md): un requerimiento **nuevo** incrementa *major*;
 cambiar uno **existente** incrementa *patch*.
 
+## 37.0.0
+
+Requerimiento nuevo: **importar las convenciones que el repositorio ya trae escritas**.
+
+- Botón **Importar del repositorio** en la configuración de cada repo: busca los `CLAUDE.md` del
+  clon local —raíz y hasta dos niveles— y los carga como guías. El módulo de guías se había
+  shipeado con cero documentos mientras cuatro de los siete repositorios ya tenían el suyo
+  escrito, uno de 23.000 caracteres a dos directorios de distancia.
+- **El contenido se sigue guardando en la base, no se re-lee del archivo.** Es la decisión que ya
+  había tomado la migración v34 y sigue en pie: si la review leyera el disco en cada corrida,
+  cambiar de rama cambiaría las reglas de revisión sin que nadie se entere.
+- Pero una copia congelada también envejece en silencio, así que se guarda la ruta y una huella
+  del texto importado: cuando el archivo cambia, la guía aparece marcada como
+  **desactualizada** con un botón para actualizarla. Nada cambia solo, nada queda viejo callado.
+- Re-importar el mismo archivo actualiza la guía en vez de duplicarla —dos filas mandarían el
+  mismo criterio dos veces al prompt— y respeta el interruptor: una guía apagada a propósito no
+  se reactiva sola.
+- Se saltean `node_modules`, `build`, `target` y compañía: en un monorepo son decenas de miles de
+  directorios para encontrar tres archivos.
+
 ## 36.0.0
 
 Requerimiento nuevo: **avisar antes de repetir una review que ya está hecha**.
