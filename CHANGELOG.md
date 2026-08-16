@@ -3,25 +3,27 @@
 Reglas de numeración en [CLAUDE.md](CLAUDE.md): un requerimiento **nuevo** incrementa *major*;
 cambiar uno **existente** incrementa *patch*.
 
-## 60.0.0
+## 61.1.0
 
-Requerimiento nuevo: **ver el código que escribió el Constructor, como se lee una review**.
+El detalle de tarea, rediseñado. Era una pila de cajas grises apiladas, todas del mismo peso: había
+que leer prosa para llegar a un número y al revés.
 
-Saber que una tarea tocó cinco archivos no alcanza para confiar en ella: hay que ver qué escribió.
-Es la diferencia entre un informe de actividad y algo que se puede revisar.
+- **Dos columnas.** A la izquierda **el relato** —qué se pidió, qué dice que hizo, qué falló, el
+  commit—, que se lee de corrido. A la derecha **los hechos** —tiempo, costo, archivos,
+  composición, señales—, que se barren de un vistazo.
+- **El código va abajo y a lo ancho**, porque es lo único que necesita el espacio completo y es lo
+  último que se mira: primero uno decide si vale la pena mirarlo.
+- **El estado, grande y con su nombre**, arriba a la izquierda: decide qué significa todo lo demás.
+- Los paneles ya no son cajas grises plenas —con cuatro apilados la columna se volvía un bloque
+  uniforme— y el error se marca con una barra al costado en vez de un fondo relleno, así el texto
+  queda legible.
+- La composición del cambio pasa de anillo a **barra apilada**: en una columna angosta lo que
+  importa es la proporción, no leer cada porción.
 
-Ahora, al abrir una tarea, **cada archivo se abre y muestra su diff**: qué se agregó y qué se
-cambió, con los números de línea de los dos lados, en verde y rojo. Es el **mismo renderizador que
-usa la vista de código de las reviews**, así que el diff se lee igual venga de donde venga — y lo
-que se aprendió arreglando esa vista vale acá sin reescribir nada.
-
-- El diff se le pide a git **al abrir el archivo**, no se guarda: el commit ya lo tiene, guardar
-  una copia sería duplicar el repositorio adentro de la base, y sólo se lee el archivo que alguien
-  abre.
-- Cada diff **scrollea adentro de su propio recuadro**: un archivo nuevo de mil líneas empujaría
-  las otras tareas y el resto de la pantalla fuera de la vista.
-- Los archivos siguen mostrando su letra —creado, modificado, borrado— y sus líneas, para poder
-  decidir cuál abrir sin abrirlos todos.
+**Y una tarea planificada se lee como lo que es.** Sin commit, sin código y sin resultado, antes
+quedaban tres secciones diciendo "todavía no". Ahora muestra lo que sí existe: la descripción
+completa, cuánto se estimó, en qué repositorio va a correr y qué tiene que estar listo antes — que
+es lo que uno mira para decidir si el plan tiene sentido.
 
 ## 61.0.0
 
@@ -75,6 +77,26 @@ mismo tamaño y color, sin decir qué era cada cosa. Ahora cada repositorio eleg
 sus dos decisiones **etiquetadas y separadas** —qué es, y de qué rama parte—, con las ramas reales
 del clon en un desplegable. Escribir un nombre de rama que no existe no falla al guardar: falla al
 correr, media hora después.
+
+## 60.0.0
+
+Requerimiento nuevo: **ver el código que escribió el Constructor, como se lee una review**.
+
+Saber que una tarea tocó cinco archivos no alcanza para confiar en ella: hay que ver qué escribió.
+Es la diferencia entre un informe de actividad y algo que se puede revisar.
+
+Ahora, al abrir una tarea, **cada archivo se abre y muestra su diff**: qué se agregó y qué se
+cambió, con los números de línea de los dos lados, en verde y rojo. Es el **mismo renderizador que
+usa la vista de código de las reviews**, así que el diff se lee igual venga de donde venga — y lo
+que se aprendió arreglando esa vista vale acá sin reescribir nada.
+
+- El diff se le pide a git **al abrir el archivo**, no se guarda: el commit ya lo tiene, guardar
+  una copia sería duplicar el repositorio adentro de la base, y sólo se lee el archivo que alguien
+  abre.
+- Cada diff **scrollea adentro de su propio recuadro**: un archivo nuevo de mil líneas empujaría
+  las otras tareas y el resto de la pantalla fuera de la vista.
+- Los archivos siguen mostrando su letra —creado, modificado, borrado— y sus líneas, para poder
+  decidir cuál abrir sin abrirlos todos.
 
 ## 59.0.0
 
