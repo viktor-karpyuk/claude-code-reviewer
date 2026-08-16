@@ -170,6 +170,54 @@ class ImplRepository(private val store: Store) {
             }
         }
 
+    /**
+     * El avance de todas las implementaciones, en una sola consulta.
+     *
+     * La lista lo necesita para cada fila, y pedirlo por implementación era una consulta por fila
+     * en cada recomposición. Se agrega en SQL en vez de traer todas las tareas: lo que la pantalla
+     * muestra son cinco números, no las tareas.
+     */
+    fun progressOfAll(): Map<String, io.acr.impl.Progress> =
+        store.stmt(
+            """SELECT impl_id,
+                      COUNT(*),
+                      SUM(CASE WHEN status = 'DONE' THEN 1 ELSE 0 END),
+                      SUM(CASE WHEN status = 'FAILED' THEN 1 ELSE 0 END),
+                      SUM(CASE WHEN status = 'RUNNING' THEN 1 ELSE 0 END),
+                      SUM(COALESCE(estimate_min, 0)),
+                      SUM(CASE WHEN started_at IS NOT NULL AND finished_at IS NOT NULL
+                               THEN (julianday(finished_at) - julianday(started_at)) * 1440
+                               ELSE 0 END),
+                      SUM(CASE WHEN status IN ('PENDING','RUNNING') THEN COALESCE(estimate_min, 0) ELSE 0 END)
+                 FROM impl_task GROUP BY impl_id""",
+        ) { ps ->
+            ps.executeQuery().use { rs ->
+                buildMap {
+                    while (rs.next()) {
+                        val hechas = rs.getInt(3)
+                        val transcurrido = rs.getDouble(7)
+                        val estimadoHecho = rs.getInt(6) - rs.getInt(8)
+                        // El desvío sólo con tareas terminadas y estimadas: sin eso sería 1,0 y
+                        // mostraría una precisión inventada.
+                        val desvio = if (hechas > 0 && estimadoHecho > 0) transcurrido / estimadoHecho else null
+                        put(
+                            rs.getString(1),
+                            io.acr.impl.Progress(
+                                total = rs.getInt(2),
+                                done = hechas,
+                                failed = rs.getInt(4),
+                                running = rs.getInt(5),
+                                estimatedMin = rs.getInt(6),
+                                elapsedMin = transcurrido,
+                                remainingMin = rs.getInt(8) * (desvio ?: 1.0),
+                                drift = desvio,
+                            ),
+                        )
+                    }
+                }
+            }
+        }
+
     fun startTask(taskId: String) {
         store.stmt("UPDATE impl_task SET status = ?, started_at = ?, error = NULL WHERE id = ?") { ps ->
             ps.setString(1, TaskStatus.RUNNING.name)

@@ -50,10 +50,20 @@ class ImplEngine(
     private val running = ConcurrentHashMap<String, Process>()
     private val cancelled = ConcurrentHashMap.newKeySet<String>()
 
-    /** Modelos por defecto. Se pueden cambiar por implementación. */
+    /**
+     * Modelos por defecto.
+     *
+     * Los alias cortos que entiende el CLI, igual que el resto de la app —`haiku`, `sonnet`,
+     * `opus`—. Con `fable-5` y `opus-5` la primera implementación real murió al arrancar con
+     * `unrecognized_model`: esos nombres no existen, y el error recién se ve al correr porque el
+     * CLI valida el modelo del lado del servidor.
+     *
+     * El alias apunta siempre a la última versión de esa familia, que es lo que se quiere acá: no
+     * hay que tocar esto cuando salga la que sigue.
+     */
     companion object {
-        const val PLAN_MODEL = "fable-5"
-        const val CODE_MODEL = "opus-5"
+        const val PLAN_MODEL = "fable"
+        const val CODE_MODEL = "opus"
     }
 
     private fun log(implId: String, linea: String) {

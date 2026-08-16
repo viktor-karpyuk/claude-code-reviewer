@@ -99,6 +99,11 @@ class JiraSiteRepository(private val store: Store, private val secrets: Secrets)
      * proyectos; si ninguno lo reclama devuelve null en vez de probar con cualquiera, porque un
      * ticket traído del sitio equivocado es peor que ninguno — puede existir y ser de otra cosa.
      */
+    /**
+     * @param sites pasar la lista cuando se resuelven varias claves seguidas. Sin eso, el valor
+     *   por defecto consulta la base una vez por ticket, y un PR con cuatro tickets hacía cuatro
+     *   lecturas para elegir entre dos sitios que no cambian.
+     */
     fun siteFor(key: String, sites: List<JiraSite> = list()): JiraSite? {
         if (sites.isEmpty()) return null
         sites.firstOrNull { it.handles(key) }?.let { return it }

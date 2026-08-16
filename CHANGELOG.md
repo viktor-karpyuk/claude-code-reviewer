@@ -3,6 +3,49 @@
 Reglas de numeración en [CLAUDE.md](CLAUDE.md): un requerimiento **nuevo** incrementa *major*;
 cambiar uno **existente** incrementa *patch*.
 
+## 57.0.0
+
+**Arreglo del bug que rompió la primera implementación real**, más una auditoría de rendimiento del
+código de los últimos días, el renombre del módulo y su portada.
+
+### El modelo no existía
+
+`HR-Ausencias` murió al arrancar con `[claude-code:unrecognized_model] {"model":"fable-5"}`. Yo
+había inventado los identificadores `fable-5` y `opus-5`. Probado contra el CLI instalado: acepta
+los alias cortos —`fable`, `opus`, `sonnet`, `haiku`— o el id completo `claude-fable-5`, pero
+**`fable-5` no es ninguno de los dos**. El resto de la app ya usaba los alias cortos y yo rompí esa
+convención. Hay un test que ahora lo fija, porque el modelo se valida del lado del servidor y el
+error sólo aparece al correr.
+
+### Rendimiento
+
+- **Una escritura por tarjeta en cada dibujo de pantalla.** La foto diaria de cada repositorio se
+  guardaba adentro de la lectura de la tarjeta: siete repositorios, siete `INSERT` por
+  recomposición. Ahora se toma una vez al abrir la sección y fuera del hilo de interfaz.
+- **Una consulta por implementación** para calcular su avance, dentro del bucle de dibujo. Ahora es
+  una sola consulta agregada para todas.
+- **Una consulta por trimestre** en la tabla de equipo y en la ficha individual — hasta ocho por
+  cada fila dibujada. Ahora se agrupan en SQL de una vez.
+- **Dos consultas por commit** al resolver identidades cuando había que unir dos personas: se
+  traían dos listas enteras para comparar sus largos, sobre 2.283 commits. Ahora se cuentan en SQL.
+- Una consulta a la base **por cada ticket de Jira** para elegir a qué sitio pedírselo.
+
+### Corrección
+
+- La consulta que elige la última review de cada PR se apoyaba en una particularidad de SQLite
+  —`HAVING` con `MAX()` sobre una columna suelta—. Funcionaba, pero por accidente. Ahora es una
+  subconsulta correlacionada, que dice lo que quiere decir.
+
+### Además
+
+- **Los errores se pueden copiar**, en la implementación y en cada tarea. Son literales del CLI que
+  hay que buscar o pegar en otro lado —`unrecognized_model` fue exactamente eso— y transcribirlos a
+  mano de una pantalla es donde se pierde el detalle que importa.
+- El módulo pasa a llamarse **Constructor**, y su portada muestra lo que se mira al abrirla: qué
+  hay corriendo, cuántas decisiones esperan respuesta —con el nombre de qué implementación las
+  espera—, cuántas terminaron y cuánto se lleva consumido. Antes había que abrir una por una para
+  descubrir cuál se había frenado.
+
 ## 56.0.0
 
 Requerimiento nuevo: **una implementación puede abarcar varios repositorios**.

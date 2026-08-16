@@ -66,8 +66,10 @@ fun PersonCard(
         ctx.reviewStats.commentsByAuthor(periodo.from, periodo.to)[nombreProveedor]
     }
     val trimestres = remember(periodo) { quartersIn(periodo) }
+    // Una consulta y no una por trimestre: la ficha dibuja hasta ocho barras.
     val porTrimestre = io.acr.ui.dbState(persona.id, trimestres, initial = emptyList<Int>()) {
-        trimestres.map { q -> ctx.commitStats.volumeByPerson(q.from, q.to)[persona.id]?.touched ?: 0 }
+        val todos = ctx.commitStats.volumeByPersonByQuarter()[persona.id].orEmpty()
+        trimestres.map { q -> todos[q.label] ?: 0 }
     }
 
     val ciclo = remember(prs) { percentiles(prs.mapNotNull { it.days }) }

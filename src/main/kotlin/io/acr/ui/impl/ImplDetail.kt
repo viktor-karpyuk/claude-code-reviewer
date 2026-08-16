@@ -140,9 +140,23 @@ fun ImplDetail(
             }
         }
 
-        impl.error?.let {
+        impl.error?.let { err ->
             Spacer(Modifier.height(6.dp))
-            Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    err,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error,
+                    modifier = Modifier.weight(1f),
+                )
+                // Copiable: estos errores vienen del CLI y son literales que hay que buscar o
+                // pegar en otro lado —"unrecognized_model" fue exactamente eso—. Transcribirlos a
+                // mano de una pantalla es donde se pierde el detalle que importa.
+                TextButton(onClick = {
+                    java.awt.Toolkit.getDefaultToolkit().systemClipboard
+                        .setContents(java.awt.datatransfer.StringSelection(err), null)
+                }) { Text(t("common.copyError")) }
+            }
         }
 
         // --- Decisiones pendientes: lo único que frena ---
@@ -220,14 +234,23 @@ fun ImplDetail(
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                     }
-                    tar.error?.takeIf { it.isNotBlank() }?.let {
-                        Text(
-                            it.take(240),
-                            style = MaterialTheme.typography.labelSmall,
-                            color = if (tar.status == TaskStatus.BLOCKED)
-                                io.acr.ui.stats.ChartColors.major
-                            else MaterialTheme.colorScheme.error,
-                        )
+                    tar.error?.takeIf { it.isNotBlank() }?.let { err ->
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(
+                                err.take(240),
+                                style = MaterialTheme.typography.labelSmall,
+                                color = if (tar.status == TaskStatus.BLOCKED)
+                                    io.acr.ui.stats.ChartColors.major
+                                else MaterialTheme.colorScheme.error,
+                                modifier = Modifier.weight(1f),
+                            )
+                            if (tar.status == TaskStatus.FAILED) {
+                                TextButton(onClick = {
+                                    java.awt.Toolkit.getDefaultToolkit().systemClipboard
+                                        .setContents(java.awt.datatransfer.StringSelection(err), null)
+                                }) { Text(t("common.copyError")) }
+                            }
+                        }
                     }
                 }
                 if (tar.status == TaskStatus.FAILED) {

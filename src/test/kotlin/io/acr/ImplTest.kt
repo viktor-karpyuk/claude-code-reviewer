@@ -273,3 +273,43 @@ class ImplTest {
         assertEquals(repoId, assertNotNull(ctx.impls.get(id)).repoId, "el principal sigue siendo el mismo")
     }
 }
+
+/**
+ * El nombre del modelo.
+ *
+ * La primera implementación real murió al arrancar con `unrecognized_model: fable-5`. El CLI
+ * acepta el alias corto de cada familia —`haiku`, `sonnet`, `opus`, `fable`— o el id completo, y
+ * `fable-5` no es ninguno de los dos. El error sólo aparece al correr, porque el modelo se valida
+ * del lado del servidor: por eso conviene fijarlo acá.
+ */
+class ImplModelTest {
+
+    @Test
+    fun theDefaultModelsUseTheAliasesTheCliKnows() {
+        val validos = setOf("haiku", "sonnet", "opus", "fable")
+        assertTrue(
+            io.acr.impl.ImplEngine.PLAN_MODEL in validos,
+            "el modelo de planificación tiene que ser un alias conocido, no ${io.acr.impl.ImplEngine.PLAN_MODEL}",
+        )
+        assertTrue(
+            io.acr.impl.ImplEngine.CODE_MODEL in validos,
+            "el modelo de código tiene que ser un alias conocido, no ${io.acr.impl.ImplEngine.CODE_MODEL}",
+        )
+    }
+
+    @Test
+    fun planningAndCodingUseDifferentModels() {
+        // Es la razón de ser de tener dos: el orden de las tareas se razona, el código se escribe.
+        assertTrue(io.acr.impl.ImplEngine.PLAN_MODEL != io.acr.impl.ImplEngine.CODE_MODEL)
+    }
+
+    @Test
+    fun theAliasHasNoVersionSuffix() {
+        // Un alias con número —"opus-5"— apunta a nada y además envejece: el alias corto sigue a
+        // la última versión de esa familia sola.
+        listOf(io.acr.impl.ImplEngine.PLAN_MODEL, io.acr.impl.ImplEngine.CODE_MODEL).forEach {
+            assertTrue(!it.contains("-"), "«$it» parece un id inventado")
+            assertTrue(!it.any { c -> c.isDigit() }, "«$it» lleva versión pegada")
+        }
+    }
+}

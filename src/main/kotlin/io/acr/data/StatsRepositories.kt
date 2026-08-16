@@ -103,6 +103,12 @@ class PersonRepository(private val store: Store) {
         store.transaction { conn -> addIdentity(conn, personId, identity, confirmed) }
     }
 
+    private fun countIdentities(personId: String): Int =
+        store.stmt("SELECT COUNT(*) FROM person_identity WHERE person_id = ?") { ps ->
+            ps.setString(1, personId)
+            ps.executeQuery().use { if (it.next()) it.getInt(1) else 0 }
+        }
+
     /** De quién es esta identidad, si ya es de alguien. */
     private fun ownerOf(identity: Identity): String? =
         store.stmt("SELECT person_id FROM person_identity WHERE kind = ? AND value = ?") { ps ->
@@ -134,8 +140,12 @@ class PersonRepository(private val store: Store) {
         if (duenio == personId) return personId
         // Gana la que más identidades tiene: suele ser la cuenta principal, y así el nombre que
         // queda es el más usado en vez del que apareció primero.
-        val a = identityIds(personId).size
-        val b = identityIds(duenio).size
+        //
+        // Se cuenta en SQL en vez de traer las filas: esto corre por commit durante la
+        // recolección —2.283 en esta instalación— y traer dos listas enteras para comparar sus
+        // largos es trabajo que se paga miles de veces.
+        val a = countIdentities(personId)
+        val b = countIdentities(duenio)
         val (queda, absorbida) = if (a >= b) personId to duenio else duenio to personId
         merge(queda, absorbida)
         return queda
@@ -496,8 +506,11 @@ class PrStatRepository(private val store: Store) {
                       SELECT 1 FROM finding f
                        WHERE f.review_id = r.id AND f.published_id IS NOT NULL
                   )
-                GROUP BY s.repo_id, s.pr_id
-               HAVING r.created_at = MAX(r.created_at)""",
+                  AND r.created_at = (
+                      SELECT MAX(r2.created_at) FROM review r2
+                       WHERE r2.repo_id = s.repo_id AND r2.pr_id = s.pr_id AND r2.status = 'DONE'
+                  )
+                GROUP BY s.repo_id, s.pr_id""",
         ) { ps ->
             ps.executeQuery().use { rs ->
                 buildList {
@@ -811,6 +824,34 @@ class CommitStatRepository(private val store: Store) {
                             rs.getString(1),
                             Volume(rs.getInt(2), rs.getInt(3), rs.getInt(4), rs.getInt(5), rs.getInt(6)),
                         )
+                    }
+                }
+            }
+        }
+
+    /**
+     * Volumen por persona y por trimestre, en una sola consulta.
+     *
+     * Antes la pantalla pedía un trimestre por vez: hasta ocho consultas para dibujar una fila de
+     * barras, y multiplicado por cada persona de la tabla. Agrupar en SQL cuesta lo mismo que una
+     * sola de esas.
+     */
+    fun volumeByPersonByQuarter(maxLines: Int? = null): Map<String, Map<String, Int>> =
+        store.stmt(
+            """SELECT person_id,
+                      substr(authored_at, 1, 4) || '-Q' ||
+                        ((CAST(substr(authored_at, 6, 2) AS INTEGER) - 1) / 3 + 1) q,
+                      SUM(added + deleted)
+                 FROM commit_stat
+                WHERE person_id IS NOT NULL AND (? IS NULL OR added + deleted <= ?)
+                GROUP BY person_id, q""",
+        ) { ps ->
+            if (maxLines == null) { ps.setNull(1, java.sql.Types.INTEGER); ps.setNull(2, java.sql.Types.INTEGER) }
+            else { ps.setInt(1, maxLines); ps.setInt(2, maxLines) }
+            ps.executeQuery().use { rs ->
+                buildMap<String, MutableMap<String, Int>> {
+                    while (rs.next()) {
+                        getOrPut(rs.getString(1)) { mutableMapOf() }[rs.getString(2)] = rs.getInt(3)
                     }
                 }
             }

@@ -59,6 +59,14 @@ fun ReposPanel(
     onEdit: (RepoRecord) -> Unit,
     onAdd: () -> Unit,
 ) {
+    // La foto del día, una vez por apertura de la sección y fuera del hilo de UI. Antes se
+    // guardaba adentro de la lectura de cada tarjeta, así que escribía en cada recomposición.
+    androidx.compose.runtime.LaunchedEffect(repos) {
+        kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+            repos.forEach { r -> runCatching { ctx.health.snapshot(r.id, ctx.health.current(r.id)) } }
+        }
+    }
+
     Column(Modifier.fillMaxSize().padding(20.dp).verticalScroll(rememberScrollState())) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {
@@ -126,8 +134,11 @@ private fun RepoCard(
     onOpen: () -> Unit,
     onEdit: () -> Unit,
 ) {
+    // Leer y escribir estaban juntos acá, y eso hacía un INSERT por tarjeta cada vez que la
+    // pantalla se recomponía: siete repositorios, siete escrituras, por cada vuelta de layout.
+    // La foto del día se toma una vez por apertura de la sección, no por dibujo de una tarjeta.
     val salud = io.acr.ui.dbState(repo.id, initial = null as io.acr.data.RepoHealth?) {
-        ctx.health.current(repo.id).also { ctx.health.snapshot(repo.id, it) }
+        ctx.health.current(repo.id)
     }
     val historia = io.acr.ui.dbState(repo.id, salud, initial = emptyList<io.acr.data.RepoSnapshot>()) {
         ctx.health.history(repo.id)

@@ -73,8 +73,10 @@ fun TeamPanel(ctx: AppContext) {
         ctx.commitStats.volumeByPerson(periodo.from, periodo.to)
     }
     val trimestres = remember(periodo) { quartersIn(periodo) }
-    val porTrimestre = io.acr.ui.dbState(trimestres, initial = emptyMap<String, Map<String, Volume>>()) {
-        trimestres.associate { q -> q.label to ctx.commitStats.volumeByPerson(q.from, q.to) }
+    // Todos los trimestres de todas las personas en una consulta. Antes era una por trimestre,
+    // hasta ocho por cada dibujo de la tabla.
+    val porTrimestre = io.acr.ui.dbState(initial = emptyMap<String, Map<String, Int>>()) {
+        ctx.commitStats.volumeByPersonByQuarter()
     }
 
     // Quien ya no está deja de aparecer, pero sus datos no se borran: en un trimestre viejo esa
@@ -234,7 +236,7 @@ fun TeamPanel(ctx: AppContext) {
                     // siempre parece una caída si no se marca.
                     Row(Modifier.padding(start = 36.dp, bottom = 8.dp, end = 16.dp)) {
                         MiniBars(
-                            values = trimestres.map { (porTrimestre[it.label]?.get(p.id)?.touched ?: 0).toDouble() },
+                            values = trimestres.map { (porTrimestre[p.id]?.get(it.label) ?: 0).toDouble() },
                             labels = trimestres.map { it.label },
                             lastIsPartial = trimestres.last().partial,
                             modifier = Modifier.width(360.dp),
@@ -242,9 +244,9 @@ fun TeamPanel(ctx: AppContext) {
                         Spacer(Modifier.width(12.dp))
                         Column {
                             trimestres.forEach { q ->
-                                val vq = porTrimestre[q.label]?.get(p.id)
+                                val vq = porTrimestre[p.id]?.get(q.label)
                                 Text(
-                                    "${q.label}: " + if (vq == null) "—" else "${vq.commits}c · ${vq.touched}",
+                                    "${q.label}: " + if (vq == null) "—" else "$vq",
                                     style = MaterialTheme.typography.labelSmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 )
