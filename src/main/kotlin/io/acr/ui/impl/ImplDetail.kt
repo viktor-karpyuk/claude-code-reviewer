@@ -133,6 +133,42 @@ fun ImplDetail(
             )
         }
 
+        // De dónde parte cada repositorio y en qué rama trabaja. Estaba decidido en silencio por
+        // la rama que el clon tuviera abierta, así que no había forma de saberlo sin ir a git.
+        Spacer(Modifier.height(8.dp))
+        misRepos.forEach { r ->
+            val cfg = suyos.firstOrNull { it.repoId == r.id }
+            val sucio = io.acr.ui.dbState(r.id, version, initial = false) {
+                kotlinx.coroutines.runBlocking { io.acr.claude.Git.isDirty(java.io.File(r.localPath)) }
+            }
+            Row(Modifier.fillMaxWidth().padding(vertical = 1.dp), verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    r.name,
+                    style = MaterialTheme.typography.labelSmall,
+                    modifier = Modifier.width(190.dp),
+                )
+                Text(
+                    t("impl.fromBranch", cfg?.baseBranch ?: t("impl.currentBranch")) +
+                        (impl.branch?.let { "  →  $it" }.orEmpty()),
+                    style = MaterialTheme.typography.labelSmall.copy(fontFamily = FontFamily.Monospace),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.weight(1f),
+                )
+                // Lo sucio se resuelve acá y no en la terminal: el stash no pierde nada y se
+                // recupera con `git stash pop`, así que puede ser un botón.
+                if (sucio) {
+                    Text(
+                        t("impl.dirty"),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                    TextButton(onClick = {
+                        ctx.appScope.launch { ctx.implEngine.stashDirty(r); version++ }
+                    }) { Text(t("impl.stash")) }
+                }
+            }
+        }
+
         Spacer(Modifier.height(10.dp))
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
             if (corriendo) {
@@ -267,7 +303,10 @@ fun ImplDetail(
 
         tareas.forEach { tar ->
             var abierta by remember(tar.id) { mutableStateOf(false) }
-            val puedeAbrir = tar.diff != null || !tar.result.isNullOrBlank() || !tar.error.isNullOrBlank()
+            // Siempre se puede abrir. Antes hacía falta que la tarea hubiera corrido, así que un
+            // plan recién armado no se podía leer: justo cuando uno quiere ver qué se propone
+            // hacer antes de dejarlo correr.
+            val puedeAbrir = true
             Column {
                 Row(
                     Modifier.fillMaxWidth()
@@ -329,9 +368,38 @@ fun ImplDetail(
 
                 if (abierta) {
                     Column(Modifier.padding(start = 30.dp, bottom = 8.dp)) {
+                        // Lo que el plan dice que hay que hacer. Estaba guardado desde el
+                        // principio y no se mostraba en ningún lado, que es lo único que se puede
+                        // leer de una tarea que todavía no corrió.
+                        tar.detail.takeIf { it.isNotBlank() }?.let {
+                            Text(
+                                t("impl.whatToDo"),
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                            Text(it, style = MaterialTheme.typography.bodySmall)
+                            Spacer(Modifier.height(8.dp))
+                        }
+                        // Y lo que efectivamente hizo, cuando ya corrió. Son dos cosas distintas y
+                        // compararlas es la forma de ver si la tarea hizo lo que decía.
                         tar.result?.takeIf { it.isNotBlank() }?.let {
+                            Text(
+                                t("impl.whatItDid"),
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
                             Text(it, style = MaterialTheme.typography.bodySmall)
                             Spacer(Modifier.height(6.dp))
+                        }
+                        // Qué tiene que estar antes. Es lo que explica por qué una tarea está más
+                        // abajo en la lista de lo que uno esperaría.
+                        tar.dependsOn.takeIf { it.isNotEmpty() }?.let { deps ->
+                            Text(
+                                t("impl.dependsOn", deps.joinToString(", ")),
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                            Spacer(Modifier.height(4.dp))
                         }
                         // Los archivos, uno por línea con su letra: es lo que permite revisar sin
                         // abrir el repositorio.
@@ -404,6 +472,62 @@ fun ImplDetail(
                 }
             }
             HorizontalDivider()
+        }
+
+        // --- Commits de la rama ---
+        impl.branch?.let { rama ->
+            val commits = io.acr.ui.dbState(implId, version, tic, initial = emptyList<Pair<String, io.acr.claude.Git.Commit>>()) {
+                kotlinx.coroutines.runBlocking {
+                    misRepos.flatMap { r ->
+                        val base = suyos.firstOrNull { it.repoId == r.id }?.baseBranch
+                            ?: impl.baseBranch ?: "develop"
+                        io.acr.claude.Git.commitsBetween(java.io.File(r.localPath), base, rama)
+                            .map { r.name to it }
+                    }
+                }
+            }
+            if (commits.isNotEmpty()) {
+                Spacer(Modifier.height(14.dp))
+                io.acr.ui.CollapsibleCard(
+                    t("impl.commits", commits.size),
+                    ctx.prefs,
+                    "implcommits-$implId",
+                    maxHeight = 240.dp,
+                    defaultCollapsed = true,
+                ) {
+                    commits.forEach { (repoNombre, c) ->
+                        Row(Modifier.fillMaxWidth().padding(vertical = 1.dp)) {
+                            Text(
+                                c.sha.take(7),
+                                style = MaterialTheme.typography.labelSmall
+                                    .copy(fontFamily = FontFamily.Monospace),
+                                modifier = Modifier.width(70.dp),
+                            )
+                            if (misRepos.size > 1) {
+                                Text(
+                                    repoNombre,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.width(120.dp),
+                                    maxLines = 1,
+                                )
+                            }
+                            Text(
+                                c.subject,
+                                style = MaterialTheme.typography.labelSmall,
+                                modifier = Modifier.weight(1f),
+                                maxLines = 1,
+                            )
+                            Text(
+                                c.date,
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.width(84.dp),
+                            )
+                        }
+                    }
+                }
+            }
         }
 
         // --- Feed en vivo ---

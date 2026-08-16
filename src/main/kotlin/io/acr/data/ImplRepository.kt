@@ -40,9 +40,10 @@ class ImplRepository(private val store: Store) {
             }
             repos.forEach { r ->
                 conn.prepareStatement(
-                    "INSERT OR REPLACE INTO impl_repo(impl_id, repo_id, role) VALUES (?,?,?)",
+                    "INSERT OR REPLACE INTO impl_repo(impl_id, repo_id, role, base_branch) VALUES (?,?,?,?)",
                 ).use { ps ->
                     ps.setString(1, id); ps.setString(2, r.repoId); ps.setString(3, r.role.name)
+                    ps.setString(4, r.baseBranch)
                     ps.executeUpdate()
                 }
             }
@@ -80,9 +81,10 @@ class ImplRepository(private val store: Store) {
             }
             repos.forEach { r ->
                 conn.prepareStatement(
-                    "INSERT OR REPLACE INTO impl_repo(impl_id, repo_id, role) VALUES (?,?,?)",
+                    "INSERT OR REPLACE INTO impl_repo(impl_id, repo_id, role, base_branch) VALUES (?,?,?,?)",
                 ).use { ps ->
                     ps.setString(1, id); ps.setString(2, r.repoId); ps.setString(3, r.role.name)
+                    ps.setString(4, r.baseBranch)
                     ps.executeUpdate()
                 }
             }
@@ -110,12 +112,18 @@ class ImplRepository(private val store: Store) {
 
     /** Los repositorios de una implementación, con su rol. */
     fun reposOf(implId: String): List<io.acr.impl.ImplRepo> =
-        store.stmt("SELECT repo_id, role FROM impl_repo WHERE impl_id = ?") { ps ->
+        store.stmt("SELECT repo_id, role, base_branch FROM impl_repo WHERE impl_id = ?") { ps ->
             ps.setString(1, implId)
             ps.executeQuery().use { rs ->
                 buildList {
                     while (rs.next()) {
-                        add(io.acr.impl.ImplRepo(rs.getString(1), io.acr.impl.RepoRole.fromApi(rs.getString(2))))
+                        add(
+                            io.acr.impl.ImplRepo(
+                                rs.getString(1),
+                                io.acr.impl.RepoRole.fromApi(rs.getString(2)),
+                                rs.getString(3),
+                            ),
+                        )
                     }
                 }
             }

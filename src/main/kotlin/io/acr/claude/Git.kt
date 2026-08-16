@@ -230,6 +230,45 @@ object Git {
             }.toList()
         }
 
+    /**
+     * Guarda lo que haya sin commitear, incluidos los archivos nuevos.
+     *
+     * `-u` para que los archivos sin seguimiento también entren: si quedaran afuera, el primer
+     * commit de la implementación se los llevaría adentro, que es justo lo que se quiere evitar.
+     * Nunca descarta: lo guardado se recupera con `git stash pop`.
+     */
+    suspend fun stash(dir: File, message: String): Boolean = withContext(Dispatchers.IO) {
+        run(dir, listOf("git", "stash", "push", "-u", "-m", message)).ok
+    }
+
+    /** Las ramas locales del clon, para elegir de cuál partir. */
+    suspend fun branches(dir: File): List<String> = withContext(Dispatchers.IO) {
+        val res = run(dir, listOf("git", "for-each-ref", "--format=%(refname:short)", "refs/heads"))
+        if (!res.ok) emptyList()
+        else res.output.lines().map { it.trim() }.filter { it.isNotBlank() }.sorted()
+    }
+
+    /**
+     * Los commits que una rama agrega sobre su base.
+     *
+     * Es lo que construyó una implementación: sin esto hay que ir a la terminal para ver qué se
+     * hizo, que es exactamente el viaje que la herramienta debería ahorrar.
+     */
+    suspend fun commitsBetween(dir: File, base: String, branch: String): List<Commit> =
+        withContext(Dispatchers.IO) {
+            val fmt = "%H%x1f%an%x1f%ad%x1f%s%x1f%b%x1e"
+            val res = run(dir, listOf("git", "log", "--date=short", "--format=$fmt", "$base..$branch"))
+            if (!res.ok) return@withContext emptyList()
+            res.output.split('\u001e')
+                .map { it.trim('\n', '\r', ' ') }
+                .filter { it.isNotBlank() }
+                .mapNotNull { rec ->
+                    val f = rec.split('\u001f')
+                    if (f.size < 4) return@mapNotNull null
+                    Commit(f[0], f[1], f[2], f[3], f.getOrElse(4) { "" }.trim())
+                }
+        }
+
     /** El commit en el que está parado el clon. Sirve para anotar hasta dónde se procesó. */
     suspend fun currentHead(dir: File): String? = withContext(Dispatchers.IO) {
         run(dir, listOf("git", "rev-parse", "HEAD")).takeIf { it.ok }?.output?.trim()

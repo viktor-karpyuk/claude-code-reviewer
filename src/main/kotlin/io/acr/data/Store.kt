@@ -954,6 +954,18 @@ class Store(private val dbPath: Path) : AutoCloseable {
             ALTER TABLE impl_task ADD COLUMN lines_deleted INTEGER;--split--
             ALTER TABLE impl_task ADD COLUMN files_detail TEXT
             """.trimIndent(),
+
+            // v50 — de qué rama parte cada repositorio.
+            //
+            // Estaba fijo en la rama en la que el clon estuviera parado, que es lo que uno tenga
+            // abierto de casualidad. Con varios repositorios es peor: no todos usan el mismo
+            // nombre —`develop` en unos, `main` en otros— y adivinarlo hace que la rama nueva
+            // salga del lugar equivocado sin que nada lo diga hasta que alguien mira el diff.
+            //
+            // Va por repositorio y no por implementación por ese mismo motivo.
+            """
+            ALTER TABLE impl_repo ADD COLUMN base_branch TEXT
+            """.trimIndent(),
         )
     }
 }

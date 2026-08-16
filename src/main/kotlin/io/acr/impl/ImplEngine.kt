@@ -156,6 +156,21 @@ class ImplEngine(
      * es el caso normal, no una excepción, y crear `feature-x-2` dejaría el trabajo partido en dos
      * ramas que después hay que unir a mano.
      */
+    /**
+     * Guarda en un stash lo que haya sin commitear.
+     *
+     * Negarse a arrancar por un archivo a medias obligaba a ir a la terminal, y volver. `git
+     * stash` no pierde nada —queda recuperable con `git stash pop`— y por eso se puede ofrecer
+     * como una acción y no como una advertencia. Lo que no se hace nunca es descartar.
+     */
+    suspend fun stashDirty(repo: RepoRecord): Result<Boolean> = runCatching {
+        val dir = File(repo.localPath)
+        if (!Git.isDirty(dir)) return@runCatching false
+        Git.stash(dir, "acr: antes de implementar").also {
+            if (!it) error("No pude guardar los cambios de ${repo.name} en el stash.")
+        }
+    }
+
     suspend fun run(repos: List<RepoRecord>, implId: String): Result<Unit> {
         val impl = impls.get(implId) ?: return Result.failure(IllegalStateException("No existe."))
         val rama = impl.branch ?: return Result.failure(IllegalStateException("Falta planificar."))
@@ -173,7 +188,10 @@ class ImplEngine(
                 return Result.failure(IllegalStateException(msg))
             }
             if (Git.isDirty(d)) {
-                val msg = "${r.name} tiene cambios sin commitear. Guardalos o descartalos antes."
+                // Se nombra el repositorio y se dice la salida concreta. Antes decía "guardalos o
+                // descartalos" sin decir cuál de los repositorios era el del problema.
+                val msg = "${r.name} tiene cambios sin commitear. Desde la pantalla podés " +
+                    "guardarlos en el stash y seguir; se recuperan con `git stash pop`."
                 impls.setStatus(implId, ImplStatus.FAILED, msg)
                 return Result.failure(IllegalStateException(msg))
             }
@@ -183,9 +201,16 @@ class ImplEngine(
         impls.setStatus(implId, ImplStatus.RUNNING)
         // La misma rama en todos: buscar el trabajo de una implementación en tres repositorios con
         // tres nombres distintos es un problema que no hace falta tener.
+        val configurados = impls.reposOf(implId)
         repos.forEach { r ->
-            log(implId, "${r.name}: rama «$rama»…")
-            Git.checkoutBranch(File(r.localPath), rama, impl.baseBranch ?: "develop")
+            // De dónde parte cada uno: lo configurado, o la rama en la que esté parado el clon.
+            // No todos los repositorios usan el mismo nombre.
+            val base = configurados.firstOrNull { it.repoId == r.id }?.baseBranch
+                ?: impl.baseBranch
+                ?: Git.currentBranch(File(r.localPath))
+                ?: "develop"
+            log(implId, "${r.name}: «$rama» desde «$base»…")
+            Git.checkoutBranch(File(r.localPath), rama, base)
         }
 
         val docs = loadSources(impl.sources)

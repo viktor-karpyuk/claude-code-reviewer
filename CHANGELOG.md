@@ -3,6 +3,43 @@
 Reglas de numeración en [CLAUDE.md](CLAUDE.md): un requerimiento **nuevo** incrementa *major*;
 cambiar uno **existente** incrementa *patch*.
 
+## 59.0.0
+
+Cuatro cosas en el **Constructor**, todas sobre lo mismo: poder ver y decidir lo que antes pasaba
+en silencio.
+
+### El detalle de cada tarea
+
+La fila sólo se abría si la tarea ya había corrido, así que **un plan recién armado no se podía
+leer** — justo cuando uno quiere ver qué se propone hacer antes de dejarlo andar. Y el `detail` que
+escribe el planificador estaba guardado desde el principio **sin mostrarse en ninguna pantalla**.
+
+Ahora toda fila se abre y muestra **qué hay que hacer** (lo que dice el plan), **qué hizo** (cuando
+ya corrió) y **de qué depende**, que es lo que explica por qué una tarea está más abajo de lo que
+uno esperaría. Tener las dos primeras juntas es la forma de ver si la tarea hizo lo que decía.
+
+### De qué rama parte cada repositorio
+
+Estaba fijo en la rama que el clon tuviera abierta de casualidad. Con varios repositorios es peor:
+no todos usan el mismo nombre —`develop` en unos, `main` en otros— y adivinarlo hacía que la rama
+nueva saliera del lugar equivocado sin que nada lo dijera hasta mirar el diff.
+
+Ahora **se configura por repositorio**, eligiendo entre las ramas reales del clon —escribir mal un
+nombre no falla al guardar, falla al correr— y **se ve en la implementación**: de dónde parte cada
+uno y hacia qué rama va.
+
+### Los cambios sin commitear se resuelven desde la pantalla
+
+Antes se negaba a arrancar con un mensaje que ni siquiera decía **cuál** de los repositorios era el
+del problema. Ahora lo nombra y ofrece **guardar en el stash** ahí mismo. Se puede ofrecer como
+botón porque `git stash` no pierde nada: se recupera con `git stash pop`. Descartar no se hace
+nunca, y los archivos nuevos entran en el stash — si quedaran afuera, el primer commit de la
+implementación se los llevaría adentro.
+
+### Los commits de la rama
+
+Se pueden ver todos los commits que la implementación hizo, por repositorio, sin ir a la terminal.
+
 ## 58.0.0
 
 Dos requerimientos nuevos en el **Constructor**: las tareas como tabla con su detalle, y poder

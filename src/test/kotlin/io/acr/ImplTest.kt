@@ -524,3 +524,70 @@ class ImplDetailTest {
         assertEquals(io.acr.impl.ImplStatus.DRAFT, assertNotNull(ctx.impls.get(id)).status)
     }
 }
+
+/**
+ * El detalle de cada tarea del plan.
+ *
+ * El planificador escribe qué hay que hacer en cada tarea y eso se guardaba desde el principio sin
+ * mostrarse en ninguna pantalla: era lo único que se podía leer de un plan que todavía no corrió,
+ * que es justo cuando uno quiere ver qué se propone antes de dejarlo andar.
+ */
+class ImplTaskDetailTest {
+
+    private fun conRepo(block: (AppContext, String) -> Unit) {
+        val dir = java.nio.file.Files.createTempDirectory("acr-impl-td")
+        val ctx = AppContext.bootstrap(dir)
+        try {
+            val repoId = ctx.repos.create(
+                "tmp-td-${System.nanoTime()}", Provider.BITBUCKET, "acme", "demo",
+                System.getProperty("java.io.tmpdir"), null, null, null, "", false,
+                io.acr.forge.SkipRules(), io.acr.forge.ReplyMode.OFF,
+            )
+            block(ctx, repoId)
+        } finally {
+            ctx.close()
+            dir.toFile().deleteRecursively()
+        }
+    }
+
+    @Test
+    fun theDetailOfEachTaskSurvivesTheRoundTrip() = conRepo { ctx, repoId ->
+        val id = ctx.impls.create(
+            listOf(io.acr.impl.ImplRepo(repoId, io.acr.impl.RepoRole.BACKEND)), "f", listOf("/x"), null,
+        )
+        ctx.impls.savePlan(
+            id, "s", "b", "develop", "m",
+            listOf(
+                ImplTask("", "", null, 1, "Crear el endpoint",
+                    "POST /ausencias con validación de fechas solapadas.",
+                    emptyList(), TaskSize.M, 15, TaskStatus.PENDING,
+                    null, null, null, null, null, null),
+                ImplTask("", "", null, 2, "Pantalla de alta", "Formulario con el calendario.",
+                    listOf(1), TaskSize.L, 35, TaskStatus.PENDING,
+                    null, null, null, null, null, null),
+            ),
+        )
+
+        val ts = ctx.impls.tasks(id)
+        assertEquals(
+            "POST /ausencias con validación de fechas solapadas.",
+            ts.first { it.seq == 1 }.detail,
+            "el detalle del plan tiene que llegar a la pantalla",
+        )
+        assertEquals(listOf(1), ts.first { it.seq == 2 }.dependsOn, "y de qué depende, que explica el orden")
+    }
+
+    @Test
+    fun aTaskWithoutDetailIsStillReadable() = conRepo { ctx, repoId ->
+        // Si el planificador no escribió detalle, la fila igual se abre y muestra lo demás.
+        val id = ctx.impls.create(
+            listOf(io.acr.impl.ImplRepo(repoId, io.acr.impl.RepoRole.BACKEND)), "f", listOf("/x"), null,
+        )
+        ctx.impls.savePlan(
+            id, "s", "b", "develop", "m",
+            listOf(ImplTask("", "", null, 1, "Algo", "", emptyList(), null, null, TaskStatus.PENDING,
+                null, null, null, null, null, null)),
+        )
+        assertEquals("", ctx.impls.tasks(id).single().detail)
+    }
+}

@@ -57,8 +57,18 @@ enum class RepoRole(val labelKey: String) {
     }
 }
 
-/** Un repositorio dentro de una implementación, con su rol. */
-data class ImplRepo(val repoId: String, val role: RepoRole)
+/**
+ * Un repositorio dentro de una implementación, con su rol y de qué rama parte.
+ *
+ * @param baseBranch null = la rama en la que esté parado el clon. Se puede fijar porque no todos
+ *   los repositorios usan el mismo nombre —`develop` en unos, `main` en otros— y dejarlo al azar
+ *   de lo que alguien tenga abierto hace que la rama nueva salga del lugar equivocado.
+ */
+data class ImplRepo(
+    val repoId: String,
+    val role: RepoRole,
+    val baseBranch: String? = null,
+)
 
 /** Qué clase de decisión hace falta. Sólo estas dos frenan: el resto se decide solo. */
 enum class QuestionKind(val labelKey: String) {

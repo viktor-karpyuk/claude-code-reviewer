@@ -99,6 +99,15 @@ fun EditImplDialog(
                             style = MaterialTheme.typography.labelSmall,
                             modifier = Modifier.width(180.dp),
                         )
+                        // De qué rama parte. Se ofrecen las del clon en vez de un campo libre:
+                        // escribir mal el nombre no falla al guardar, falla al correr.
+                        val ramas = io.acr.ui.dbState(e.repoId, initial = emptyList<String>()) {
+                            kotlinx.coroutines.runBlocking {
+                                repos.firstOrNull { it.id == e.repoId }?.let {
+                                    io.acr.claude.Git.branches(java.io.File(it.localPath))
+                                }.orEmpty()
+                            }
+                        }
                         FlowRow(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                             RepoRole.entries.forEach { rol ->
                                 FilterChip(
@@ -109,6 +118,19 @@ fun EditImplDialog(
                                         }
                                     },
                                     label = { Text(t(rol.labelKey), style = MaterialTheme.typography.labelSmall) },
+                                )
+                            }
+                            ramas.take(6).forEach { rama ->
+                                FilterChip(
+                                    selected = e.baseBranch == rama,
+                                    onClick = {
+                                        elegidos = elegidos.map {
+                                            if (it.repoId == e.repoId) {
+                                                it.copy(baseBranch = if (it.baseBranch == rama) null else rama)
+                                            } else it
+                                        }
+                                    },
+                                    label = { Text(rama, style = MaterialTheme.typography.labelSmall) },
                                 )
                             }
                         }
