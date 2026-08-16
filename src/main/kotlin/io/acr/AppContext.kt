@@ -51,21 +51,20 @@ class AppContext private constructor(
     val rework: io.acr.stats.ReworkCollector,
     val health: io.acr.data.RepoHealthRepository,
     val jira: io.acr.data.JiraRepository,
+    val jiraSites: io.acr.data.JiraSiteRepository,
 ) : AutoCloseable {
 
-    /**
-     * Configuración de Jira, leída de preferencias.
-     *
-     * El token se guarda cifrado con la misma clave que los del proveedor de git: es una
-     * credencial de la misma clase y no hay motivo para tratarla peor.
-     */
-    fun jiraConfig(): io.acr.jira.JiraConfig = io.acr.jira.JiraConfig(
-        baseUrl = prefs.get(PREF_JIRA_URL).orEmpty(),
-        email = prefs.get(PREF_JIRA_EMAIL).orEmpty(),
-        token = prefs.get(PREF_JIRA_TOKEN).orEmpty(),
-    )
+    /** ¿Hay al menos un sitio de Jira conectado y usable? */
+    fun jiraConfigured(): Boolean = jiraSites.list().any { it.config().configured }
 
-    fun jiraClient(): io.acr.jira.JiraClient = io.acr.jira.JiraClient(jiraConfig())
+    /**
+     * El cliente que corresponde a esa clave de ticket.
+     *
+     * Null cuando ningún sitio la reclama: pedirle un `FIS-1` al Jira de otro cliente puede
+     * devolver un ticket que existe y no tiene nada que ver, y eso es peor que no traer nada.
+     */
+    fun jiraClientFor(key: String): io.acr.jira.JiraClient? =
+        jiraSites.siteFor(key)?.config()?.takeIf { it.configured }?.let { io.acr.jira.JiraClient(it) }
 
     /**
      * Scope de vida de la app. Las reviews se lanzan acá y NO en el scope de la pantalla: con el
@@ -123,6 +122,7 @@ class AppContext private constructor(
             val rework = io.acr.stats.ReworkCollector(prStats)
             val health = io.acr.data.RepoHealthRepository(store)
             val jira = io.acr.data.JiraRepository(store)
+            val jiraSites = io.acr.data.JiraSiteRepository(store, secrets)
             val statsCollector = io.acr.stats.StatsCollector(persons, commitStats)
             val replies = ReplyRepository(store)
             val seenPrs = io.acr.data.SeenPrRepository(store)
@@ -147,7 +147,7 @@ class AppContext private constructor(
                 jiraIssues = { repoId, prId -> jira.issuesOf(repoId, prId) },
             )
             val auto = AutoReviewer(repos, reviews, prefs, engine, notifier, replies, seenPrs, prLoader, findings, approvals, jobs)
-            return AppContext(store, repos, reviews, publications, comments, notes, findings, approvals, jobs, guidelines, replies, seenPrs, prCache, prLoader, prefs, engine, auto, notifier, persons, commitStats, statsCollector, reviewStats, prStats, prHistory, rework, health, jira)
+            return AppContext(store, repos, reviews, publications, comments, notes, findings, approvals, jobs, guidelines, replies, seenPrs, prCache, prLoader, prefs, engine, auto, notifier, persons, commitStats, statsCollector, reviewStats, prStats, prHistory, rework, health, jira, jiraSites)
         }
 
         /** La propiedad `acr.dataDir` gana sobre la ubicación estándar; la usan los tests. */

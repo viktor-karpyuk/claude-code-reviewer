@@ -3,6 +3,29 @@
 Reglas de numeración en [CLAUDE.md](CLAUDE.md): un requerimiento **nuevo** incrementa *major*;
 cambiar uno **existente** incrementa *patch*.
 
+## 54.0.0
+
+Requerimiento nuevo: **varios Jira, agregados como se agregan los repositorios**.
+
+La 53.0.0 asumía un solo Jira para todo. Los datos dicen otra cosa: los tickets de estos
+repositorios salen de **tres familias de proyectos** —`KS`/`POS`, `CON`/`FIA`/`FIMA`/`TLOG` y
+`FIS`— que son de clientes distintos y viven en instancias distintas. Con una sola configuración,
+dos de las tres quedaban afuera.
+
+- **Ajustes → Jira** pasa a ser una **lista**: se conectan los sitios que hagan falta, cada uno con
+  su URL, su email y su token, y se editan o borran como los repositorios.
+- Cada sitio declara **qué proyectos atiende** (`KS,POS`), y por ahí se rutea cada ticket. **Con un
+  solo sitio conectado no hace falta declarar nada**: pedir esa lista cuando no hay ambigüedad es
+  trabajo sin motivo.
+- Si ningún sitio reclama un proyecto, no se pide a ninguno. Preguntarle a la instancia equivocada
+  puede devolver un ticket que existe y no tiene nada que ver, y eso es peor que no traer nada.
+- **Probar la conexión antes de guardar**, y devuelve el nombre de la cuenta: una credencial mal
+  puesta se descubre ahí y no en la mitad de una review.
+- Al editar, dejar el token vacío significa "no lo toqués" y no "borralo".
+
+Los tokens se guardan cifrados con la misma clave que los del proveedor de git: son credenciales de
+la misma clase.
+
 ## 53.0.0
 
 Requerimiento nuevo: **integración con Jira**.

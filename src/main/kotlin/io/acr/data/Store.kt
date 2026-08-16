@@ -812,6 +812,30 @@ class Store(private val dbPath: Path) : AutoCloseable {
                 PRIMARY KEY (repo_id, pr_id, key)
             )
             """.trimIndent(),
+
+            // v45 — varios sitios de Jira, no uno.
+            //
+            // La primera versión asumía un solo Jira para todo, y los datos dicen otra cosa: los
+            // tickets de estos repositorios salen de tres familias de proyectos —KS y POS, CON,
+            // FIA, FIMA y TLOG, y FIS— que son de clientes distintos y viven en instancias
+            // distintas. Con una sola configuración, dos de las tres quedaban afuera.
+            //
+            // El ruteo es por prefijo de proyecto y no por repositorio, porque un repositorio
+            // puede mencionar tickets de varios proyectos a la vez: `talos-apirest` usa cuatro.
+            //
+            // El token va cifrado con la misma clave que los del proveedor de git: es una
+            // credencial de la misma clase.
+            """
+            CREATE TABLE jira_site (
+                id           TEXT PRIMARY KEY,
+                name         TEXT NOT NULL,
+                base_url     TEXT NOT NULL,
+                email        TEXT NOT NULL,
+                token_cipher BLOB,
+                projects     TEXT NOT NULL DEFAULT '',
+                created_at   TEXT NOT NULL
+            )
+            """.trimIndent(),
         )
     }
 }

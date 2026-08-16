@@ -98,3 +98,69 @@ class JiraTest {
         assertTrue(seccion.length < 6_000, "se recorta: ${seccion.length}")
     }
 }
+
+/**
+ * A qué sitio de Jira pedirle cada ticket.
+ *
+ * Es una lista y no un ajuste único porque los tickets de estos repositorios salen de instancias
+ * distintas: KS y POS de una, CON/FIA/FIMA/TLOG de otra, FIS de otra. Con una sola configuración
+ * dos de las tres quedaban afuera.
+ */
+class JiraSiteTest {
+
+    private fun conCtx(block: (AppContext) -> Unit) {
+        val dir = java.nio.file.Files.createTempDirectory("acr-jira")
+        val ctx = AppContext.bootstrap(dir)
+        try { block(ctx) } finally { ctx.close(); dir.toFile().deleteRecursively() }
+    }
+
+    @Test
+    fun eachTicketGoesToTheSiteThatOwnsItsProject() = conCtx { ctx ->
+        ctx.jiraSites.save(null, "kubrik", "https://kubrik.atlassian.net", "a@x.com", "t1", "KS,POS")
+        ctx.jiraSites.save(null, "pds", "https://pds.atlassian.net", "b@x.com", "t2", "FIS,FIA")
+
+        assertEquals("kubrik", ctx.jiraSites.siteFor("KS-654")?.name)
+        assertEquals("kubrik", ctx.jiraSites.siteFor("POS-84")?.name)
+        assertEquals("pds", ctx.jiraSites.siteFor("FIS-389")?.name)
+    }
+
+    @Test
+    fun anUnclaimedProjectGoesNowhere() = conCtx { ctx ->
+        // Preguntarle a la instancia equivocada puede devolver un ticket que existe y es de otra
+        // cosa, y eso es peor que no traer nada.
+        ctx.jiraSites.save(null, "kubrik", "https://kubrik.atlassian.net", "a@x.com", "t1", "KS,POS")
+        ctx.jiraSites.save(null, "pds", "https://pds.atlassian.net", "b@x.com", "t2", "FIS")
+        assertEquals(null, ctx.jiraSites.siteFor("TLOG-1"))
+    }
+
+    @Test
+    fun withASingleSiteNoProjectListIsNeeded() = conCtx { ctx ->
+        // Pedir esa lista cuando no hay ambigüedad es trabajo sin motivo.
+        ctx.jiraSites.save(null, "único", "https://x.atlassian.net", "a@x.com", "t", "")
+        assertEquals("único", ctx.jiraSites.siteFor("LO-QUE-SEA-1")?.name)
+        assertEquals("único", ctx.jiraSites.siteFor("KS-1")?.name)
+    }
+
+    @Test
+    fun withNoSitesThereIsNothingToAsk() = conCtx { ctx ->
+        assertEquals(null, ctx.jiraSites.siteFor("KS-1"))
+        assertTrue(!ctx.jiraConfigured())
+    }
+
+    @Test
+    fun editingWithoutRetypingTheTokenKeepsIt() = conCtx { ctx ->
+        // Al corregir la URL o los proyectos, un campo de token vacío significa "no lo toqués".
+        val id = ctx.jiraSites.save(null, "kubrik", "https://kubrik.atlassian.net", "a@x.com", "secreto", "KS")
+        ctx.jiraSites.save(id, "kubrik", "https://kubrik.atlassian.net", "a@x.com", null, "KS,POS")
+
+        val s = ctx.jiraSites.list().single()
+        assertEquals("secreto", s.token)
+        assertEquals(listOf("KS", "POS"), s.projects)
+    }
+
+    @Test
+    fun theProjectListIsCaseInsensitive() = conCtx { ctx ->
+        ctx.jiraSites.save(null, "x", "https://x.atlassian.net", "a@x.com", "t", "ks, pos")
+        assertEquals("x", ctx.jiraSites.siteFor("KS-1")?.name)
+    }
+}

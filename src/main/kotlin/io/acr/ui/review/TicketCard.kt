@@ -57,7 +57,7 @@ fun TicketCard(
     val tickets = io.acr.ui.dbState(repoId, prId, version, claves, initial = emptyList<JiraIssue>()) {
         ctx.jira.issuesOf(repoId, prId)
     }
-    val configurado = remember(version) { ctx.jiraConfig().configured }
+    val configurado = remember(version) { ctx.jiraConfigured() }
 
     if (claves.isEmpty()) return
 
@@ -121,9 +121,17 @@ fun TicketCard(
                         error = null
                         scope.launch {
                             faltan.forEach { k ->
-                                ctx.jiraClient().issue(k)
-                                    .onSuccess { it?.let { i -> ctx.jira.save(i) } }
-                                    .onFailure { error = it.message }
+                                // Cada clave va a su sitio: `FIS-1` y `KS-1` pueden ser de
+                                // instancias distintas, y preguntarle a la equivocada puede
+                                // devolver un ticket que existe y es de otra cosa.
+                                val cliente = ctx.jiraClientFor(k)
+                                if (cliente == null) {
+                                    error = io.acr.i18n.t2("jira.noSite", k)
+                                } else {
+                                    cliente.issue(k)
+                                        .onSuccess { it?.let { i -> ctx.jira.save(i) } }
+                                        .onFailure { error = it.message }
+                                }
                             }
                             trayendo = false
                             version++

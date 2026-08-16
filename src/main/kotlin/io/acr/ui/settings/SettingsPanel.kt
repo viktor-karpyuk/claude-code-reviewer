@@ -16,6 +16,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -239,23 +240,28 @@ fun SettingsPanel(
 }
 
 /**
- * Conexión con Jira, para ver de qué se trata cada pull request.
+ * Los sitios de Jira conectados.
  *
- * Sólo lectura: la app mira los tickets, no los mueve. Mover el estado es del que trabaja.
+ * Es una lista y no un ajuste único porque los tickets de estos repositorios salen de instancias
+ * distintas: los proyectos KS y POS de una, CON/FIA/FIMA/TLOG de otra, FIS de otra. Con una sola
+ * configuración, dos de las tres quedaban afuera.
  *
- * El token va como Basic junto con el email, que es como autentica Jira Cloud —al revés que
- * Bitbucket, donde Basic falla siempre y sólo anda Bearer—. Son dos productos de la misma empresa
- * con dos esquemas distintos, y confundirlos da un 401 que parece una credencial vencida; por eso
- * el botón de probar dice el nombre de la cuenta cuando funciona.
+ * Cada sitio declara qué proyectos atiende, y por ahí se rutea cada ticket. Con un solo sitio
+ * conectado no hace falta declarar nada: pedir esa lista cuando no hay ambigüedad es trabajo sin
+ * motivo.
+ *
+ * Sólo lectura: la app mira los tickets, nunca los mueve. Autentica con Basic y el email, que es
+ * como funciona Jira Cloud —al revés que Bitbucket, donde sólo anda Bearer—.
  */
 @Composable
 private fun JiraSettings(ctx: io.acr.AppContext) {
-    var url by remember { mutableStateOf(ctx.prefs.get(io.acr.AppContext.PREF_JIRA_URL).orEmpty()) }
-    var email by remember { mutableStateOf(ctx.prefs.get(io.acr.AppContext.PREF_JIRA_EMAIL).orEmpty()) }
-    var token by remember { mutableStateOf(ctx.prefs.get(io.acr.AppContext.PREF_JIRA_TOKEN).orEmpty()) }
+    var version by remember { mutableStateOf(0) }
+    val sitios = io.acr.ui.dbState(version, initial = emptyList<io.acr.data.JiraSite>()) {
+        ctx.jiraSites.list()
+    }
+    var editando by remember { mutableStateOf<io.acr.data.JiraSite?>(null) }
+    var creando by remember { mutableStateOf(false) }
     var estado by remember { mutableStateOf<String?>(null) }
-    var probando by remember { mutableStateOf(false) }
-    val scope = androidx.compose.runtime.rememberCoroutineScope()
 
     Column(Modifier.fillMaxWidth().padding(vertical = 8.dp)) {
         Text(io.acr.i18n.t("jira.title"), style = MaterialTheme.typography.labelLarge)
@@ -265,57 +271,145 @@ private fun JiraSettings(ctx: io.acr.AppContext) {
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
         Spacer(Modifier.height(6.dp))
-        OutlinedTextField(
-            value = url,
-            onValueChange = { url = it; ctx.prefs.put(io.acr.AppContext.PREF_JIRA_URL, it.trim()) },
-            label = { Text(io.acr.i18n.t("jira.url")) },
-            placeholder = { Text("https://tuempresa.atlassian.net") },
-            singleLine = true,
-            modifier = Modifier.fillMaxWidth(),
-        )
-        Spacer(Modifier.height(6.dp))
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            OutlinedTextField(
-                value = email,
-                onValueChange = { email = it; ctx.prefs.put(io.acr.AppContext.PREF_JIRA_EMAIL, it.trim()) },
-                label = { Text(io.acr.i18n.t("jira.email")) },
-                singleLine = true,
-                modifier = Modifier.weight(1f),
-            )
-            OutlinedTextField(
-                value = token,
-                onValueChange = { token = it; ctx.prefs.put(io.acr.AppContext.PREF_JIRA_TOKEN, it.trim()) },
-                label = { Text(io.acr.i18n.t("jira.token")) },
-                singleLine = true,
-                visualTransformation = androidx.compose.ui.text.input.PasswordVisualTransformation(),
-                modifier = Modifier.weight(1f),
-            )
-        }
-        Spacer(Modifier.height(6.dp))
-        Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
-            OutlinedButton(
-                enabled = !probando && url.isNotBlank() && email.isNotBlank() && token.isNotBlank(),
-                onClick = {
-                    probando = true
-                    estado = null
-                    scope.launch {
-                        ctx.jiraClient().check()
-                            .onSuccess { estado = io.acr.i18n.t2("jira.ok", it) }
-                            .onFailure { estado = it.message ?: "falló" }
-                        probando = false
-                    }
-                },
-            ) { Text(io.acr.i18n.t("jira.check")) }
-            Spacer(Modifier.width(8.dp))
-            estado?.let {
-                Text(
-                    it,
-                    style = MaterialTheme.typography.labelSmall,
-                    color = if (it.startsWith("Conectado") || it.startsWith("Connected"))
-                        MaterialTheme.colorScheme.primary
-                    else MaterialTheme.colorScheme.error,
-                )
+
+        sitios.forEach { s ->
+            Row(Modifier.fillMaxWidth().padding(vertical = 2.dp), verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text(s.name, style = MaterialTheme.typography.bodySmall)
+                    Text(
+                        s.baseUrl + "  ·  " +
+                            (s.projects.takeIf { it.isNotEmpty() }?.joinToString(", ")
+                                ?: io.acr.i18n.t("jira.allProjects")),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                TextButton(onClick = { editando = s }) { Text(io.acr.i18n.t("common.edit")) }
+                TextButton(onClick = { ctx.jiraSites.delete(s.id); version++ }) {
+                    Text(io.acr.i18n.t("common.delete"), color = MaterialTheme.colorScheme.error)
+                }
             }
         }
+
+        Spacer(Modifier.height(4.dp))
+        OutlinedButton(onClick = { creando = true }) { Text(io.acr.i18n.t("jira.add")) }
+        estado?.let {
+            Text(it, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+
+        if (creando || editando != null) {
+            JiraSiteDialog(
+                ctx = ctx,
+                sitio = editando,
+                onDismiss = { creando = false; editando = null },
+                onSaved = { creando = false; editando = null; version++ },
+                onEstado = { estado = it },
+            )
+        }
     }
+}
+
+/** Alta y edición de un sitio, con la prueba de conexión antes de guardar a ciegas. */
+@Composable
+private fun JiraSiteDialog(
+    ctx: io.acr.AppContext,
+    sitio: io.acr.data.JiraSite?,
+    onDismiss: () -> Unit,
+    onSaved: () -> Unit,
+    onEstado: (String) -> Unit,
+) {
+    var nombre by remember { mutableStateOf(sitio?.name.orEmpty()) }
+    var url by remember { mutableStateOf(sitio?.baseUrl.orEmpty()) }
+    var email by remember { mutableStateOf(sitio?.email.orEmpty()) }
+    var token by remember { mutableStateOf("") }
+    var proyectos by remember { mutableStateOf(sitio?.projects?.joinToString(",").orEmpty()) }
+    var probando by remember { mutableStateOf(false) }
+    var resultado by remember { mutableStateOf<String?>(null) }
+    val scope = androidx.compose.runtime.rememberCoroutineScope()
+
+    androidx.compose.material3.AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(io.acr.i18n.t(if (sitio == null) "jira.add" else "jira.editSite")) },
+        text = {
+            Column(Modifier.width(560.dp)) {
+                OutlinedTextField(
+                    value = nombre, onValueChange = { nombre = it },
+                    label = { Text(io.acr.i18n.t("jira.name")) },
+                    singleLine = true, modifier = Modifier.fillMaxWidth(),
+                )
+                Spacer(Modifier.height(6.dp))
+                OutlinedTextField(
+                    value = url, onValueChange = { url = it },
+                    label = { Text(io.acr.i18n.t("jira.url")) },
+                    placeholder = { Text("https://tuempresa.atlassian.net") },
+                    singleLine = true, modifier = Modifier.fillMaxWidth(),
+                )
+                Spacer(Modifier.height(6.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedTextField(
+                        value = email, onValueChange = { email = it },
+                        label = { Text(io.acr.i18n.t("jira.email")) },
+                        singleLine = true, modifier = Modifier.weight(1f),
+                    )
+                    OutlinedTextField(
+                        value = token, onValueChange = { token = it },
+                        // Al editar, vacío significa "dejá el que está" y no "borralo".
+                        label = { Text(io.acr.i18n.t(if (sitio == null) "jira.token" else "jira.tokenKeep")) },
+                        singleLine = true,
+                        visualTransformation = androidx.compose.ui.text.input.PasswordVisualTransformation(),
+                        modifier = Modifier.weight(1f),
+                    )
+                }
+                Spacer(Modifier.height(6.dp))
+                OutlinedTextField(
+                    value = proyectos, onValueChange = { proyectos = it },
+                    label = { Text(io.acr.i18n.t("jira.projects")) },
+                    placeholder = { Text("KS,POS") },
+                    singleLine = true, modifier = Modifier.fillMaxWidth(),
+                )
+                Text(
+                    io.acr.i18n.t("jira.projectsNote"),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                resultado?.let {
+                    Spacer(Modifier.height(6.dp))
+                    Text(it, style = MaterialTheme.typography.labelSmall)
+                }
+            }
+        },
+        confirmButton = {
+            Row {
+                // Probar antes de guardar: una credencial mal puesta se descubre acá y no en la
+                // mitad de una review.
+                TextButton(
+                    enabled = !probando && url.isNotBlank() && email.isNotBlank() &&
+                        (token.isNotBlank() || sitio?.token != null),
+                    onClick = {
+                        probando = true
+                        scope.launch {
+                            val cfg = io.acr.jira.JiraConfig(url, email, token.ifBlank { sitio?.token.orEmpty() })
+                            io.acr.jira.JiraClient(cfg).check()
+                                .onSuccess { resultado = io.acr.i18n.t2("jira.ok", it) }
+                                .onFailure { resultado = it.message ?: "falló" }
+                            probando = false
+                        }
+                    },
+                ) { Text(io.acr.i18n.t("jira.check")) }
+                TextButton(
+                    enabled = url.isNotBlank() && email.isNotBlank(),
+                    onClick = {
+                        ctx.jiraSites.save(
+                            sitio?.id,
+                            nombre.ifBlank { url.removePrefix("https://").substringBefore('.') },
+                            url, email, token.takeIf { it.isNotBlank() }, proyectos,
+                        )
+                        onEstado(io.acr.i18n.t2("jira.saved"))
+                        onSaved()
+                    },
+                ) { Text(io.acr.i18n.t("common.save")) }
+            }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text(io.acr.i18n.t("common.cancel")) } },
+    )
 }
