@@ -22,37 +22,51 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import io.acr.AppContext
 import io.acr.forge.RepoRecord
 import io.acr.i18n.t
+import io.acr.impl.ImplRepo
+import io.acr.impl.Implementation
+import io.acr.impl.RepoRole
 
 /**
- * Alta de una implementación: qué construir, dónde y con qué documentos.
+ * Ajustar una implementación en marcha.
  *
- * Se puede elegir una carpeta entera además de archivos sueltos, porque las specs de algo real
- * casi nunca son un archivo: son requerimientos, mockups y un plan conviviendo en un directorio.
- * Elegirlos de a uno sería pedirle a alguien que arme a mano una lista que ya existe.
+ * Sumar un repositorio que recién se abre, corregir un parámetro, agregar una spec que faltaba:
+ * todo eso pasa a mitad de camino y no puede obligar a empezar de cero. Lo ya construido queda —su
+ * código está commiteado— y lo único que se puede tirar es el plan de lo que falta, que se armó
+ * con información distinta.
+ *
+ * Replanificar es una acción aparte y explícita: cambiar el título no debería rehacer un plan de
+ * veinte tareas, y rehacerlo solo cada vez que se toca algo sería peor que no poder tocar nada.
  */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-fun NewImplDialog(
+fun EditImplDialog(
     ctx: AppContext,
     repos: List<RepoRecord>,
+    impl: Implementation,
+    actuales: List<ImplRepo>,
     onDismiss: () -> Unit,
-    onCreated: () -> Unit,
+    onSaved: () -> Unit,
 ) {
-    var titulo by remember { mutableStateOf("") }
-    // Varios, con su rol. En orden de selección: el primero es el principal.
-    var elegidos by remember { mutableStateOf(listOf<io.acr.impl.ImplRepo>()) }
-    var rutas by remember { mutableStateOf(listOf<String>()) }
-    var extra by remember { mutableStateOf("") }
+    var titulo by remember(impl.id) { mutableStateOf(impl.title) }
+    var elegidos by remember(impl.id) { mutableStateOf(actuales) }
+    var rutas by remember(impl.id) { mutableStateOf(impl.sources) }
+    var extra by remember(impl.id) { mutableStateOf(impl.extraPrompt.orEmpty()) }
+    var replanificar by remember(impl.id) { mutableStateOf(false) }
+
+    val hechas = io.acr.ui.dbState(impl.id, initial = 0) {
+        ctx.impls.tasks(impl.id).count { it.status == io.acr.impl.TaskStatus.DONE }
+    }
 
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text(t("impl.new")) },
+        title = { Text(t("impl.edit")) },
         text = {
             Column(Modifier.width(640.dp)) {
                 OutlinedTextField(
@@ -65,11 +79,6 @@ fun NewImplDialog(
 
                 Spacer(Modifier.height(8.dp))
                 Text(t("impl.repo"), style = MaterialTheme.typography.labelSmall)
-                Text(
-                    t("impl.repoNote"),
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
                 FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                     repos.forEach { r ->
                         val puesto = elegidos.firstOrNull { it.repoId == r.id }
@@ -77,27 +86,27 @@ fun NewImplDialog(
                             selected = puesto != null,
                             onClick = {
                                 elegidos = if (puesto != null) elegidos - puesto
-                                else elegidos + io.acr.impl.ImplRepo(r.id, adivinarRol(r.name))
+                                else elegidos + ImplRepo(r.id, RepoRole.OTHER)
                             },
                             label = { Text(r.name) },
                         )
                     }
                 }
-                // El rol no cambia la ejecución: le dice al planificador qué es cada repositorio
-                // para que no proponga una pantalla en el backend.
                 elegidos.forEach { e ->
-                    Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
                         Text(
                             repos.firstOrNull { it.id == e.repoId }?.name.orEmpty(),
                             style = MaterialTheme.typography.labelSmall,
                             modifier = Modifier.width(180.dp),
                         )
                         FlowRow(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                            io.acr.impl.RepoRole.entries.forEach { rol ->
+                            RepoRole.entries.forEach { rol ->
                                 FilterChip(
                                     selected = e.role == rol,
                                     onClick = {
-                                        elegidos = elegidos.map { if (it.repoId == e.repoId) it.copy(role = rol) else it }
+                                        elegidos = elegidos.map {
+                                            if (it.repoId == e.repoId) it.copy(role = rol) else it
+                                        }
                                     },
                                     label = { Text(t(rol.labelKey), style = MaterialTheme.typography.labelSmall) },
                                 )
@@ -108,11 +117,6 @@ fun NewImplDialog(
 
                 Spacer(Modifier.height(10.dp))
                 Text(t("impl.docs"), style = MaterialTheme.typography.labelSmall)
-                Text(
-                    t("impl.docsNote"),
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
                 Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                     OutlinedButton(onClick = { elegirDocs(false)?.let { rutas = rutas + it } }) {
                         Text(t("impl.addFiles"))
@@ -122,7 +126,7 @@ fun NewImplDialog(
                     }
                 }
                 rutas.forEach { r ->
-                    Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
                         Text(
                             r,
                             style = MaterialTheme.typography.labelSmall.copy(fontFamily = FontFamily.Monospace),
@@ -132,81 +136,49 @@ fun NewImplDialog(
                         TextButton(onClick = { rutas = rutas - r }) { Text(t("common.delete")) }
                     }
                 }
-                // Cuántos .md se van a leer de verdad. Sin esto, elegir una carpeta es un acto de
-                // fe: se sabe recién cuando el plan sale mal.
-                val encontrados = remember(rutas) { io.acr.impl.loadSources(rutas).size }
-                if (rutas.isNotEmpty()) {
-                    Text(
-                        t("impl.found", encontrados),
-                        style = MaterialTheme.typography.labelSmall,
-                        color = if (encontrados == 0) MaterialTheme.colorScheme.error
-                        else MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
 
-                Spacer(Modifier.height(10.dp))
+                Spacer(Modifier.height(8.dp))
                 OutlinedTextField(
                     value = extra,
                     onValueChange = { extra = it },
                     label = { Text(t("impl.extra")) },
-                    placeholder = { Text(t("impl.extraPlaceholder")) },
-                    modifier = Modifier.fillMaxWidth().heightIn(min = 100.dp, max = 180.dp),
+                    modifier = Modifier.fillMaxWidth().heightIn(min = 80.dp, max = 160.dp),
                     textStyle = MaterialTheme.typography.bodySmall,
                 )
-                Text(
-                    t("impl.extraNote"),
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
+
+                // Lo importante del diálogo: qué pasa con lo ya hecho. Sin decirlo, cambiar un
+                // parámetro se siente como algo que puede romper el trabajo de una hora.
+                Spacer(Modifier.height(10.dp))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    FilterChip(
+                        selected = replanificar,
+                        onClick = { replanificar = !replanificar },
+                        label = { Text(t("impl.replan")) },
+                    )
+                    Spacer(Modifier.width(8.dp))
+                    Text(
+                        if (replanificar) t("impl.replanOn", hechas) else t("impl.replanOff"),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
             }
         },
         confirmButton = {
             TextButton(
                 enabled = titulo.isNotBlank() && elegidos.isNotEmpty() && rutas.isNotEmpty(),
                 onClick = {
-                    ctx.impls.create(elegidos, titulo.trim(), rutas, extra.trim().takeIf { it.isNotBlank() })
-                    onCreated()
+                    ctx.impls.update(
+                        impl.id, titulo.trim(), rutas,
+                        extra.trim().takeIf { it.isNotBlank() }, elegidos,
+                    )
+                    // Tirar el plan pendiente es opcional y sólo toca lo que no se hizo: las
+                    // tareas terminadas tienen su código commiteado y siguen existiendo.
+                    if (replanificar) ctx.impls.clearPendingPlan(impl.id)
+                    onSaved()
                 },
             ) { Text(t("common.save")) }
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text(t("common.cancel")) } },
     )
-}
-
-/**
- * Adivina el rol por el nombre del repositorio.
- *
- * Es una sugerencia y se puede cambiar de un click. Acertar la mayoría de las veces ahorra el
- * trabajo de clasificar a mano cinco repositorios cuyo nombre ya lo dice —`kubrik-erp-be`,
- * `pds-inspections-app`—, y equivocarse cuesta un toque.
- */
-private fun adivinarRol(nombre: String): io.acr.impl.RepoRole {
-    val n = nombre.lowercase()
-    return when {
-        n.endsWith("-be") || n.contains("backend") || n.contains("apirest") || n.contains("api") ->
-            io.acr.impl.RepoRole.BACKEND
-        n.endsWith("-fe") || n.contains("frontend") || n.contains("-web") || n.contains("app") ->
-            io.acr.impl.RepoRole.FRONTEND
-        else -> io.acr.impl.RepoRole.OTHER
-    }
-}
-
-/**
- * Selector nativo de archivos o carpetas.
- *
- * En macOS elegir un directorio con `FileDialog` requiere esta propiedad de sistema; sin ella el
- * diálogo deja seleccionar sólo archivos y no hay forma de apuntar a una carpeta de specs.
- */
-internal fun elegirDocs(carpeta: Boolean): List<String>? {
-    val previa = System.getProperty("apple.awt.fileDialogForDirectories")
-    if (carpeta) System.setProperty("apple.awt.fileDialogForDirectories", "true")
-    return try {
-        val d = java.awt.FileDialog(null as java.awt.Frame?, if (carpeta) "Elegí la carpeta" else "Elegí los .md")
-        d.isMultipleMode = !carpeta
-        d.isVisible = true
-        d.files?.map { it.absolutePath }?.takeIf { it.isNotEmpty() }
-    } finally {
-        if (previa == null) System.clearProperty("apple.awt.fileDialogForDirectories")
-        else System.setProperty("apple.awt.fileDialogForDirectories", previa)
-    }
 }

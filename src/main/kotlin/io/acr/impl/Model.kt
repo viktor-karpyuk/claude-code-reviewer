@@ -163,6 +163,8 @@ data class ImplTask(
     val costUsd: Double?,
     val startedAt: String?,
     val finishedAt: String?,
+    /** Qué tocó, tomado del commit. Null en las tareas que no llegaron a commitear. */
+    val diff: TaskDiff? = null,
 ) {
     /** Cuánto tardó de verdad, en minutos. Null mientras no haya terminado. */
     val actualMin: Double?
@@ -174,6 +176,60 @@ data class ImplTask(
                     .toMillis() / 60_000.0
             }.getOrNull()
         }
+}
+
+/**
+ * Qué archivos tocó una tarea y cuánto código movió.
+ *
+ * Se separa creado de modificado porque no son lo mismo al revisar: cuatro archivos nuevos son
+ * una superficie nueva que mirar entera, y dos modificados son un diff que leer. Un solo número
+ * de "archivos tocados" borra esa diferencia.
+ */
+data class TaskDiff(
+    val filesAdded: Int,
+    val filesModified: Int,
+    val filesDeleted: Int,
+    val linesAdded: Int,
+    val linesDeleted: Int,
+    /** Una línea por archivo: `A|src/Foo.kt|120|0`. Es lo que muestra el detalle. */
+    val files: List<FileChange>,
+) {
+    val filesTouched: Int get() = filesAdded + filesModified + filesDeleted
+    val linesTouched: Int get() = linesAdded + linesDeleted
+}
+
+/** Un archivo del commit de una tarea. */
+data class FileChange(val status: Char, val path: String, val added: Int, val deleted: Int)
+
+/**
+ * El esfuerzo total de una implementación: tiempo, código y archivos.
+ *
+ * Suma lo de las tareas terminadas. Las que fallaron no cuentan: su trabajo no quedó, y sumarlo
+ * diría que se produjo algo que no está.
+ */
+data class Effort(
+    val minutes: Double,
+    val costUsd: Double,
+    val filesAdded: Int,
+    val filesModified: Int,
+    val filesDeleted: Int,
+    val linesAdded: Int,
+    val linesDeleted: Int,
+) {
+    val filesTouched: Int get() = filesAdded + filesModified + filesDeleted
+}
+
+fun effortOf(tasks: List<ImplTask>): Effort {
+    val hechas = tasks.filter { it.status == TaskStatus.DONE }
+    return Effort(
+        minutes = hechas.mapNotNull { it.actualMin }.sum(),
+        costUsd = hechas.sumOf { it.costUsd ?: 0.0 },
+        filesAdded = hechas.sumOf { it.diff?.filesAdded ?: 0 },
+        filesModified = hechas.sumOf { it.diff?.filesModified ?: 0 },
+        filesDeleted = hechas.sumOf { it.diff?.filesDeleted ?: 0 },
+        linesAdded = hechas.sumOf { it.diff?.linesAdded ?: 0 },
+        linesDeleted = hechas.sumOf { it.diff?.linesDeleted ?: 0 },
+    )
 }
 
 /**

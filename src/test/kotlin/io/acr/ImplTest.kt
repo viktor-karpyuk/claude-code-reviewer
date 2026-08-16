@@ -392,3 +392,135 @@ class ImplProgressLiveTest {
         assertEquals(0f, io.acr.impl.progressOf(emptyList()).fraction(emptyList(), ahora))
     }
 }
+
+/**
+ * Qué tocó cada tarea, y poder ajustar la implementación sin perder lo hecho.
+ */
+class ImplDetailTest {
+
+    private fun conRepo(block: (AppContext, String) -> Unit) {
+        val dir = java.nio.file.Files.createTempDirectory("acr-impl-d")
+        val ctx = AppContext.bootstrap(dir)
+        try {
+            val repoId = ctx.repos.create(
+                "tmp-d-${System.nanoTime()}", Provider.BITBUCKET, "acme", "demo",
+                System.getProperty("java.io.tmpdir"), null, null, null, "", false,
+                io.acr.forge.SkipRules(), io.acr.forge.ReplyMode.OFF,
+            )
+            block(ctx, repoId)
+        } finally {
+            ctx.close()
+            dir.toFile().deleteRecursively()
+        }
+    }
+
+    private fun t(seq: Int) = ImplTask(
+        "", "", null, seq, "t$seq", "", emptyList(), TaskSize.M, 15, TaskStatus.PENDING,
+        null, null, null, null, null, null,
+    )
+
+    @Test
+    fun whatATaskTouchedSurvivesTheBranch() = conRepo { ctx, repoId ->
+        // Se guarda al commitear y no se le pregunta a git al mirar: así sigue estando aunque la
+        // rama se borre, y no cuesta una llamada por fila cada vez que se abre la pantalla.
+        val id = ctx.impls.create(
+            listOf(io.acr.impl.ImplRepo(repoId, io.acr.impl.RepoRole.BACKEND)), "f", listOf("/x"), null,
+        )
+        ctx.impls.savePlan(id, "s", "b", "develop", "m", listOf(t(1)))
+        val tarea = ctx.impls.tasks(id).single()
+        ctx.impls.startTask(tarea.id)
+        ctx.impls.finishTask(
+            tarea.id, "abc1234", "hecho", 0.4,
+            diff = io.acr.impl.TaskDiff(
+                filesAdded = 2, filesModified = 1, filesDeleted = 0,
+                linesAdded = 120, linesDeleted = 8,
+                files = listOf(
+                    io.acr.impl.FileChange('A', "src/Nuevo.kt", 100, 0),
+                    io.acr.impl.FileChange('A', "src/Otro.kt", 15, 0),
+                    io.acr.impl.FileChange('M', "src/Viejo.kt", 5, 8),
+                ),
+            ),
+        )
+
+        val d = assertNotNull(ctx.impls.tasks(id).single().diff)
+        assertEquals(2, d.filesAdded)
+        assertEquals(1, d.filesModified)
+        assertEquals(3, d.filesTouched)
+        assertEquals(128, d.linesTouched)
+        assertEquals(3, d.files.size, "y los archivos uno por uno, que es lo que sirve para revisar")
+        assertEquals("src/Nuevo.kt", d.files.first().path)
+    }
+
+    @Test
+    fun theEffortOnlyCountsWhatActuallyLanded() = conRepo { ctx, repoId ->
+        // Una tarea fallida no dejó código: sumar su esfuerzo diría que se produjo algo que no está.
+        val id = ctx.impls.create(
+            listOf(io.acr.impl.ImplRepo(repoId, io.acr.impl.RepoRole.BACKEND)), "f", listOf("/x"), null,
+        )
+        ctx.impls.savePlan(id, "s", "b", "develop", "m", listOf(t(1), t(2)))
+        val ts = ctx.impls.tasks(id)
+        ctx.impls.startTask(ts[0].id)
+        ctx.impls.finishTask(
+            ts[0].id, "sha", "ok", 1.0,
+            diff = io.acr.impl.TaskDiff(1, 0, 0, 50, 0, listOf(io.acr.impl.FileChange('A', "a.kt", 50, 0))),
+        )
+        ctx.impls.failTask(ts[1].id, "se cayó", 0.9)
+
+        val e = io.acr.impl.effortOf(ctx.impls.tasks(id))
+        assertEquals(1, e.filesAdded)
+        assertEquals(50, e.linesAdded)
+        assertEquals(1.0, e.costUsd, "el consumo de la fallida no cuenta como esfuerzo entregado")
+    }
+
+    @Test
+    fun addingARepositoryLaterDoesNotThrowAwayTheWork() = conRepo { ctx, repoId ->
+        // Abrir un repositorio nuevo a mitad de camino es normal y no puede obligar a empezar de
+        // cero: lo ya construido tiene su código commiteado.
+        val otro = ctx.repos.create(
+            "fe3-${System.nanoTime()}", Provider.BITBUCKET, "acme", "fe",
+            System.getProperty("java.io.tmpdir"), null, null, null, "", false,
+            io.acr.forge.SkipRules(), io.acr.forge.ReplyMode.OFF,
+        )
+        val id = ctx.impls.create(
+            listOf(io.acr.impl.ImplRepo(repoId, io.acr.impl.RepoRole.BACKEND)), "f", listOf("/x"), null,
+        )
+        ctx.impls.savePlan(id, "s", "b", "develop", "m", listOf(t(1), t(2)))
+        val ts = ctx.impls.tasks(id)
+        ctx.impls.startTask(ts[0].id)
+        ctx.impls.finishTask(ts[0].id, "sha1", "ok", 0.5)
+
+        ctx.impls.update(
+            id, "f con frontend", listOf("/x", "/y"), "sin librerías nuevas",
+            listOf(
+                io.acr.impl.ImplRepo(repoId, io.acr.impl.RepoRole.BACKEND),
+                io.acr.impl.ImplRepo(otro, io.acr.impl.RepoRole.FRONTEND),
+            ),
+        )
+
+        val impl = assertNotNull(ctx.impls.get(id))
+        assertEquals("f con frontend", impl.title)
+        assertEquals(listOf("/x", "/y"), impl.sources)
+        assertEquals(2, ctx.impls.reposOf(id).size)
+        assertEquals(2, ctx.impls.tasks(id).size, "las tareas siguen ahí")
+        assertEquals(TaskStatus.DONE, ctx.impls.tasks(id).first { it.seq == 1 }.status)
+    }
+
+    @Test
+    fun replanningKeepsWhatWasBuiltAndDropsWhatWasNot() = conRepo { ctx, repoId ->
+        val id = ctx.impls.create(
+            listOf(io.acr.impl.ImplRepo(repoId, io.acr.impl.RepoRole.BACKEND)), "f", listOf("/x"), null,
+        )
+        ctx.impls.savePlan(id, "s", "b", "develop", "m", listOf(t(1), t(2), t(3)))
+        val ts = ctx.impls.tasks(id)
+        ctx.impls.startTask(ts[0].id)
+        ctx.impls.finishTask(ts[0].id, "sha1", "ok", 0.5)
+        ctx.impls.failTask(ts[1].id, "se cayó")
+
+        ctx.impls.clearPendingPlan(id)
+
+        val quedan = ctx.impls.tasks(id)
+        assertEquals(1, quedan.size, "sólo la terminada: su código está commiteado")
+        assertEquals(TaskStatus.DONE, quedan.single().status)
+        assertEquals(io.acr.impl.ImplStatus.DRAFT, assertNotNull(ctx.impls.get(id)).status)
+    }
+}

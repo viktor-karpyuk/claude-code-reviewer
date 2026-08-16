@@ -937,6 +937,23 @@ class Store(private val dbPath: Path) : AutoCloseable {
             INSERT INTO impl_repo(impl_id, repo_id, role)
                 SELECT id, repo_id, 'OTHER' FROM implementation
             """.trimIndent(),
+
+            // v49 — qué tocó cada tarea.
+            //
+            // "La tarea 7 está lista" no dice nada; "creó cuatro archivos y modificó dos, 320
+            // líneas" sí. Y es lo único con lo que se puede revisar sin abrir el repositorio.
+            //
+            // Se guarda al commitear y no se calcula al mirar: el commit ya está hecho y
+            // preguntarle a git por cada tarea cada vez que se abre la pantalla sería una llamada
+            // por fila. Además así sobrevive a que la rama se borre.
+            """
+            ALTER TABLE impl_task ADD COLUMN files_added INTEGER;--split--
+            ALTER TABLE impl_task ADD COLUMN files_modified INTEGER;--split--
+            ALTER TABLE impl_task ADD COLUMN files_deleted INTEGER;--split--
+            ALTER TABLE impl_task ADD COLUMN lines_added INTEGER;--split--
+            ALTER TABLE impl_task ADD COLUMN lines_deleted INTEGER;--split--
+            ALTER TABLE impl_task ADD COLUMN files_detail TEXT
+            """.trimIndent(),
         )
     }
 }

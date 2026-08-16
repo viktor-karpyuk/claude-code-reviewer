@@ -50,6 +50,64 @@ class ImplRepository(private val store: Store) {
         return id
     }
 
+    /**
+     * Cambia lo que define una implementación sin tocar lo ya hecho.
+     *
+     * No borra tareas ni commits: sumar un repositorio o corregir un parámetro a mitad de camino
+     * es normal, y obligar a empezar de cero por eso tiraría el trabajo hecho. Lo que sí queda
+     * viejo es el plan —se armó con otra información—, así que el que replanifica decide cuándo.
+     */
+    fun update(
+        id: String,
+        title: String,
+        sources: List<String>,
+        extra: String?,
+        repos: List<io.acr.impl.ImplRepo>,
+    ) {
+        store.transaction { conn ->
+            conn.prepareStatement(
+                "UPDATE implementation SET title = ?, sources = ?, extra_prompt = ?, repo_id = ? WHERE id = ?",
+            ).use { ps ->
+                ps.setString(1, title)
+                ps.setString(2, sources.joinToString("\n"))
+                ps.setString(3, extra)
+                ps.setString(4, repos.first().repoId)
+                ps.setString(5, id)
+                ps.executeUpdate()
+            }
+            conn.prepareStatement("DELETE FROM impl_repo WHERE impl_id = ?").use { ps ->
+                ps.setString(1, id); ps.executeUpdate()
+            }
+            repos.forEach { r ->
+                conn.prepareStatement(
+                    "INSERT OR REPLACE INTO impl_repo(impl_id, repo_id, role) VALUES (?,?,?)",
+                ).use { ps ->
+                    ps.setString(1, id); ps.setString(2, r.repoId); ps.setString(3, r.role.name)
+                    ps.executeUpdate()
+                }
+            }
+        }
+    }
+
+    /**
+     * Borra el plan para poder rehacerlo, conservando lo ya construido.
+     *
+     * Las tareas terminadas no se tocan: su código está commiteado y sigue existiendo. Se quitan
+     * las que no llegaron a hacerse, que son las que el plan nuevo va a reemplazar.
+     */
+    fun clearPendingPlan(implId: String) {
+        store.transaction { conn ->
+            conn.prepareStatement(
+                "DELETE FROM impl_task WHERE impl_id = ? AND status IN ('PENDING','FAILED','BLOCKED')",
+            ).use { ps -> ps.setString(1, implId); ps.executeUpdate() }
+            conn.prepareStatement(
+                "UPDATE implementation SET status = ?, error = NULL WHERE id = ?",
+            ).use { ps ->
+                ps.setString(1, ImplStatus.DRAFT.name); ps.setString(2, implId); ps.executeUpdate()
+            }
+        }
+    }
+
     /** Los repositorios de una implementación, con su rol. */
     fun reposOf(implId: String): List<io.acr.impl.ImplRepo> =
         store.stmt("SELECT repo_id, role FROM impl_repo WHERE impl_id = ?") { ps ->
@@ -136,7 +194,9 @@ class ImplRepository(private val store: Store) {
     fun tasks(implId: String): List<ImplTask> =
         store.stmt(
             """SELECT id, impl_id, seq, title, detail, depends_on, size, estimate_min, status,
-                      commit_sha, result, error, cost_usd, started_at, finished_at, repo_id
+                      commit_sha, result, error, cost_usd, started_at, finished_at, repo_id,
+                      files_added, files_modified, files_deleted, lines_added, lines_deleted,
+                      files_detail
                  FROM impl_task WHERE impl_id = ? ORDER BY seq""",
         ) { ps ->
             ps.setString(1, implId)
@@ -163,6 +223,24 @@ class ImplRepository(private val store: Store) {
                                 costUsd = rs.getObject(13)?.let { rs.getDouble(13) },
                                 startedAt = rs.getString(14),
                                 finishedAt = rs.getString(15),
+                                diff = rs.getObject(17)?.let {
+                                    io.acr.impl.TaskDiff(
+                                        filesAdded = rs.getInt(17),
+                                        filesModified = rs.getInt(18),
+                                        filesDeleted = rs.getInt(19),
+                                        linesAdded = rs.getInt(20),
+                                        linesDeleted = rs.getInt(21),
+                                        files = rs.getString(22).orEmpty().lines()
+                                            .mapNotNull { l ->
+                                                val p = l.split('|')
+                                                if (p.size < 4) null
+                                                else io.acr.impl.FileChange(
+                                                    p[0].firstOrNull() ?: 'M', p[1],
+                                                    p[2].toIntOrNull() ?: 0, p[3].toIntOrNull() ?: 0,
+                                                )
+                                            },
+                                    )
+                                },
                             ),
                         )
                     }
@@ -227,17 +305,40 @@ class ImplRepository(private val store: Store) {
         }
     }
 
-    fun finishTask(taskId: String, commitSha: String?, result: String?, costUsd: Double?) {
+    fun finishTask(
+        taskId: String,
+        commitSha: String?,
+        result: String?,
+        costUsd: Double?,
+        diff: io.acr.impl.TaskDiff? = null,
+    ) {
         store.stmt(
             """UPDATE impl_task SET status = ?, commit_sha = ?, result = ?, cost_usd = ?,
-                   finished_at = ? WHERE id = ?""",
+                   finished_at = ?, files_added = ?, files_modified = ?, files_deleted = ?,
+                   lines_added = ?, lines_deleted = ?, files_detail = ? WHERE id = ?""",
         ) { ps ->
             ps.setString(1, TaskStatus.DONE.name)
             ps.setString(2, commitSha)
             ps.setString(3, result)
             if (costUsd == null) ps.setNull(4, java.sql.Types.REAL) else ps.setDouble(4, costUsd)
             ps.setString(5, Instant.now().toString())
-            ps.setString(6, taskId)
+            if (diff == null) {
+                (6..10).forEach { ps.setNull(it, java.sql.Types.INTEGER) }
+                ps.setNull(11, java.sql.Types.VARCHAR)
+            } else {
+                ps.setInt(6, diff.filesAdded)
+                ps.setInt(7, diff.filesModified)
+                ps.setInt(8, diff.filesDeleted)
+                ps.setInt(9, diff.linesAdded)
+                ps.setInt(10, diff.linesDeleted)
+                // Una línea por archivo. Se guarda el detalle y no sólo los totales porque lo que
+                // sirve para revisar es cuáles, no cuántos.
+                ps.setString(
+                    11,
+                    diff.files.joinToString("\n") { f -> f.status.toString() + "|" + f.path + "|" + f.added + "|" + f.deleted },
+                )
+            }
+            ps.setString(12, taskId)
             ps.executeUpdate()
         }
     }

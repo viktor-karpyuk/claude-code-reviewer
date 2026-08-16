@@ -197,6 +197,39 @@ object Git {
         run(dir, listOf("git", "rev-parse", "HEAD")).takeIf { it.ok }?.output?.trim()
     }
 
+    /**
+     * Qué archivos tocó un commit, con su estado y sus líneas.
+     *
+     * Dos llamadas y no una: `--numstat` da las líneas y `--name-status` la letra —A, M, D—, y git
+     * no las mezcla en una salida que se pueda parsear sin ambigüedad. Se hace una sola vez, al
+     * commitear, no cada vez que alguien mira la pantalla.
+     */
+    suspend fun commitStats(dir: File, sha: String): List<io.acr.impl.FileChange> =
+        withContext(Dispatchers.IO) {
+            val nums = run(dir, listOf("git", "show", "--numstat", "--format=", sha))
+            if (!nums.ok) return@withContext emptyList()
+            val estados = run(dir, listOf("git", "show", "--name-status", "--format=", sha))
+                .takeIf { it.ok }?.output.orEmpty()
+                .lineSequence().mapNotNull { l ->
+                    val p = l.trim().split('\t')
+                    if (p.size < 2) null else resolveRenamed(p.last()) to p[0].firstOrNull()
+                }.toMap()
+
+            nums.output.lineSequence().mapNotNull { linea ->
+                val p = linea.trim().split('\t')
+                if (p.size < 3) return@mapNotNull null
+                val ruta = resolveRenamed(p[2])
+                io.acr.impl.FileChange(
+                    // Si no se encontró la letra se asume modificado: es el caso más común y el
+                    // menos afirmativo de los tres.
+                    status = estados[ruta] ?: 'M',
+                    path = ruta,
+                    added = p[0].toIntOrNull() ?: 0,
+                    deleted = p[1].toIntOrNull() ?: 0,
+                )
+            }.toList()
+        }
+
     /** El commit en el que está parado el clon. Sirve para anotar hasta dónde se procesó. */
     suspend fun currentHead(dir: File): String? = withContext(Dispatchers.IO) {
         run(dir, listOf("git", "rev-parse", "HEAD")).takeIf { it.ok }?.output?.trim()

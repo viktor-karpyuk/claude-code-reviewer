@@ -3,6 +3,40 @@
 Reglas de numeración en [CLAUDE.md](CLAUDE.md): un requerimiento **nuevo** incrementa *major*;
 cambiar uno **existente** incrementa *patch*.
 
+## 58.0.0
+
+Dos requerimientos nuevos en el **Constructor**: las tareas como tabla con su detalle, y poder
+ajustar una implementación en marcha.
+
+### Las tareas dejan de ser una lista de texto
+
+Ahora son una tabla, con **tilde verde** en las terminadas y columnas que dicen lo que importa:
+tiempo **real contra estimado**, archivos tocados separados en creados / modificados / borrados, y
+líneas.
+
+**Cada fila se abre** y muestra qué hizo esa tarea: el resumen, **la lista de archivos uno por uno**
+con su letra y sus líneas, y el commit. Es lo que permite revisar sin abrir el repositorio.
+
+Creados y modificados van separados a propósito: cuatro archivos nuevos son superficie nueva para
+mirar entera, y dos modificados son un diff que leer. Un solo número de "archivos tocados" borra
+esa diferencia.
+
+Arriba de la tabla, el **esfuerzo invertido**: tiempo, consumo, archivos y líneas. Sólo cuenta lo
+que quedó — una tarea fallida no dejó código, y sumar su esfuerzo diría que se produjo algo que no
+está.
+
+Los datos se toman del commit al terminar cada tarea y se guardan. Preguntarle a git en cada
+apertura de pantalla sería una llamada por fila, y así sobreviven a que la rama se borre.
+
+### Ajustar sin perder lo hecho
+
+Se puede **editar** una implementación en marcha: sumar un repositorio que recién se abrió, corregir
+un parámetro, agregar una spec que faltaba. Nada de eso puede obligar a empezar de cero.
+
+Lo ya construido queda —su código está commiteado— y **rehacer el plan es una decisión aparte**: al
+guardar se elige si se descartan las tareas pendientes o si el plan actual sigue. Replanificar solo
+cada vez que se toca el título rehaco un plan de veinte tareas por nada.
+
 ## 57.1.0
 
 El progreso del Constructor **se mueve mientras trabaja**.

@@ -331,7 +331,23 @@ class ImplEngine(
                     log(implId, "  (sin cambios en el árbol)")
                     null
                 }
-                impls.finishTask(tarea.id, sha, salida.summary.take(4_000), res.costUsd)
+                // Qué tocó, tomado del commit recién hecho. Se guarda ahora y no se calcula al
+                // mirar: preguntarle a git por cada tarea en cada apertura sería una llamada por
+                // fila, y así sobrevive a que la rama se borre.
+                val cambios = sha?.let { s -> runCatching { Git.commitStats(dir, s) }.getOrDefault(emptyList()) }
+                impls.finishTask(
+                    tarea.id, sha, salida.summary.take(4_000), res.costUsd,
+                    diff = cambios?.takeIf { it.isNotEmpty() }?.let { fs ->
+                        io.acr.impl.TaskDiff(
+                            filesAdded = fs.count { it.status == 'A' },
+                            filesModified = fs.count { it.status != 'A' && it.status != 'D' },
+                            filesDeleted = fs.count { it.status == 'D' },
+                            linesAdded = fs.sumOf { it.added },
+                            linesDeleted = fs.sumOf { it.deleted },
+                            files = fs,
+                        )
+                    },
+                )
                 log(implId, "✓ ${tarea.seq}. ${tarea.title}${sha?.let { " · ${it.take(7)}" }.orEmpty()}")
             }
         }.onFailure {

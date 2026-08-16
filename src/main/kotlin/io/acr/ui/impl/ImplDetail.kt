@@ -5,6 +5,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -62,6 +63,7 @@ fun ImplDetail(
 ) {
     val scope = androidx.compose.runtime.rememberCoroutineScope()
     var version by remember(implId) { mutableStateOf(0) }
+    var editando by remember(implId) { mutableStateOf(false) }
     val progreso by ctx.implEngine.progress.collectAsState()
     val vivo = progreso[implId]
 
@@ -114,7 +116,21 @@ fun ImplDetail(
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
+            // Ajustar sin perder lo hecho: cambiar un parámetro o sumar un repositorio no puede
+            // obligar a empezar de cero.
+            TextButton(onClick = { editando = true }) { Text(t("common.edit")) }
             EstadoBadge(impl.status)
+        }
+
+        if (editando) {
+            EditImplDialog(
+                ctx = ctx,
+                repos = repos,
+                impl = impl,
+                actuales = suyos,
+                onDismiss = { editando = false },
+                onSaved = { editando = false; version++ },
+            )
         }
 
         Spacer(Modifier.height(10.dp))
@@ -213,48 +229,65 @@ fun ImplDetail(
             }
         }
 
-        // --- Tareas ---
-        Spacer(Modifier.height(12.dp))
+        // --- Esfuerzo invertido ---
+        val esfuerzo = remember(tareas) { io.acr.impl.effortOf(tareas) }
+        if (esfuerzo.filesTouched > 0 || esfuerzo.minutes > 0) {
+            Spacer(Modifier.height(12.dp))
+            Text(t("impl.effort"), style = MaterialTheme.typography.titleSmall)
+            Spacer(Modifier.height(4.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(18.dp)) {
+                Metrica(t("impl.mTime"), "${esfuerzo.minutes.toInt()} min")
+                Metrica(t("impl.mCost"), "$" + "%.2f".format(esfuerzo.costUsd))
+                // Creado y modificado separados: cuatro archivos nuevos son superficie nueva para
+                // mirar entera, y dos modificados son un diff que leer. No son lo mismo.
+                Metrica(t("impl.mNew"), esfuerzo.filesAdded.toString())
+                Metrica(t("impl.mChanged"), esfuerzo.filesModified.toString())
+                if (esfuerzo.filesDeleted > 0) Metrica(t("impl.mDeleted"), esfuerzo.filesDeleted.toString())
+                Metrica(t("impl.mLines"), "+${esfuerzo.linesAdded} / −${esfuerzo.linesDeleted}")
+            }
+        }
+
+        // --- Tareas, como tabla ---
+        Spacer(Modifier.height(14.dp))
+        Row(Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
+            Spacer(Modifier.width(30.dp))
+            Text(
+                t("impl.thTask"),
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.weight(1f),
+            )
+            if (misRepos.size > 1) Cab(t("impl.thRepo"), 110.dp)
+            Cab(t("impl.thTime"), 110.dp)
+            Cab(t("impl.thFiles"), 110.dp)
+            Cab(t("impl.thLines"), 110.dp)
+            Spacer(Modifier.width(34.dp))
+        }
+        HorizontalDivider()
+
         tareas.forEach { tar ->
-            Row(Modifier.fillMaxWidth().padding(vertical = 3.dp), verticalAlignment = Alignment.Top) {
-                Text(
-                    marca(tar.status),
-                    style = MaterialTheme.typography.labelMedium,
-                    color = colorDe(tar.status),
-                    modifier = Modifier.width(26.dp),
-                )
-                Column(Modifier.weight(1f)) {
+            var abierta by remember(tar.id) { mutableStateOf(false) }
+            val puedeAbrir = tar.diff != null || !tar.result.isNullOrBlank() || !tar.error.isNullOrBlank()
+            Column {
+                Row(
+                    Modifier.fillMaxWidth()
+                        .let { if (puedeAbrir) it.clickable { abierta = !abierta } else it }
+                        .padding(vertical = 6.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    // El tilde verde de terminada, que es lo que se busca al barrer la lista.
                     Text(
-                        "${tar.seq}. ${tar.title}" +
-                            // Con un solo repositorio el nombre no aporta; con varios es lo
-                            // primero que uno busca al leer una tarea.
-                            (if (misRepos.size > 1) {
-                                misRepos.firstOrNull { it.id == tar.repoId }?.let { "  [${it.name}]" }.orEmpty()
-                            } else ""),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = if (tar.status == TaskStatus.PENDING)
-                            MaterialTheme.colorScheme.onSurfaceVariant
-                        else MaterialTheme.colorScheme.onSurface,
+                        marca(tar.status),
+                        style = MaterialTheme.typography.labelMedium,
+                        color = colorDe(tar.status),
+                        modifier = Modifier.width(30.dp),
                     )
-                    // Estimado contra real, en la misma línea: es la única forma de que la
-                    // estimación mejore, porque se ve cuánto se equivocó.
-                    val est = tar.estimateMin ?: tar.size?.minutes
-                    val real = tar.actualMin
-                    // La que corre muestra su propio reloj contra su estimación: es lo único que
-                    // dice si esta tarea puntual se está yendo de largo.
-                    tar.runningMin()?.let { va ->
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            LinearProgressIndicator(
-                                progress = {
-                                    if (est == null || est <= 0) 0f
-                                    else (va / est).coerceIn(0.0, 1.0).toFloat()
-                                },
-                                modifier = Modifier.width(120.dp).height(3.dp),
-                            )
-                            Spacer(Modifier.width(8.dp))
+                    Column(Modifier.weight(1f)) {
+                        Text("${tar.seq}. ${tar.title}", style = MaterialTheme.typography.bodySmall)
+                        tar.runningMin()?.let { va ->
+                            val est = tar.estimateMin ?: tar.size?.minutes
                             Text(
-                                t("impl.runningFor", va.toInt()) +
-                                    (est?.let { " / $it" }.orEmpty()) +
+                                t("impl.runningFor", va.toInt()) + (est?.let { " / $it" }.orEmpty()) +
                                     (if (est != null && va > est) "  " + t("impl.overrun") else ""),
                                 style = MaterialTheme.typography.labelSmall,
                                 color = if (est != null && va > est) io.acr.ui.stats.ChartColors.major
@@ -262,42 +295,115 @@ fun ImplDetail(
                             )
                         }
                     }
-                    if (est != null || real != null) {
-                        Text(
-                            listOfNotNull(
-                                est?.let { t("impl.est", it) },
-                                real?.let { t("impl.real", it.toInt()) },
-                                tar.commitSha?.take(7),
-                            ).joinToString("  ·  "),
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
+                    if (misRepos.size > 1) {
+                        Celda(misRepos.firstOrNull { it.id == tar.repoId }?.name.orEmpty(), 110.dp)
                     }
-                    tar.error?.takeIf { it.isNotBlank() }?.let { err ->
-                        Row(verticalAlignment = Alignment.CenterVertically) {
+                    // Estimado y real juntos: es lo que hace que la estimación mejore.
+                    Celda(
+                        tar.actualMin?.let { "${it.toInt()}′" }?.plus(
+                            (tar.estimateMin ?: tar.size?.minutes)?.let { " / $it′" }.orEmpty(),
+                        ) ?: (tar.estimateMin ?: tar.size?.minutes)?.let { "~$it′" } ?: "—",
+                        110.dp,
+                    )
+                    Celda(
+                        tar.diff?.let { d ->
+                            listOfNotNull(
+                                d.filesAdded.takeIf { it > 0 }?.let { "+$it" },
+                                d.filesModified.takeIf { it > 0 }?.let { "~$it" },
+                                d.filesDeleted.takeIf { it > 0 }?.let { "−$it" },
+                            ).joinToString(" ").ifBlank { "—" }
+                        } ?: "—",
+                        110.dp,
+                    )
+                    Celda(
+                        tar.diff?.let { "+${it.linesAdded}/−${it.linesDeleted}" } ?: "—",
+                        110.dp,
+                    )
+                    Text(
+                        if (!puedeAbrir) "" else if (abierta) "▾" else "▸",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.width(34.dp),
+                    )
+                }
+
+                if (abierta) {
+                    Column(Modifier.padding(start = 30.dp, bottom = 8.dp)) {
+                        tar.result?.takeIf { it.isNotBlank() }?.let {
+                            Text(it, style = MaterialTheme.typography.bodySmall)
+                            Spacer(Modifier.height(6.dp))
+                        }
+                        // Los archivos, uno por línea con su letra: es lo que permite revisar sin
+                        // abrir el repositorio.
+                        tar.diff?.files?.forEach { f ->
+                            Row(Modifier.fillMaxWidth().padding(vertical = 1.dp)) {
+                                Text(
+                                    f.status.toString(),
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = when (f.status) {
+                                        'A' -> io.acr.ui.stats.ChartColors.added
+                                        'D' -> io.acr.ui.stats.ChartColors.deleted
+                                        else -> MaterialTheme.colorScheme.onSurfaceVariant
+                                    },
+                                    modifier = Modifier.width(20.dp),
+                                )
+                                Text(
+                                    f.path,
+                                    style = MaterialTheme.typography.labelSmall
+                                        .copy(fontFamily = FontFamily.Monospace),
+                                    modifier = Modifier.weight(1f),
+                                    maxLines = 1,
+                                )
+                                Text(
+                                    "+${f.added}",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = io.acr.ui.stats.ChartColors.added,
+                                    modifier = Modifier.width(56.dp),
+                                    textAlign = androidx.compose.ui.text.style.TextAlign.End,
+                                )
+                                Text(
+                                    "−${f.deleted}",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = io.acr.ui.stats.ChartColors.deleted,
+                                    modifier = Modifier.width(56.dp),
+                                    textAlign = androidx.compose.ui.text.style.TextAlign.End,
+                                )
+                            }
+                        }
+                        tar.commitSha?.let {
+                            Spacer(Modifier.height(4.dp))
                             Text(
-                                err.take(240),
-                                style = MaterialTheme.typography.labelSmall,
-                                color = if (tar.status == TaskStatus.BLOCKED)
-                                    io.acr.ui.stats.ChartColors.major
-                                else MaterialTheme.colorScheme.error,
-                                modifier = Modifier.weight(1f),
+                                it.take(10),
+                                style = MaterialTheme.typography.labelSmall
+                                    .copy(fontFamily = FontFamily.Monospace),
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
-                            if (tar.status == TaskStatus.FAILED) {
+                        }
+                        tar.error?.takeIf { it.isNotBlank() }?.let { err ->
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text(
+                                    err,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = if (tar.status == TaskStatus.BLOCKED)
+                                        io.acr.ui.stats.ChartColors.major
+                                    else MaterialTheme.colorScheme.error,
+                                    modifier = Modifier.weight(1f),
+                                )
                                 TextButton(onClick = {
                                     java.awt.Toolkit.getDefaultToolkit().systemClipboard
                                         .setContents(java.awt.datatransfer.StringSelection(err), null)
                                 }) { Text(t("common.copyError")) }
                             }
                         }
-                    }
-                }
-                if (tar.status == TaskStatus.FAILED) {
-                    TextButton(onClick = { ctx.impls.resetTask(tar.id); version++ }) {
-                        Text(t("impl.retry"))
+                        if (tar.status == TaskStatus.FAILED) {
+                            TextButton(onClick = { ctx.impls.resetTask(tar.id); version++ }) {
+                                Text(t("impl.retry"))
+                            }
+                        }
                     }
                 }
             }
+            HorizontalDivider()
         }
 
         // --- Feed en vivo ---
@@ -382,6 +488,41 @@ private fun QuestionCard(ctx: AppContext, q: io.acr.impl.ImplQuestion, onAnswere
 /** ¿Hay algo corriendo? Decide si el reloj tiene que seguir tictaqueando. */
 private fun corriendoAlgo(tareas: List<io.acr.impl.ImplTask>): Boolean =
     tareas.any { it.status == TaskStatus.RUNNING }
+
+/** Encabezado de columna de ancho fijo. */
+@Composable
+private fun Cab(texto: String, ancho: androidx.compose.ui.unit.Dp) {
+    Text(
+        texto,
+        style = MaterialTheme.typography.labelSmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        modifier = Modifier.width(ancho),
+    )
+}
+
+/** Una celda numérica de la tabla. */
+@Composable
+private fun Celda(texto: String, ancho: androidx.compose.ui.unit.Dp) {
+    Text(
+        texto,
+        style = MaterialTheme.typography.labelSmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        modifier = Modifier.width(ancho),
+    )
+}
+
+/** Una cifra del bloque de esfuerzo. */
+@Composable
+private fun Metrica(titulo: String, valor: String) {
+    Column {
+        Text(valor, style = MaterialTheme.typography.bodyMedium)
+        Text(
+            titulo,
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
+}
 
 private fun marca(s: TaskStatus): String = when (s) {
     TaskStatus.DONE -> "✓"
