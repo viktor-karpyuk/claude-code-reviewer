@@ -40,7 +40,9 @@ import io.acr.AppContext
 import io.acr.i18n.t
 import io.acr.impl.ImplStatus
 import io.acr.impl.TaskStatus
+import io.acr.impl.fraction
 import io.acr.impl.progressOf
+import io.acr.impl.runningMin
 import kotlinx.coroutines.launch
 
 /**
@@ -72,7 +74,22 @@ fun ImplDetail(
     val preguntas = io.acr.ui.dbState(implId, version, vivo, initial = emptyList<io.acr.impl.ImplQuestion>()) {
         ctx.impls.questions(implId)
     }
-    val avance = remember(tareas) { progressOf(tareas) }
+    // Un tic por segundo mientras algo corre: sin esto los minutos y la barra sólo se actualizan
+    // cuando una tarea termina, y entre medio la pantalla parece colgada.
+    var tic by remember(implId) { mutableStateOf(0) }
+    androidx.compose.runtime.LaunchedEffect(corriendoAlgo(tareas)) {
+        while (corriendoAlgo(tareas)) {
+            kotlinx.coroutines.delay(1_000)
+            tic++
+        }
+    }
+    val avance = remember(tareas, tic) { progressOf(tareas) }
+    // Animado: el salto de una tarea a la siguiente se lee como movimiento y no como un parpadeo.
+    val fraccion by androidx.compose.animation.core.animateFloatAsState(
+        targetValue = remember(tareas, tic) { avance.fraction(tareas) },
+        animationSpec = androidx.compose.animation.core.tween(600),
+        label = "avance",
+    )
     val suyos = io.acr.ui.dbState(implId, version, initial = emptyList<io.acr.impl.ImplRepo>()) {
         ctx.impls.reposOf(implId)
     }
@@ -176,7 +193,7 @@ fun ImplDetail(
         if (avance.total > 0) {
             Spacer(Modifier.height(14.dp))
             LinearProgressIndicator(
-                progress = { avance.done.toFloat() / avance.total },
+                progress = { fraccion },
                 modifier = Modifier.fillMaxWidth().height(6.dp),
             )
             Spacer(Modifier.height(4.dp))
@@ -223,6 +240,28 @@ fun ImplDetail(
                     // estimación mejore, porque se ve cuánto se equivocó.
                     val est = tar.estimateMin ?: tar.size?.minutes
                     val real = tar.actualMin
+                    // La que corre muestra su propio reloj contra su estimación: es lo único que
+                    // dice si esta tarea puntual se está yendo de largo.
+                    tar.runningMin()?.let { va ->
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            LinearProgressIndicator(
+                                progress = {
+                                    if (est == null || est <= 0) 0f
+                                    else (va / est).coerceIn(0.0, 1.0).toFloat()
+                                },
+                                modifier = Modifier.width(120.dp).height(3.dp),
+                            )
+                            Spacer(Modifier.width(8.dp))
+                            Text(
+                                t("impl.runningFor", va.toInt()) +
+                                    (est?.let { " / $it" }.orEmpty()) +
+                                    (if (est != null && va > est) "  " + t("impl.overrun") else ""),
+                                style = MaterialTheme.typography.labelSmall,
+                                color = if (est != null && va > est) io.acr.ui.stats.ChartColors.major
+                                else MaterialTheme.colorScheme.primary,
+                            )
+                        }
+                    }
                     if (est != null || real != null) {
                         Text(
                             listOfNotNull(
@@ -339,6 +378,10 @@ private fun QuestionCard(ctx: AppContext, q: io.acr.impl.ImplQuestion, onAnswere
         }
     }
 }
+
+/** ¿Hay algo corriendo? Decide si el reloj tiene que seguir tictaqueando. */
+private fun corriendoAlgo(tareas: List<io.acr.impl.ImplTask>): Boolean =
+    tareas.any { it.status == TaskStatus.RUNNING }
 
 private fun marca(s: TaskStatus): String = when (s) {
     TaskStatus.DONE -> "✓"

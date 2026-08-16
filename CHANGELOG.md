@@ -3,6 +3,30 @@
 Reglas de numeración en [CLAUDE.md](CLAUDE.md): un requerimiento **nuevo** incrementa *major*;
 cambiar uno **existente** incrementa *patch*.
 
+## 57.1.0
+
+El progreso del Constructor **se mueve mientras trabaja**.
+
+Antes la barra sólo avanzaba cuando una tarea terminaba. Como una tarea puede llevar media hora,
+entre medio no se movía nada y la pantalla parecía colgada justo cuando uno la mira para saber si
+sigue viva.
+
+- **Crédito parcial a la tarea en curso**: la barra avanza según lo que lleva corriendo contra lo
+  que se estimó, **topeado al 90% de esa tarea**. Sin ese tope, una tarea que se pasa de su
+  estimación empujaría la barra hasta dar por completo algo que no terminó — la forma más fácil de
+  que una barra de progreso mienta.
+- **Un reloj que corre**: los minutos transcurridos y lo que falta se actualizan solos cada
+  segundo, y el "van N min" ahora incluye la tarea en vuelo.
+- **La tarea en curso tiene su propia barra y su propio reloj**, contra su estimación, y se marca
+  cuando se pasa. Es lo único que dice si *esta* tarea puntual se está yendo de largo.
+- Las barras están **animadas**: el salto de una tarea a la siguiente se lee como movimiento y no
+  como un parpadeo.
+- La lista también late mientras hay algo corriendo; antes mostraba el avance del momento en que
+  se abrió.
+
+Una tarea sin estimación no finge avance: sin nada contra qué medir, inventarlo sería peor que no
+mostrarlo.
+
 ## 57.0.0
 
 **Arreglo del bug que rompió la primera implementación real**, más una auditoría de rendimiento del

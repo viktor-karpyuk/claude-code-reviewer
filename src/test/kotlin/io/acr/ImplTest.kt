@@ -6,6 +6,7 @@ import io.acr.impl.ImplTask
 import io.acr.impl.QuestionKind
 import io.acr.impl.TaskSize
 import io.acr.impl.TaskStatus
+import io.acr.impl.fraction
 import io.acr.impl.loadSources
 import io.acr.impl.progressOf
 import kotlin.test.Test
@@ -311,5 +312,83 @@ class ImplModelTest {
             assertTrue(!it.contains("-"), "«$it» parece un id inventado")
             assertTrue(!it.any { c -> c.isDigit() }, "«$it» lleva versión pegada")
         }
+    }
+}
+
+/**
+ * Que el progreso se mueva mientras algo corre.
+ *
+ * Contar sólo las tareas terminadas deja la barra quieta durante toda una tarea —que puede ser
+ * media hora— y después salta. Durante ese rato la pantalla parece colgada.
+ */
+class ImplProgressLiveTest {
+
+    private val ahora = java.time.Instant.parse("2026-08-16T12:00:00Z")
+
+    private fun tarea(
+        seq: Int,
+        estado: TaskStatus,
+        estimado: Int,
+        arrancoHaceMin: Long? = null,
+    ) = ImplTask(
+        "t$seq", "i", null, seq, "t$seq", "", emptyList(), null, estimado, estado,
+        null, null, null, null,
+        arrancoHaceMin?.let { ahora.minusSeconds(it * 60).toString() },
+        if (estado == TaskStatus.DONE) ahora.toString() else null,
+    )
+
+    @Test
+    fun theBarMovesWhileATaskIsRunning() {
+        // Dos hechas de cuatro y la tercera a mitad de su estimación: la barra tiene que estar
+        // entre 50% y 75%, no clavada en 50%.
+        val tareas = listOf(
+            tarea(1, TaskStatus.DONE, 10, 10),
+            tarea(2, TaskStatus.DONE, 10, 10),
+            tarea(3, TaskStatus.RUNNING, 10, arrancoHaceMin = 5),
+            tarea(4, TaskStatus.PENDING, 10),
+        )
+        val f = io.acr.impl.progressOf(tareas).fraction(tareas, ahora)
+        assertTrue(f > 0.5f, "se movió respecto de las dos terminadas: $f")
+        assertTrue(f < 0.75f, "pero no completó una tarea que sigue corriendo: $f")
+    }
+
+    @Test
+    fun aTaskThatOverrunsDoesNotFillItsShare() {
+        // Sin tope, una tarea que se pasa de su estimación empujaría la barra hasta dar por
+        // completo algo que todavía no terminó: la forma más fácil de que una barra mienta.
+        val tareas = listOf(
+            tarea(1, TaskStatus.RUNNING, 10, arrancoHaceMin = 100),
+            tarea(2, TaskStatus.PENDING, 10),
+        )
+        val f = io.acr.impl.progressOf(tareas).fraction(tareas, ahora)
+        assertTrue(f <= 0.45f, "una sola tarea corriendo no puede pasar del 45% de dos: $f")
+    }
+
+    @Test
+    fun aTaskWithoutAnEstimateDoesNotFakeProgress() {
+        // Sin estimación no hay contra qué medir; inventar avance sería peor que no mostrarlo.
+        val tareas = listOf(
+            ImplTask("t1", "i", null, 1, "t", "", emptyList(), null, null, TaskStatus.RUNNING,
+                null, null, null, null, ahora.minusSeconds(600).toString(), null),
+        )
+        assertEquals(0f, io.acr.impl.progressOf(tareas).fraction(tareas, ahora))
+    }
+
+    @Test
+    fun elapsedTimeIncludesTheTaskInFlight() {
+        // El "van N min" tiene que moverse mientras corre, que es justo cuando alguien lo mira.
+        val tareas = listOf(tarea(1, TaskStatus.RUNNING, 10, arrancoHaceMin = 7))
+        assertTrue(io.acr.impl.progressOf(tareas).elapsedMin > 0.0)
+    }
+
+    @Test
+    fun aFinishedPlanIsExactlyComplete() {
+        val tareas = listOf(tarea(1, TaskStatus.DONE, 10, 10), tarea(2, TaskStatus.DONE, 10, 10))
+        assertEquals(1f, io.acr.impl.progressOf(tareas).fraction(tareas, ahora))
+    }
+
+    @Test
+    fun anEmptyPlanIsNotDividedByZero() {
+        assertEquals(0f, io.acr.impl.progressOf(emptyList()).fraction(emptyList(), ahora))
     }
 }

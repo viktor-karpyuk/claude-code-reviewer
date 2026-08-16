@@ -195,12 +195,48 @@ data class Progress(
     val drift: Double?,
 )
 
+/**
+ * Cuánto lleva corriendo la tarea que está en curso, ahora mismo.
+ *
+ * `actualMin` sólo existe cuando la tarea terminó, así que mientras una corre no hay nada que
+ * mostrar y la pantalla parece congelada durante minutos. Esto mide contra el reloj.
+ */
+fun ImplTask.runningMin(now: java.time.Instant = java.time.Instant.now()): Double? {
+    if (status != TaskStatus.RUNNING) return null
+    val a = startedAt ?: return null
+    return runCatching {
+        java.time.Duration.between(java.time.Instant.parse(a), now).toMillis() / 60_000.0
+    }.getOrNull()?.coerceAtLeast(0.0)
+}
+
+/**
+ * El avance como fracción, incluyendo lo que va de la tarea en curso.
+ *
+ * Contar sólo las terminadas hace que la barra se quede quieta durante toda una tarea —que puede
+ * ser media hora— y después salte. Se le da crédito parcial según lo que lleva corriendo contra
+ * lo que se estimó, **topeado al 90% de esa tarea**: sin tope, una tarea que se pasa de su
+ * estimación empujaría la barra hasta completar algo que todavía no terminó, que es la forma más
+ * fácil de que una barra de progreso mienta.
+ */
+fun Progress.fraction(tasks: List<ImplTask>, now: java.time.Instant = java.time.Instant.now()): Float {
+    if (total == 0) return 0f
+    val enCurso = tasks.filter { it.status == TaskStatus.RUNNING }.sumOf { t ->
+        val estimado = (t.estimateMin ?: t.size?.minutes ?: 0).toDouble()
+        val corriendo = t.runningMin(now) ?: 0.0
+        if (estimado <= 0.0) 0.0 else (corriendo / estimado).coerceIn(0.0, 0.9)
+    }
+    return ((done + enCurso) / total).coerceIn(0.0, 1.0).toFloat()
+}
+
 /** Calcula el avance a partir de las tareas, sin tocar la base. */
 fun progressOf(tasks: List<ImplTask>): Progress {
     val total = tasks.size
     val hechas = tasks.filter { it.status == TaskStatus.DONE }
     val estimadoTotal = tasks.sumOf { it.estimateMin ?: it.size?.minutes ?: 0 }
-    val transcurrido = tasks.mapNotNull { it.actualMin }.sum()
+    // Se suma lo que lleva la tarea en curso: sin eso el "van N min" no se mueve mientras corre,
+    // que es justo cuando alguien lo mira.
+    val transcurrido = tasks.mapNotNull { it.actualMin }.sum() +
+        tasks.mapNotNull { it.runningMin() }.sum()
 
     // El desvío se calcula sólo sobre las tareas que ya terminaron y tenían estimación: mezclar
     // las que corren daría un número que baja solo mientras la tarea avanza.

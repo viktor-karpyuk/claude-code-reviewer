@@ -48,12 +48,15 @@ fun ImplPanel(ctx: AppContext, repos: List<io.acr.forge.RepoRecord>) {
     var version by remember { mutableStateOf(0) }
     var abierta by remember { mutableStateOf<String?>(null) }
     var creando by remember { mutableStateOf(false) }
+    // Un tic mientras hay algo corriendo: sin esto la lista muestra el avance del momento en que
+    // se abrió y no se entera de nada hasta que se navega a otro lado y se vuelve.
+    var tic by remember { mutableStateOf(0) }
 
     val lista = io.acr.ui.dbState(version, initial = emptyList<Implementation>()) { ctx.impls.list() }
     // El avance de todas de una sola consulta. Antes se pedían las tareas de cada implementación
     // por separado dentro del bucle de dibujo: con veinte implementaciones eran veinte consultas
     // por recomposición.
-    val avances = io.acr.ui.dbState(version, lista, initial = emptyMap<String, Progress>()) {
+    val avances = io.acr.ui.dbState(version, lista, tic, initial = emptyMap<String, Progress>()) {
         ctx.impls.progressOfAll()
     }
 
@@ -65,6 +68,12 @@ fun ImplPanel(ctx: AppContext, repos: List<io.acr.forge.RepoRecord>) {
     // Lo que se mira al abrir: qué hay corriendo ahora y qué está esperando algo mío. Una lista
     // de tarjetas sin eso obliga a abrir una por una para descubrir cuál se frenó.
     val enCurso = lista.filter { it.status == ImplStatus.RUNNING || it.status == ImplStatus.PLANNING }
+    androidx.compose.runtime.LaunchedEffect(enCurso.isNotEmpty()) {
+        while (enCurso.isNotEmpty()) {
+            kotlinx.coroutines.delay(2_000)
+            tic++
+        }
+    }
     val esperando = lista.filter { it.status == ImplStatus.AWAITING }
     val pendientes = io.acr.ui.dbState(version, lista, initial = 0) {
         lista.sumOf { i -> ctx.impls.questions(i.id).count { it.answer.isNullOrBlank() } }
@@ -148,8 +157,14 @@ fun ImplPanel(ctx: AppContext, repos: List<io.acr.forge.RepoRecord>) {
                 )
                 if (avance.total > 0) {
                     Spacer(Modifier.height(6.dp))
+                    val objetivo = avance.done.toFloat() / avance.total
+                    val animado by androidx.compose.animation.core.animateFloatAsState(
+                        targetValue = objetivo,
+                        animationSpec = androidx.compose.animation.core.tween(600),
+                        label = "avance-${impl.id}",
+                    )
                     LinearProgressIndicator(
-                        progress = { avance.done.toFloat() / avance.total },
+                        progress = { animado },
                         modifier = Modifier.fillMaxWidth().height(4.dp),
                     )
                     Spacer(Modifier.height(4.dp))
