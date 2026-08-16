@@ -37,6 +37,29 @@ enum class ImplStatus {
  */
 enum class TaskStatus { PENDING, RUNNING, DONE, FAILED, SKIPPED, BLOCKED }
 
+/**
+ * Qué es cada repositorio dentro de una implementación.
+ *
+ * No cambia cómo se ejecuta: le dice al planificador con qué está tratando, para que no proponga
+ * una pantalla en el backend ni una migración en el frontend. Con un solo repositorio da igual;
+ * con varios es lo que hace que el plan tenga sentido.
+ */
+enum class RepoRole(val labelKey: String) {
+    BACKEND("role.backend"),
+    FRONTEND("role.frontend"),
+    /** Móvil, infraestructura, librería compartida: lo que no entra en las dos anteriores. */
+    OTHER("role.other"),
+    ;
+
+    companion object {
+        fun fromApi(raw: String?): RepoRole =
+            raw?.trim()?.uppercase()?.let { v -> entries.firstOrNull { it.name == v } } ?: OTHER
+    }
+}
+
+/** Un repositorio dentro de una implementación, con su rol. */
+data class ImplRepo(val repoId: String, val role: RepoRole)
+
 /** Qué clase de decisión hace falta. Sólo estas dos frenan: el resto se decide solo. */
 enum class QuestionKind(val labelKey: String) {
     /** Cómo se estructura algo que va a quedar: capas, patrón, contrato, dependencia. */
@@ -119,6 +142,14 @@ data class Implementation(
 data class ImplTask(
     val id: String,
     val implId: String,
+    /**
+     * En qué repositorio corre.
+     *
+     * Una tarea vive en uno solo: escribir en dos a la vez haría imposible saber qué commit
+     * corresponde a qué, y una tarea que toca backend y frontend a la vez son dos tareas con un
+     * contrato en el medio.
+     */
+    val repoId: String?,
     val seq: Int,
     val title: String,
     val detail: String,

@@ -73,7 +73,12 @@ fun ImplDetail(
         ctx.impls.questions(implId)
     }
     val avance = remember(tareas) { progressOf(tareas) }
-    val repo = repos.firstOrNull { it.id == impl.repoId }
+    val suyos = io.acr.ui.dbState(implId, version, initial = emptyList<io.acr.impl.ImplRepo>()) {
+        ctx.impls.reposOf(implId)
+    }
+    // En el orden en que se cargaron: el primero es el principal y el plan arranca mirándolo.
+    val misRepos = remember(suyos, repos) { suyos.mapNotNull { r -> repos.firstOrNull { it.id == r.repoId } } }
+    val repo = misRepos.firstOrNull()
     val corriendo = impl.status == ImplStatus.RUNNING || impl.status == ImplStatus.PLANNING
 
     Column(Modifier.fillMaxSize().padding(16.dp).verticalScroll(rememberScrollState())) {
@@ -83,8 +88,11 @@ fun ImplDetail(
             Column(Modifier.weight(1f)) {
                 Text(impl.title, style = MaterialTheme.typography.titleMedium)
                 Text(
-                    listOfNotNull(repo?.name, impl.branch, impl.codeModel ?: io.acr.impl.ImplEngine.CODE_MODEL)
-                        .joinToString("  ·  "),
+                    listOfNotNull(
+                        misRepos.joinToString(" + ") { it.name }.takeIf { it.isNotBlank() },
+                        impl.branch,
+                        impl.codeModel ?: io.acr.impl.ImplEngine.CODE_MODEL,
+                    ).joinToString("  ·  "),
                     style = MaterialTheme.typography.labelSmall.copy(fontFamily = FontFamily.Monospace),
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -106,8 +114,8 @@ fun ImplDetail(
                             // para aprobar el plan tendría sentido si alguien fuera a mirarlo, y
                             // el punto del módulo es que no haga falta.
                             ctx.appScope.launch {
-                                if (impl.branch == null) ctx.implEngine.planAndRun(repo!!, implId)
-                                else ctx.implEngine.run(repo!!, implId)
+                                if (impl.branch == null) ctx.implEngine.planAndRun(misRepos, implId)
+                                else ctx.implEngine.run(misRepos, implId)
                                 version++
                             }
                         }
@@ -186,7 +194,12 @@ fun ImplDetail(
                 )
                 Column(Modifier.weight(1f)) {
                     Text(
-                        "${tar.seq}. ${tar.title}",
+                        "${tar.seq}. ${tar.title}" +
+                            // Con un solo repositorio el nombre no aporta; con varios es lo
+                            // primero que uno busca al leer una tarea.
+                            (if (misRepos.size > 1) {
+                                misRepos.firstOrNull { it.id == tar.repoId }?.let { "  [${it.name}]" }.orEmpty()
+                            } else ""),
                         style = MaterialTheme.typography.bodySmall,
                         color = if (tar.status == TaskStatus.PENDING)
                             MaterialTheme.colorScheme.onSurfaceVariant

@@ -45,7 +45,8 @@ fun NewImplDialog(
     onCreated: () -> Unit,
 ) {
     var titulo by remember { mutableStateOf("") }
-    var repoId by remember { mutableStateOf(repos.firstOrNull()?.id.orEmpty()) }
+    // Varios, con su rol. En orden de selección: el primero es el principal.
+    var elegidos by remember { mutableStateOf(listOf<io.acr.impl.ImplRepo>()) }
     var rutas by remember { mutableStateOf(listOf<String>()) }
     var extra by remember { mutableStateOf("") }
 
@@ -64,9 +65,44 @@ fun NewImplDialog(
 
                 Spacer(Modifier.height(8.dp))
                 Text(t("impl.repo"), style = MaterialTheme.typography.labelSmall)
+                Text(
+                    t("impl.repoNote"),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
                 FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                     repos.forEach { r ->
-                        FilterChip(repoId == r.id, { repoId = r.id }, { Text(r.name) })
+                        val puesto = elegidos.firstOrNull { it.repoId == r.id }
+                        FilterChip(
+                            selected = puesto != null,
+                            onClick = {
+                                elegidos = if (puesto != null) elegidos - puesto
+                                else elegidos + io.acr.impl.ImplRepo(r.id, adivinarRol(r.name))
+                            },
+                            label = { Text(r.name) },
+                        )
+                    }
+                }
+                // El rol no cambia la ejecución: le dice al planificador qué es cada repositorio
+                // para que no proponga una pantalla en el backend.
+                elegidos.forEach { e ->
+                    Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+                        Text(
+                            repos.firstOrNull { it.id == e.repoId }?.name.orEmpty(),
+                            style = MaterialTheme.typography.labelSmall,
+                            modifier = Modifier.width(180.dp),
+                        )
+                        FlowRow(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                            io.acr.impl.RepoRole.entries.forEach { rol ->
+                                FilterChip(
+                                    selected = e.role == rol,
+                                    onClick = {
+                                        elegidos = elegidos.map { if (it.repoId == e.repoId) it.copy(role = rol) else it }
+                                    },
+                                    label = { Text(t(rol.labelKey), style = MaterialTheme.typography.labelSmall) },
+                                )
+                            }
+                        }
                     }
                 }
 
@@ -126,15 +162,33 @@ fun NewImplDialog(
         },
         confirmButton = {
             TextButton(
-                enabled = titulo.isNotBlank() && repoId.isNotBlank() && rutas.isNotEmpty(),
+                enabled = titulo.isNotBlank() && elegidos.isNotEmpty() && rutas.isNotEmpty(),
                 onClick = {
-                    ctx.impls.create(repoId, titulo.trim(), rutas, extra.trim().takeIf { it.isNotBlank() })
+                    ctx.impls.create(elegidos, titulo.trim(), rutas, extra.trim().takeIf { it.isNotBlank() })
                     onCreated()
                 },
             ) { Text(t("common.save")) }
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text(t("common.cancel")) } },
     )
+}
+
+/**
+ * Adivina el rol por el nombre del repositorio.
+ *
+ * Es una sugerencia y se puede cambiar de un click. Acertar la mayoría de las veces ahorra el
+ * trabajo de clasificar a mano cinco repositorios cuyo nombre ya lo dice —`kubrik-erp-be`,
+ * `pds-inspections-app`—, y equivocarse cuesta un toque.
+ */
+private fun adivinarRol(nombre: String): io.acr.impl.RepoRole {
+    val n = nombre.lowercase()
+    return when {
+        n.endsWith("-be") || n.contains("backend") || n.contains("apirest") || n.contains("api") ->
+            io.acr.impl.RepoRole.BACKEND
+        n.endsWith("-fe") || n.contains("frontend") || n.contains("-web") || n.contains("app") ->
+            io.acr.impl.RepoRole.FRONTEND
+        else -> io.acr.impl.RepoRole.OTHER
+    }
 }
 
 /**

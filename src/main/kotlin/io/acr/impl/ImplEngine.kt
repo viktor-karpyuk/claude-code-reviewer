@@ -78,11 +78,13 @@ class ImplEngine(
      * Corre en modo lectura aunque después se vaya a escribir: planificar es mirar, y darle
      * permisos de escritura a esta etapa sería regalarlos sin motivo.
      */
-    suspend fun plan(repo: RepoRecord, implId: String): Result<Int> {
+    suspend fun plan(repos: List<RepoRecord>, implId: String): Result<Int> {
         val impl = impls.get(implId) ?: return Result.failure(IllegalStateException("No existe."))
-        val dir = File(repo.localPath)
+        val principal = repos.firstOrNull()
+            ?: return Result.failure(IllegalStateException("La implementación no tiene repositorios."))
+        val dir = File(principal.localPath)
         if (!Git.isRepo(dir)) {
-            return Result.failure(IllegalStateException("«${repo.localPath}» no es un repositorio de git."))
+            return Result.failure(IllegalStateException("«${principal.localPath}» no es un repositorio de git."))
         }
         val binario = ClaudeCli.resolveBinary(prefs.get(io.acr.AppContext.PREF_CLAUDE_BINARY))
             ?: return Result.failure(IllegalStateException("No encuentro el ejecutable de Claude Code."))
@@ -103,10 +105,20 @@ class ImplEngine(
             val res = ClaudeCli.run(
                 binary = binario,
                 workDir = dir,
-                prompt = ImplPrompt.plan(docs, impl.extraPrompt, repo.name, base, idioma),
+                prompt = ImplPrompt.plan(
+                    docs, impl.extraPrompt,
+                    repos.map { r ->
+                        val rol = impls.reposOf(implId).firstOrNull { it.repoId == r.id }?.role
+                        Triple(r.name, (rol ?: RepoRole.OTHER).name, r.localPath)
+                    },
+                    base, idioma,
+                ),
                 model = modelo,
                 // Planificar es mirar: los permisos de escritura llegan recién al implementar.
-                allowedTools = listOf("Read", "Grep", "Glob", "Bash(git *)"),
+                // `Bash(ls *)` y `Bash(find *)` porque con varios repositorios el modelo trabaja
+                // fuera del directorio en el que está parado, y sin poder listarlos planificaría
+                // a ciegas sobre todos menos uno.
+                allowedTools = listOf("Read", "Grep", "Glob", "Bash(git *)", "Bash(ls *)", "Bash(find *)"),
                 disallowedTools = ImplPrompt.DENIED_TOOLS,
                 jsonSchema = ImplPrompt.PLAN_SCHEMA,
                 register = { running[implId] = it },
@@ -115,7 +127,7 @@ class ImplEngine(
             running.remove(implId)
             if (!res.ok) error(res.stderr.ifBlank { "El planificador no devolvió un plan." })
 
-            val (resumen, rama, tareas) = parsePlan(res.structured ?: res.text, implId)
+            val (resumen, rama, tareas) = parsePlan(res.structured ?: res.text, implId, repos)
             if (tareas.isEmpty()) error("El plan volvió sin tareas.")
 
             impls.savePlan(implId, resumen, rama, base, modelo, tareas)
@@ -134,25 +146,37 @@ class ImplEngine(
      * es el caso normal, no una excepción, y crear `feature-x-2` dejaría el trabajo partido en dos
      * ramas que después hay que unir a mano.
      */
-    suspend fun run(repo: RepoRecord, implId: String): Result<Unit> {
+    suspend fun run(repos: List<RepoRecord>, implId: String): Result<Unit> {
         val impl = impls.get(implId) ?: return Result.failure(IllegalStateException("No existe."))
         val rama = impl.branch ?: return Result.failure(IllegalStateException("Falta planificar."))
-        val dir = File(repo.localPath)
         val binario = ClaudeCli.resolveBinary(prefs.get(io.acr.AppContext.PREF_CLAUDE_BINARY))
             ?: return Result.failure(IllegalStateException("No encuentro el ejecutable de Claude Code."))
+        val porId = repos.associateBy { it.id }
 
-        // Sin esto se escribiría sobre lo que el usuario tenga a medias, y el commit de la primera
-        // tarea se llevaría cambios ajenos adentro.
-        if (Git.isDirty(dir)) {
-            val msg = "El repositorio tiene cambios sin commitear. Guardalos o descartalos antes."
-            impls.setStatus(implId, ImplStatus.FAILED, msg)
-            return Result.failure(IllegalStateException(msg))
+        // Se chequean todos antes de tocar ninguno: encontrar el segundo repositorio sucio con el
+        // primero ya modificado dejaría el trabajo partido a la mitad.
+        repos.forEach { r ->
+            val d = File(r.localPath)
+            if (!Git.isRepo(d)) {
+                val msg = "«${r.localPath}» no es un repositorio de git."
+                impls.setStatus(implId, ImplStatus.FAILED, msg)
+                return Result.failure(IllegalStateException(msg))
+            }
+            if (Git.isDirty(d)) {
+                val msg = "${r.name} tiene cambios sin commitear. Guardalos o descartalos antes."
+                impls.setStatus(implId, ImplStatus.FAILED, msg)
+                return Result.failure(IllegalStateException(msg))
+            }
         }
 
         cancelled.remove(implId)
         impls.setStatus(implId, ImplStatus.RUNNING)
-        log(implId, "Rama «$rama»…")
-        Git.checkoutBranch(dir, rama, impl.baseBranch ?: "develop")
+        // La misma rama en todos: buscar el trabajo de una implementación en tres repositorios con
+        // tres nombres distintos es un problema que no hace falta tener.
+        repos.forEach { r ->
+            log(implId, "${r.name}: rama «$rama»…")
+            Git.checkoutBranch(File(r.localPath), rama, impl.baseBranch ?: "develop")
+        }
 
         val docs = loadSources(impl.sources)
         val idioma = prefs.get(io.acr.AppContext.PREF_LANGUAGE) ?: "español"
@@ -204,11 +228,16 @@ class ImplEngine(
                     continue
                 }
 
+                // Cada tarea corre en su repositorio. Sin esto, una tarea de frontend escribiría
+                // en el backend y el commit iría al lugar equivocado.
+                val repoTarea = porId[tarea.repoId] ?: repos.first()
+                val dir = File(repoTarea.localPath)
+
                 _progress.update { m ->
                     m + (implId to (m[implId] ?: ImplProgress(implId)).copy(currentTask = tarea.seq))
                 }
                 impls.startTask(tarea.id)
-                log(implId, "▶ ${tarea.seq}/${todas.size} ${tarea.title}")
+                log(implId, "▶ ${tarea.seq}/${todas.size} [${repoTarea.name}] ${tarea.title}")
 
                 val intento = runCatching {
                     ClaudeCli.run(
@@ -326,11 +355,11 @@ class ImplEngine(
      * no haga falta. El plan igual queda guardado y visible mientras corre, así que se puede mirar
      * —y frenar— sin haber tenido que autorizarlo antes.
      */
-    suspend fun planAndRun(repo: RepoRecord, implId: String): Result<Unit> {
-        val planificado = plan(repo, implId)
+    suspend fun planAndRun(repos: List<RepoRecord>, implId: String): Result<Unit> {
+        val planificado = plan(repos, implId)
         if (planificado.isFailure) return Result.failure(planificado.exceptionOrNull() ?: Exception("falló"))
         if (implId in cancelled) return Result.success(Unit)
-        return run(repo, implId)
+        return run(repos, implId)
     }
 
     /** Lo que devolvió una tarea. */
@@ -380,7 +409,11 @@ class ImplEngine(
     }
 
     /** Lee el plan que devolvió el modelo. */
-    private fun parsePlan(raw: String, implId: String): Triple<String, String, List<ImplTask>> {
+    private fun parsePlan(
+        raw: String,
+        implId: String,
+        repos: List<RepoRecord>,
+    ): Triple<String, String, List<ImplTask>> {
         val limpio = raw.trim().removePrefix("```json").removePrefix("```").removeSuffix("```").trim()
         val json = kotlinx.serialization.json.Json { ignoreUnknownKeys = true; isLenient = true }
         val obj = json.parseToJsonElement(limpio).jsonObject
@@ -393,6 +426,12 @@ class ImplEngine(
                 // Se renumera por posición: un plan con seq repetidos o salteados haría que el
                 // orden dependa de un campo que el modelo puede errar.
                 seq = i + 1,
+                // El modelo devuelve el nombre; acá se resuelve al id. Si no coincide con
+                // ninguno cae al primero: una tarea sin repositorio no se podría ejecutar, y con
+                // un solo repositorio el nombre da igual.
+                repoId = o["repo"]?.jsonPrimitive?.contentOrNull?.let { n ->
+                    repos.firstOrNull { it.name.equals(n.trim(), ignoreCase = true) }?.id
+                } ?: repos.firstOrNull()?.id,
                 title = titulo,
                 detail = o["detail"]?.jsonPrimitive?.contentOrNull.orEmpty(),
                 dependsOn = (o["depends_on"] as? JsonArray).orEmpty()

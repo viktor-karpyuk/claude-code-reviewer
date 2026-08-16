@@ -11,23 +11,57 @@ import java.time.Instant
 /** Implementaciones y sus tareas. */
 class ImplRepository(private val store: Store) {
 
-    fun create(repoId: String, title: String, sources: List<String>, extra: String?): String {
+    /**
+     * Crea una implementación sobre uno o varios repositorios.
+     *
+     * @param repos en orden; el primero queda como principal para las pantallas que muestran uno
+     *   solo, pero el plan abarca todos.
+     */
+    fun create(
+        repos: List<io.acr.impl.ImplRepo>,
+        title: String,
+        sources: List<String>,
+        extra: String?,
+    ): String {
         val id = UlidCreator.getUlid().toString()
-        store.stmt(
-            """INSERT INTO implementation(id, repo_id, title, sources, extra_prompt, status, created_at)
-               VALUES (?,?,?,?,?,?,?)""",
-        ) { ps ->
-            ps.setString(1, id)
-            ps.setString(2, repoId)
-            ps.setString(3, title)
-            ps.setString(4, sources.joinToString("\n"))
-            ps.setString(5, extra)
-            ps.setString(6, ImplStatus.DRAFT.name)
-            ps.setString(7, Instant.now().toString())
-            ps.executeUpdate()
+        store.transaction { conn ->
+            conn.prepareStatement(
+                """INSERT INTO implementation(id, repo_id, title, sources, extra_prompt, status, created_at)
+                   VALUES (?,?,?,?,?,?,?)""",
+            ).use { ps ->
+                ps.setString(1, id)
+                ps.setString(2, repos.first().repoId)
+                ps.setString(3, title)
+                ps.setString(4, sources.joinToString("\n"))
+                ps.setString(5, extra)
+                ps.setString(6, ImplStatus.DRAFT.name)
+                ps.setString(7, Instant.now().toString())
+                ps.executeUpdate()
+            }
+            repos.forEach { r ->
+                conn.prepareStatement(
+                    "INSERT OR REPLACE INTO impl_repo(impl_id, repo_id, role) VALUES (?,?,?)",
+                ).use { ps ->
+                    ps.setString(1, id); ps.setString(2, r.repoId); ps.setString(3, r.role.name)
+                    ps.executeUpdate()
+                }
+            }
         }
         return id
     }
+
+    /** Los repositorios de una implementación, con su rol. */
+    fun reposOf(implId: String): List<io.acr.impl.ImplRepo> =
+        store.stmt("SELECT repo_id, role FROM impl_repo WHERE impl_id = ?") { ps ->
+            ps.setString(1, implId)
+            ps.executeQuery().use { rs ->
+                buildList {
+                    while (rs.next()) {
+                        add(io.acr.impl.ImplRepo(rs.getString(1), io.acr.impl.RepoRole.fromApi(rs.getString(2))))
+                    }
+                }
+            }
+        }
 
     fun list(repoId: String? = null): List<Implementation> =
         query(
@@ -80,8 +114,8 @@ class ImplRepository(private val store: Store) {
             tasks.forEach { t ->
                 conn.prepareStatement(
                     """INSERT INTO impl_task(id, impl_id, seq, title, detail, depends_on, size,
-                             estimate_min, status)
-                       VALUES (?,?,?,?,?,?,?,?,?)""",
+                             estimate_min, status, repo_id)
+                       VALUES (?,?,?,?,?,?,?,?,?,?)""",
                 ).use { ps ->
                     ps.setString(1, UlidCreator.getUlid().toString())
                     ps.setString(2, implId)
@@ -92,6 +126,7 @@ class ImplRepository(private val store: Store) {
                     ps.setString(7, t.size?.name)
                     if (t.estimateMin == null) ps.setNull(8, java.sql.Types.INTEGER) else ps.setInt(8, t.estimateMin)
                     ps.setString(9, TaskStatus.PENDING.name)
+                    ps.setString(10, t.repoId)
                     ps.executeUpdate()
                 }
             }
@@ -101,7 +136,7 @@ class ImplRepository(private val store: Store) {
     fun tasks(implId: String): List<ImplTask> =
         store.stmt(
             """SELECT id, impl_id, seq, title, detail, depends_on, size, estimate_min, status,
-                      commit_sha, result, error, cost_usd, started_at, finished_at
+                      commit_sha, result, error, cost_usd, started_at, finished_at, repo_id
                  FROM impl_task WHERE impl_id = ? ORDER BY seq""",
         ) { ps ->
             ps.setString(1, implId)
@@ -112,6 +147,7 @@ class ImplRepository(private val store: Store) {
                             ImplTask(
                                 id = rs.getString(1),
                                 implId = rs.getString(2),
+                                repoId = rs.getString(16),
                                 seq = rs.getInt(3),
                                 title = rs.getString(4),
                                 detail = rs.getString(5).orEmpty(),

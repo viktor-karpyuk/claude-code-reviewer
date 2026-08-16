@@ -39,9 +39,14 @@ class ImplTest {
         }
     }
 
-    private fun tarea(seq: Int, titulo: String, size: TaskSize = TaskSize.M, dep: List<Int> = emptyList()) =
-        ImplTask("", "", seq, titulo, "detalle", dep, size, size.minutes, TaskStatus.PENDING,
-            null, null, null, null, null, null)
+    private fun tarea(
+        seq: Int,
+        titulo: String,
+        size: TaskSize = TaskSize.M,
+        dep: List<Int> = emptyList(),
+        repoId: String? = null,
+    ) = ImplTask("", "", repoId, seq, titulo, "detalle", dep, size, size.minutes, TaskStatus.PENDING,
+        null, null, null, null, null, null)
 
     // --- documentos de entrada ---
 
@@ -112,7 +117,7 @@ class ImplTest {
 
     @Test
     fun thePlanIsSavedWholeOrNotAtAll() = conRepo { ctx, repoId ->
-        val id = ctx.impls.create(repoId, "Una feature", listOf("/x/specs"), "sin frameworks nuevos")
+        val id = ctx.impls.create(listOf(io.acr.impl.ImplRepo(repoId, io.acr.impl.RepoRole.BACKEND)), "Una feature", listOf("/x/specs"), "sin frameworks nuevos")
         ctx.impls.savePlan(id, "el enfoque", "feature-x", "develop", "fable-5", (1..3).map { tarea(it, "t$it") })
 
         val impl = assertNotNull(ctx.impls.get(id))
@@ -124,7 +129,7 @@ class ImplTest {
 
     @Test
     fun replanningReplacesTheTasksInsteadOfPilingThemUp() = conRepo { ctx, repoId ->
-        val id = ctx.impls.create(repoId, "f", listOf("/x"), null)
+        val id = ctx.impls.create(listOf(io.acr.impl.ImplRepo(repoId, io.acr.impl.RepoRole.BACKEND)), "f", listOf("/x"), null)
         ctx.impls.savePlan(id, "v1", "b", "develop", "m", (1..3).map { tarea(it, "vieja $it") })
         ctx.impls.savePlan(id, "v2", "b", "develop", "m", (1..2).map { tarea(it, "nueva $it") })
 
@@ -139,7 +144,7 @@ class ImplTest {
     fun aBlockedTaskWaitsInsteadOfInventingTheDecision() = conRepo { ctx, repoId ->
         // Adivinar una decisión de negocio produce código que compila, pasa los tests y hace lo
         // que no era, y el error se descubre mucho después.
-        val id = ctx.impls.create(repoId, "f", listOf("/x"), null)
+        val id = ctx.impls.create(listOf(io.acr.impl.ImplRepo(repoId, io.acr.impl.RepoRole.BACKEND)), "f", listOf("/x"), null)
         ctx.impls.savePlan(id, "s", "b", "develop", "m", listOf(tarea(1, "cobrar")))
         val t = ctx.impls.tasks(id).single()
 
@@ -162,7 +167,7 @@ class ImplTest {
     fun answeringPutsTheTaskBackInTheQueue() = conRepo { ctx, repoId ->
         // Una respuesta guardada que no desbloquee dejaría la implementación esperando algo que ya
         // se contestó, y nadie se enteraría.
-        val id = ctx.impls.create(repoId, "f", listOf("/x"), null)
+        val id = ctx.impls.create(listOf(io.acr.impl.ImplRepo(repoId, io.acr.impl.RepoRole.BACKEND)), "f", listOf("/x"), null)
         ctx.impls.savePlan(id, "s", "b", "develop", "m", listOf(tarea(1, "cobrar")))
         val t = ctx.impls.tasks(id).single()
         val q = ctx.impls.ask(id, t.id, QuestionKind.BUSINESS, "¿y si falla?", null, emptyList())
@@ -176,7 +181,7 @@ class ImplTest {
 
     @Test
     fun aFailedTaskCanBeRetriedWithoutReplanning() = conRepo { ctx, repoId ->
-        val id = ctx.impls.create(repoId, "f", listOf("/x"), null)
+        val id = ctx.impls.create(listOf(io.acr.impl.ImplRepo(repoId, io.acr.impl.RepoRole.BACKEND)), "f", listOf("/x"), null)
         ctx.impls.savePlan(id, "s", "b", "develop", "m", listOf(tarea(1, "t")))
         val t = ctx.impls.tasks(id).single()
         ctx.impls.failTask(t.id, "se cayó")
@@ -192,7 +197,7 @@ class ImplTest {
     @Test
     fun finishedWorkKeepsItsCommit() = conRepo { ctx, repoId ->
         // Cada tarea commitea al terminar: si la séptima falla, las seis anteriores siguen ahí.
-        val id = ctx.impls.create(repoId, "f", listOf("/x"), null)
+        val id = ctx.impls.create(listOf(io.acr.impl.ImplRepo(repoId, io.acr.impl.RepoRole.BACKEND)), "f", listOf("/x"), null)
         ctx.impls.savePlan(id, "s", "b", "develop", "m", listOf(tarea(1, "t")))
         val t = ctx.impls.tasks(id).single()
         ctx.impls.startTask(t.id)
@@ -202,5 +207,69 @@ class ImplTest {
         assertEquals(TaskStatus.DONE, hecha.status)
         assertEquals("abc1234", hecha.commitSha)
         assertNotNull(hecha.actualMin, "y queda medido cuánto tardó, para corregir la estimación")
+    }
+
+    // --- varias repos en una implementación ---
+
+    @Test
+    fun anImplementationCanSpanSeveralRepositories() = conRepo { ctx, repoId ->
+        // El caso que lo motiva: el contrato del backend tiene que existir antes de que el
+        // frontend lo consuma, y eso sólo se puede ordenar con un plan que abarque los dos.
+        val otro = ctx.repos.create(
+            "fe-${System.nanoTime()}", Provider.BITBUCKET, "acme", "fe",
+            System.getProperty("java.io.tmpdir"), null, null, null, "", false,
+            io.acr.forge.SkipRules(), io.acr.forge.ReplyMode.OFF,
+        )
+        val id = ctx.impls.create(
+            listOf(
+                io.acr.impl.ImplRepo(repoId, io.acr.impl.RepoRole.BACKEND),
+                io.acr.impl.ImplRepo(otro, io.acr.impl.RepoRole.FRONTEND),
+            ),
+            "feature cruzada", listOf("/x"), null,
+        )
+
+        val suyos = ctx.impls.reposOf(id)
+        assertEquals(2, suyos.size)
+        assertEquals(io.acr.impl.RepoRole.BACKEND, suyos.first { it.repoId == repoId }.role)
+        assertEquals(io.acr.impl.RepoRole.FRONTEND, suyos.first { it.repoId == otro }.role)
+    }
+
+    @Test
+    fun eachTaskRemembersWhichRepositoryItRunsIn() = conRepo { ctx, repoId ->
+        // Sin esto, una tarea de frontend escribiría en el backend y el commit iría al lugar
+        // equivocado.
+        val otro = ctx.repos.create(
+            "fe2-${System.nanoTime()}", Provider.BITBUCKET, "acme", "fe",
+            System.getProperty("java.io.tmpdir"), null, null, null, "", false,
+            io.acr.forge.SkipRules(), io.acr.forge.ReplyMode.OFF,
+        )
+        val id = ctx.impls.create(
+            listOf(
+                io.acr.impl.ImplRepo(repoId, io.acr.impl.RepoRole.BACKEND),
+                io.acr.impl.ImplRepo(otro, io.acr.impl.RepoRole.FRONTEND),
+            ),
+            "f", listOf("/x"), null,
+        )
+        ctx.impls.savePlan(
+            id, "primero el endpoint, después la pantalla", "feature-x", "develop", "m",
+            listOf(
+                tarea(1, "endpoint", repoId = repoId),
+                tarea(2, "pantalla", dep = listOf(1), repoId = otro),
+            ),
+        )
+
+        val t = ctx.impls.tasks(id)
+        assertEquals(repoId, t.first { it.seq == 1 }.repoId)
+        assertEquals(otro, t.first { it.seq == 2 }.repoId)
+        assertEquals(listOf(1), t.first { it.seq == 2 }.dependsOn, "la pantalla espera al endpoint")
+    }
+
+    @Test
+    fun anImplementationWithOneRepositoryKeepsWorkingTheSame() = conRepo { ctx, repoId ->
+        val id = ctx.impls.create(
+            listOf(io.acr.impl.ImplRepo(repoId, io.acr.impl.RepoRole.BACKEND)), "f", listOf("/x"), null,
+        )
+        assertEquals(1, ctx.impls.reposOf(id).size)
+        assertEquals(repoId, assertNotNull(ctx.impls.get(id)).repoId, "el principal sigue siendo el mismo")
     }
 }

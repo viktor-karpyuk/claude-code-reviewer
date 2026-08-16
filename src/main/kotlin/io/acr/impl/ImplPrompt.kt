@@ -50,9 +50,10 @@ object ImplPrompt {
         "title":{"type":"string"},
         "detail":{"type":"string"},
         "depends_on":{"type":"array","items":{"type":"integer"}},
+        "repo":{"type":"string"},
         "size":{"type":"string","enum":["S","M","L","XL"]},
         "estimate_min":{"type":"integer"}
-      },"required":["seq","title","detail","size","estimate_min"]}}
+      },"required":["seq","title","detail","repo","size","estimate_min"]}}
     },"required":["summary","branch","tasks"]}
     """.trimIndent()
 
@@ -70,19 +71,32 @@ object ImplPrompt {
     fun plan(
         docs: List<SourceDoc>,
         extra: String?,
-        repoName: String,
+        /** Nombre, rol y ruta local de cada repositorio de la implementación. */
+        repos: List<Triple<String, String, String>>,
         baseBranch: String,
         language: String,
     ): String = """
         Sos un tech lead planificando una implementación. Devolvé ÚNICAMENTE el JSON que se
         describe al final.
 
-        REPOSITORIO: $repoName (rama base: $baseBranch)
+        REPOSITORIOS (rama base: $baseBranch)
+        ${repos.joinToString("\n") { (nombre, rol, ruta) -> "- $nombre — $rol — $ruta" }}
 
-        Antes de planear, MIRÁ EL REPOSITORIO: su estructura, sus convenciones, qué ya existe. Los
-        comandos de git de sólo lectura y la lectura de archivos están autorizados. Un plan escrito
-        sólo desde los documentos propone crear cosas que ya están y usa convenciones que este
-        proyecto no tiene, y eso se paga en cada tarea.
+        Antes de planear, MIRÁ LOS REPOSITORIOS: su estructura, sus convenciones, qué ya existe. La
+        lectura de archivos y los comandos de git de sólo lectura están autorizados. Un plan
+        escrito sólo desde los documentos propone crear cosas que ya están y usa convenciones que
+        estos proyectos no tienen, y eso se paga en cada tarea.
+
+        ${if (repos.size > 1) """
+        ESTO ABARCA VARIOS REPOSITORIOS
+        Cada tarea corre en UNO solo: poné su nombre en `repo`, tal cual aparece arriba. Una tarea
+        que toca dos son dos tareas con un contrato en el medio.
+
+        El orden entre repositorios es lo que hace valioso planificar esto junto: lo que se
+        consume tiene que existir antes. El endpoint antes de la pantalla que lo llama, el tipo
+        compartido antes de los dos que lo usan. Si el frontend necesita un contrato que todavía
+        no está, la tarea del backend va primero y la del frontend depende de ella.
+        """ else "Todas las tareas corren en ${repos.first().first}; poné ese nombre en `repo`."}
 
         LO QUE HAY QUE CONSTRUIR
         ${docs.joinToString("\n\n") { "--- ${it.name} ---\n${it.content}" }}

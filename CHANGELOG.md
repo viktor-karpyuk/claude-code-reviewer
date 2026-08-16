@@ -3,6 +3,29 @@
 Reglas de numeración en [CLAUDE.md](CLAUDE.md): un requerimiento **nuevo** incrementa *major*;
 cambiar uno **existente** incrementa *patch*.
 
+## 56.0.0
+
+Requerimiento nuevo: **una implementación puede abarcar varios repositorios**.
+
+Se eligen los que hagan falta —no dos, los que sean— y cada uno declara su rol: **backend**,
+**frontend** u **otro**. El rol se sugiere solo por el nombre (`-be`, `-fe`, `app`) y se cambia de
+un click.
+
+**El plan sigue siendo uno solo, y esa es la razón de ser de esto.** Con un plan por repositorio no
+se puede ordenar lo cruzado: son dos listas que no se conocen y alguien termina coordinando a mano
+cuál corre primero, que es justo el trabajo que este módulo viene a sacar. Con un plan único, el
+planificador pone el endpoint antes de la pantalla que lo llama y hace que la segunda dependa de la
+primera.
+
+- **Cada tarea corre en un repositorio y lo dice.** Una tarea que toca dos son dos tareas con un
+  contrato en el medio; escribir en dos a la vez haría imposible saber qué commit corresponde a qué.
+- **La misma rama en todos**: buscar el trabajo de una implementación en tres repositorios con tres
+  nombres distintos es un problema que no hace falta tener.
+- **Se revisan todos antes de tocar ninguno.** Encontrar el segundo repositorio con cambios sin
+  commitear cuando el primero ya se modificó dejaría el trabajo partido a la mitad.
+- El rol no cambia cómo se ejecuta: le dice al planificador qué es cada repositorio, para que no
+  proponga una pantalla en el backend ni una migración en el frontend.
+
 ## 55.0.0
 
 Requerimiento nuevo: **módulo de implementaciones**. De las specs al código, sin supervisión.

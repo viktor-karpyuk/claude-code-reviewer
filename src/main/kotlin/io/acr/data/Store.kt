@@ -913,6 +913,30 @@ class Store(private val dbPath: Path) : AutoCloseable {
             );--split--
             CREATE INDEX ix_impl_question ON impl_question(impl_id, answered_at)
             """.trimIndent(),
+
+            // v48 — una implementación puede abarcar varios repositorios.
+            //
+            // El caso que lo motiva es el cruzado: el contrato del backend tiene que existir antes
+            // de que el frontend lo consuma. Con un plan por repositorio eso no se puede ordenar
+            // —son dos listas que no se conocen— y alguien termina coordinando a mano cuál corre
+            // primero, que es exactamente el trabajo que este módulo viene a sacar.
+            //
+            // Por eso el plan es UNO solo y cada tarea dice en qué repositorio corre: así el
+            // planificador puede poner el endpoint antes que la pantalla que lo llama.
+            //
+            // El rol —backend, frontend, otro— no cambia la ejecución: le dice al planificador qué
+            // es cada repositorio para que no proponga una pantalla en el backend.
+            """
+            CREATE TABLE impl_repo (
+                impl_id TEXT NOT NULL REFERENCES implementation(id) ON DELETE CASCADE,
+                repo_id TEXT NOT NULL REFERENCES repo(id) ON DELETE CASCADE,
+                role    TEXT NOT NULL DEFAULT 'OTHER',
+                PRIMARY KEY (impl_id, repo_id)
+            );--split--
+            ALTER TABLE impl_task ADD COLUMN repo_id TEXT;--split--
+            INSERT INTO impl_repo(impl_id, repo_id, role)
+                SELECT id, repo_id, 'OTHER' FROM implementation
+            """.trimIndent(),
         )
     }
 }
