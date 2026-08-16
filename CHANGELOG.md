@@ -3,6 +3,79 @@
 Reglas de numeración en [CLAUDE.md](CLAUDE.md): un requerimiento **nuevo** incrementa *major*;
 cambiar uno **existente** incrementa *patch*.
 
+## 60.0.0
+
+Requerimiento nuevo: **ver el código que escribió el Constructor, como se lee una review**.
+
+Saber que una tarea tocó cinco archivos no alcanza para confiar en ella: hay que ver qué escribió.
+Es la diferencia entre un informe de actividad y algo que se puede revisar.
+
+Ahora, al abrir una tarea, **cada archivo se abre y muestra su diff**: qué se agregó y qué se
+cambió, con los números de línea de los dos lados, en verde y rojo. Es el **mismo renderizador que
+usa la vista de código de las reviews**, así que el diff se lee igual venga de donde venga — y lo
+que se aprendió arreglando esa vista vale acá sin reescribir nada.
+
+- El diff se le pide a git **al abrir el archivo**, no se guarda: el commit ya lo tiene, guardar
+  una copia sería duplicar el repositorio adentro de la base, y sólo se lee el archivo que alguien
+  abre.
+- Cada diff **scrollea adentro de su propio recuadro**: un archivo nuevo de mil líneas empujaría
+  las otras tareas y el resto de la pantalla fuera de la vista.
+- Los archivos siguen mostrando su letra —creado, modificado, borrado— y sus líneas, para poder
+  decidir cuál abrir sin abrirlos todos.
+
+## 61.0.0
+
+El **Constructor**, rehecho: cómo se ve la lista, cómo se navega y qué se puede saber de una tarea.
+
+### La lista es una tabla
+
+Columnas de **estado**, nombre, repositorios, rama y avance, con **paginador** y **buscador** por
+nombre, repositorio o rama. Con veinte implementaciones, las tarjetas obligaban a scrollear para
+comparar dos cosas que en una tabla están una debajo de la otra. El buscador aparece recién con más
+de cuatro y el paginador con más de una página: un control que siempre dice "1 de 1" ocupa lugar
+para no informar nada.
+
+### El detalle de una tarea es una pantalla, no una fila que se abre
+
+Con quince archivos, expandir la fila empujaba el resto de la tabla fuera de la vista para leer algo
+que igual no entraba. Ahora tiene su propia pantalla, y **navegación con camino** —Constructor ›
+implementación › tarea— clickeable en cada escalón y **arriba de todo**. Un botón "volver" sirve con
+un solo nivel; con tres hay que apretarlo dos veces y adivinar dónde cae.
+
+### Qué se puede saber de una tarea
+
+Además del código: **de qué se compone el cambio**, clasificando los archivos en código, tests,
+migraciones, configuración, documentación y recursos. Y con eso, señales que responden lo que uno
+se pregunta al revisar código escrito sin supervisión:
+
+- **No tocó ningún test.** Trescientas líneas con tests y sin tests no son lo mismo, y el total no
+  distingue.
+- **El 80% del cambio está en un solo archivo.** Un archivo para leer entero no es lo mismo que una
+  refactorización dispersa, aunque sumen igual.
+- **Tocó migraciones o configuración.** Un error ahí no lo atrapa revisar la lógica, que es lo que
+  uno hace por defecto.
+- **Sólo cambió documentación.** Puede estar bien, pero conviene que se note.
+
+Van en ámbar y no en rojo: no son errores, son cosas para mirar. Pintarlas de error haría que una
+tarea correcta parezca rota y que el rojo deje de significar algo.
+
+Más el **commit** con su mensaje, autor y fecha, y el aviso de que está **sólo en la rama local** —
+la app nunca hace push, y decirlo evita que alguien lo busque en el remoto.
+
+### El estado, con nombre
+
+Cada tarea dice **pendiente, corriendo, completa, falló o esperando decisión**, en la tabla y en el
+detalle. Un símbolo solo obliga a aprenderse cinco glifos, y "⏸" no dice por sí mismo que está
+esperando una decisión.
+
+### El modal de creación y edición
+
+Era una fila de chips de repositorios y, debajo, otra mezclando roles con nombres de rama: todo del
+mismo tamaño y color, sin decir qué era cada cosa. Ahora cada repositorio elegido es una tarjeta con
+sus dos decisiones **etiquetadas y separadas** —qué es, y de qué rama parte—, con las ramas reales
+del clon en un desplegable. Escribir un nombre de rama que no existe no falla al guardar: falla al
+correr, media hora después.
+
 ## 59.0.0
 
 Cuatro cosas en el **Constructor**, todas sobre lo mismo: poder ver y decidir lo que antes pasaba

@@ -64,6 +64,9 @@ fun ImplDetail(
     val scope = androidx.compose.runtime.rememberCoroutineScope()
     var version by remember(implId) { mutableStateOf(0) }
     var editando by remember(implId) { mutableStateOf(false) }
+    // Qué tarea se está mirando. Expandir la fila obligaba a empujar el resto de la tabla fuera de
+    // la vista para leer algo que igual no entraba.
+    var tareaAbierta by remember(implId) { mutableStateOf<String?>(null) }
     val progreso by ctx.implEngine.progress.collectAsState()
     val vivo = progreso[implId]
 
@@ -100,10 +103,29 @@ fun ImplDetail(
     val repo = misRepos.firstOrNull()
     val corriendo = impl.status == ImplStatus.RUNNING || impl.status == ImplStatus.PLANNING
 
+    // La tarea abierta reemplaza a la pantalla: lo que pasó en una tarea es un tema en sí mismo y
+    // no un desplegable dentro de una tabla.
+    tareaAbierta?.let { id ->
+        tareas.firstOrNull { it.id == id }?.let { tar ->
+            TaskDetailScreen(
+                ctx = ctx,
+                task = tar,
+                repo = misRepos.firstOrNull { it.id == tar.repoId } ?: misRepos.firstOrNull(),
+                implTitle = impl.title,
+                onBack = { tareaAbierta = null; version++ },
+                onHome = { tareaAbierta = null; onBack() },
+                onRetry = { ctx.impls.resetTask(tar.id); tareaAbierta = null; version++ },
+            )
+            return
+        }
+    }
+
     Column(Modifier.fillMaxSize().padding(16.dp).verticalScroll(rememberScrollState())) {
+        io.acr.ui.Breadcrumbs(
+            listOf(io.acr.ui.Crumb(t("nav.impls"), onBack), io.acr.ui.Crumb(impl.title)),
+            Modifier.padding(bottom = 10.dp),
+        )
         Row(verticalAlignment = Alignment.CenterVertically) {
-            TextButton(onClick = onBack) { Text(t("common.back")) }
-            Spacer(Modifier.width(6.dp))
             Column(Modifier.weight(1f)) {
                 Text(impl.title, style = MaterialTheme.typography.titleMedium)
                 Text(
@@ -286,7 +308,7 @@ fun ImplDetail(
         // --- Tareas, como tabla ---
         Spacer(Modifier.height(14.dp))
         Row(Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
-            Spacer(Modifier.width(30.dp))
+            Cab(t("impl.thStatus"), 120.dp)
             Text(
                 t("impl.thTask"),
                 style = MaterialTheme.typography.labelSmall,
@@ -302,174 +324,54 @@ fun ImplDetail(
         HorizontalDivider()
 
         tareas.forEach { tar ->
-            var abierta by remember(tar.id) { mutableStateOf(false) }
-            // Siempre se puede abrir. Antes hacía falta que la tarea hubiera corrido, así que un
-            // plan recién armado no se podía leer: justo cuando uno quiere ver qué se propone
-            // hacer antes de dejarlo correr.
-            val puedeAbrir = true
-            Column {
-                Row(
-                    Modifier.fillMaxWidth()
-                        .let { if (puedeAbrir) it.clickable { abierta = !abierta } else it }
-                        .padding(vertical = 6.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    // El tilde verde de terminada, que es lo que se busca al barrer la lista.
-                    Text(
-                        marca(tar.status),
-                        style = MaterialTheme.typography.labelMedium,
-                        color = colorDe(tar.status),
-                        modifier = Modifier.width(30.dp),
-                    )
-                    Column(Modifier.weight(1f)) {
-                        Text("${tar.seq}. ${tar.title}", style = MaterialTheme.typography.bodySmall)
-                        tar.runningMin()?.let { va ->
-                            val est = tar.estimateMin ?: tar.size?.minutes
-                            Text(
-                                t("impl.runningFor", va.toInt()) + (est?.let { " / $it" }.orEmpty()) +
-                                    (if (est != null && va > est) "  " + t("impl.overrun") else ""),
-                                style = MaterialTheme.typography.labelSmall,
-                                color = if (est != null && va > est) io.acr.ui.stats.ChartColors.major
-                                else MaterialTheme.colorScheme.primary,
-                            )
-                        }
-                    }
-                    if (misRepos.size > 1) {
-                        Celda(misRepos.firstOrNull { it.id == tar.repoId }?.name.orEmpty(), 110.dp)
-                    }
-                    // Estimado y real juntos: es lo que hace que la estimación mejore.
-                    Celda(
-                        tar.actualMin?.let { "${it.toInt()}′" }?.plus(
-                            (tar.estimateMin ?: tar.size?.minutes)?.let { " / $it′" }.orEmpty(),
-                        ) ?: (tar.estimateMin ?: tar.size?.minutes)?.let { "~$it′" } ?: "—",
-                        110.dp,
-                    )
-                    Celda(
-                        tar.diff?.let { d ->
-                            listOfNotNull(
-                                d.filesAdded.takeIf { it > 0 }?.let { "+$it" },
-                                d.filesModified.takeIf { it > 0 }?.let { "~$it" },
-                                d.filesDeleted.takeIf { it > 0 }?.let { "−$it" },
-                            ).joinToString(" ").ifBlank { "—" }
-                        } ?: "—",
-                        110.dp,
-                    )
-                    Celda(
-                        tar.diff?.let { "+${it.linesAdded}/−${it.linesDeleted}" } ?: "—",
-                        110.dp,
-                    )
-                    Text(
-                        if (!puedeAbrir) "" else if (abierta) "▾" else "▸",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.width(34.dp),
-                    )
+            Row(
+                Modifier.fillMaxWidth()
+                    .clickable { tareaAbierta = tar.id }
+                    .padding(vertical = 6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Row(Modifier.width(120.dp), verticalAlignment = Alignment.CenterVertically) {
+                    TaskStatusBadge(tar.status)
                 }
-
-                if (abierta) {
-                    Column(Modifier.padding(start = 30.dp, bottom = 8.dp)) {
-                        // Lo que el plan dice que hay que hacer. Estaba guardado desde el
-                        // principio y no se mostraba en ningún lado, que es lo único que se puede
-                        // leer de una tarea que todavía no corrió.
-                        tar.detail.takeIf { it.isNotBlank() }?.let {
-                            Text(
-                                t("impl.whatToDo"),
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                            Text(it, style = MaterialTheme.typography.bodySmall)
-                            Spacer(Modifier.height(8.dp))
-                        }
-                        // Y lo que efectivamente hizo, cuando ya corrió. Son dos cosas distintas y
-                        // compararlas es la forma de ver si la tarea hizo lo que decía.
-                        tar.result?.takeIf { it.isNotBlank() }?.let {
-                            Text(
-                                t("impl.whatItDid"),
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                            Text(it, style = MaterialTheme.typography.bodySmall)
-                            Spacer(Modifier.height(6.dp))
-                        }
-                        // Qué tiene que estar antes. Es lo que explica por qué una tarea está más
-                        // abajo en la lista de lo que uno esperaría.
-                        tar.dependsOn.takeIf { it.isNotEmpty() }?.let { deps ->
-                            Text(
-                                t("impl.dependsOn", deps.joinToString(", ")),
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                            Spacer(Modifier.height(4.dp))
-                        }
-                        // Los archivos, uno por línea con su letra: es lo que permite revisar sin
-                        // abrir el repositorio.
-                        tar.diff?.files?.forEach { f ->
-                            Row(Modifier.fillMaxWidth().padding(vertical = 1.dp)) {
-                                Text(
-                                    f.status.toString(),
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = when (f.status) {
-                                        'A' -> io.acr.ui.stats.ChartColors.added
-                                        'D' -> io.acr.ui.stats.ChartColors.deleted
-                                        else -> MaterialTheme.colorScheme.onSurfaceVariant
-                                    },
-                                    modifier = Modifier.width(20.dp),
-                                )
-                                Text(
-                                    f.path,
-                                    style = MaterialTheme.typography.labelSmall
-                                        .copy(fontFamily = FontFamily.Monospace),
-                                    modifier = Modifier.weight(1f),
-                                    maxLines = 1,
-                                )
-                                Text(
-                                    "+${f.added}",
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = io.acr.ui.stats.ChartColors.added,
-                                    modifier = Modifier.width(56.dp),
-                                    textAlign = androidx.compose.ui.text.style.TextAlign.End,
-                                )
-                                Text(
-                                    "−${f.deleted}",
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = io.acr.ui.stats.ChartColors.deleted,
-                                    modifier = Modifier.width(56.dp),
-                                    textAlign = androidx.compose.ui.text.style.TextAlign.End,
-                                )
-                            }
-                        }
-                        tar.commitSha?.let {
-                            Spacer(Modifier.height(4.dp))
-                            Text(
-                                it.take(10),
-                                style = MaterialTheme.typography.labelSmall
-                                    .copy(fontFamily = FontFamily.Monospace),
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                        }
-                        tar.error?.takeIf { it.isNotBlank() }?.let { err ->
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Text(
-                                    err,
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = if (tar.status == TaskStatus.BLOCKED)
-                                        io.acr.ui.stats.ChartColors.major
-                                    else MaterialTheme.colorScheme.error,
-                                    modifier = Modifier.weight(1f),
-                                )
-                                TextButton(onClick = {
-                                    java.awt.Toolkit.getDefaultToolkit().systemClipboard
-                                        .setContents(java.awt.datatransfer.StringSelection(err), null)
-                                }) { Text(t("common.copyError")) }
-                            }
-                        }
-                        if (tar.status == TaskStatus.FAILED) {
-                            TextButton(onClick = { ctx.impls.resetTask(tar.id); version++ }) {
-                                Text(t("impl.retry"))
-                            }
-                        }
+                Column(Modifier.weight(1f)) {
+                    Text("${tar.seq}. ${tar.title}", style = MaterialTheme.typography.bodySmall)
+                    tar.runningMin()?.let { va ->
+                        val est = tar.estimateMin ?: tar.size?.minutes
+                        Text(
+                            t("impl.runningFor", va.toInt()) + (est?.let { " / $it" }.orEmpty()) +
+                                (if (est != null && va > est) "  " + t("impl.overrun") else ""),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = if (est != null && va > est) io.acr.ui.stats.ChartColors.major
+                            else MaterialTheme.colorScheme.primary,
+                        )
                     }
                 }
+                if (misRepos.size > 1) {
+                    Celda(misRepos.firstOrNull { it.id == tar.repoId }?.name.orEmpty(), 110.dp)
+                }
+                Celda(
+                    tar.actualMin?.let { "${it.toInt()}′" }?.plus(
+                        (tar.estimateMin ?: tar.size?.minutes)?.let { " / $it′" }.orEmpty(),
+                    ) ?: (tar.estimateMin ?: tar.size?.minutes)?.let { "~$it′" } ?: "—",
+                    110.dp,
+                )
+                Celda(
+                    tar.diff?.let { d ->
+                        listOfNotNull(
+                            d.filesAdded.takeIf { it > 0 }?.let { "+$it" },
+                            d.filesModified.takeIf { it > 0 }?.let { "~$it" },
+                            d.filesDeleted.takeIf { it > 0 }?.let { "−$it" },
+                        ).joinToString(" ").ifBlank { "—" }
+                    } ?: "—",
+                    110.dp,
+                )
+                Celda(tar.diff?.let { "+${it.linesAdded}/−${it.linesDeleted}" } ?: "—", 110.dp)
+                Text(
+                    "›",
+                    style = MaterialTheme.typography.titleSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.width(34.dp),
+                )
             }
             HorizontalDivider()
         }

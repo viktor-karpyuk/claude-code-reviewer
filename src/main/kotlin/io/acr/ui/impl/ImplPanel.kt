@@ -2,6 +2,7 @@ package io.acr.ui.impl
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -51,11 +52,24 @@ fun ImplPanel(ctx: AppContext, repos: List<io.acr.forge.RepoRecord>) {
     // Un tic mientras hay algo corriendo: sin esto la lista muestra el avance del momento en que
     // se abrió y no se entera de nada hasta que se navega a otro lado y se vuelve.
     var tic by remember { mutableStateOf(0) }
+    var busqueda by remember { mutableStateOf("") }
 
-    val lista = io.acr.ui.dbState(version, initial = emptyList<Implementation>()) { ctx.impls.list() }
+    val todas = io.acr.ui.dbState(version, initial = emptyList<Implementation>()) { ctx.impls.list() }
     // El avance de todas de una sola consulta. Antes se pedían las tareas de cada implementación
     // por separado dentro del bucle de dibujo: con veinte implementaciones eran veinte consultas
     // por recomposición.
+    // Se busca en memoria y no en SQL: son decenas de implementaciones, no miles, y filtrar acá
+    // permite buscar también por el nombre del repositorio, que vive en otra tabla.
+    val lista = remember(todas, busqueda, repos) {
+        val q = busqueda.trim().lowercase()
+        if (q.isBlank()) todas
+        else todas.filter { i ->
+            i.title.lowercase().contains(q) ||
+                i.branch.orEmpty().lowercase().contains(q) ||
+                repos.firstOrNull { it.id == i.repoId }?.name?.lowercase()?.contains(q) == true
+        }
+    }
+
     val avances = io.acr.ui.dbState(version, lista, tic, initial = emptyMap<String, Progress>()) {
         ctx.impls.progressOfAll()
     }
@@ -92,6 +106,33 @@ fun ImplPanel(ctx: AppContext, repos: List<io.acr.forge.RepoRecord>) {
             Button(enabled = repos.isNotEmpty(), onClick = { creando = true }) { Text(t("impl.new")) }
         }
 
+        // El buscador aparece recién cuando hay suficientes como para necesitarlo: con tres
+        // implementaciones, un campo de búsqueda es un control que ocupa lugar y nunca se usa.
+        if (todas.size > 4) {
+            Spacer(Modifier.height(10.dp))
+            androidx.compose.material3.OutlinedTextField(
+                value = busqueda,
+                onValueChange = { busqueda = it },
+                label = { Text(t("impl.search")) },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth(),
+                trailingIcon = {
+                    if (busqueda.isNotBlank()) {
+                        androidx.compose.material3.TextButton(onClick = { busqueda = "" }) {
+                            Text(t("common.cancel"))
+                        }
+                    }
+                },
+            )
+            if (busqueda.isNotBlank()) {
+                Text(
+                    t("impl.searchResults", lista.size, todas.size),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+
         if (lista.isNotEmpty()) {
             Spacer(Modifier.height(14.dp))
             Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -120,62 +161,120 @@ fun ImplPanel(ctx: AppContext, repos: List<io.acr.forge.RepoRecord>) {
         Spacer(Modifier.height(16.dp))
         if (lista.isEmpty()) {
             Text(
-                t("impl.empty"),
+                if (busqueda.isNotBlank()) t("impl.noMatches") else t("impl.empty"),
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
 
-        lista.forEach { impl ->
+        // Tabla y no tarjetas: con veinte implementaciones, las tarjetas obligan a scrollear
+        // para comparar dos cosas que en una tabla están una debajo de la otra.
+        val porPagina = 10
+        var pagina by remember(busqueda) { mutableStateOf(0) }
+        val paginas = maxOf(1, (lista.size + porPagina - 1) / porPagina)
+        val visibles = lista.drop(pagina * porPagina).take(porPagina)
+
+        Row(Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
+            ColHead(t("impl.thStatus"), 150.dp)
+            Text(
+                t("impl.thName"),
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.weight(1f),
+            )
+            ColHead(t("impl.thRepos"), 200.dp)
+            ColHead(t("impl.thBranch"), 170.dp)
+            ColHead(t("impl.thProgress"), 190.dp)
+        }
+        HorizontalDivider()
+
+        visibles.forEach { impl ->
             val avance = avances[impl.id] ?: Progress(0, 0, 0, 0, 0, 0.0, 0.0, null)
             val suyos = io.acr.ui.dbState(impl.id, version, initial = emptyList<io.acr.impl.ImplRepo>()) {
                 ctx.impls.reposOf(impl.id)
             }
-            Column(
-                Modifier.fillMaxWidth().padding(vertical = 4.dp)
-                    .clip(RoundedCornerShape(8.dp))
-                    .background(MaterialTheme.colorScheme.surfaceVariant)
-                    .clickable { abierta = impl.id }
-                    .padding(12.dp),
+            Row(
+                Modifier.fillMaxWidth().clickable { abierta = impl.id }.padding(vertical = 7.dp),
+                verticalAlignment = Alignment.CenterVertically,
             ) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(impl.title, style = MaterialTheme.typography.titleSmall, modifier = Modifier.weight(1f))
+                Row(Modifier.width(150.dp), verticalAlignment = Alignment.CenterVertically) {
                     if (impl.status == ImplStatus.RUNNING || impl.status == ImplStatus.PLANNING) {
-                        CircularProgressIndicator(Modifier.height(12.dp).width(12.dp), strokeWidth = 2.dp)
+                        CircularProgressIndicator(Modifier.height(11.dp).width(11.dp), strokeWidth = 2.dp)
                         Spacer(Modifier.width(6.dp))
                     }
                     EstadoBadge(impl.status)
                 }
                 Text(
-                    listOfNotNull(
-                        suyos.mapNotNull { r -> repos.firstOrNull { it.id == r.repoId }?.name }
-                            .joinToString(" + ").takeIf { it.isNotBlank() },
-                        impl.branch,
-                    ).joinToString("  ·  "),
-                    style = MaterialTheme.typography.labelSmall.copy(fontFamily = FontFamily.Monospace),
+                    impl.title,
+                    style = MaterialTheme.typography.bodySmall,
+                    modifier = Modifier.weight(1f),
+                    maxLines = 1,
+                )
+                Text(
+                    suyos.mapNotNull { r -> repos.firstOrNull { it.id == r.repoId }?.name }
+                        .joinToString(" + "),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.width(200.dp),
+                    maxLines = 1,
+                )
+                Text(
+                    impl.branch ?: "—",
+                    style = MaterialTheme.typography.labelSmall
+                        .copy(fontFamily = FontFamily.Monospace),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.width(170.dp),
+                    maxLines = 1,
+                )
+                Column(Modifier.width(190.dp)) {
+                    if (avance.total > 0) {
+                        val objetivo = avance.done.toFloat() / avance.total
+                        val animado by androidx.compose.animation.core.animateFloatAsState(
+                            targetValue = objetivo,
+                            animationSpec = androidx.compose.animation.core.tween(600),
+                            label = "avance-${impl.id}",
+                        )
+                        LinearProgressIndicator(
+                            progress = { animado },
+                            modifier = Modifier.fillMaxWidth().height(4.dp),
+                        )
+                        Text(
+                            t("impl.progress", avance.done, avance.total) +
+                                (if (avance.failed > 0) "  ·  " + t("impl.failedN", avance.failed) else ""),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = if (avance.failed > 0) MaterialTheme.colorScheme.error
+                            else MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    } else {
+                        Text(
+                            "—",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
+            }
+            HorizontalDivider()
+        }
+
+        // El paginador aparece sólo si hay más de una página: un control que siempre dice "1 de 1"
+        // ocupa lugar para no informar nada.
+        if (paginas > 1) {
+            Spacer(Modifier.height(8.dp))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                androidx.compose.material3.TextButton(
+                    enabled = pagina > 0,
+                    onClick = { pagina-- },
+                ) { Text("‹ " + t("impl.prev")) }
+                Text(
+                    t("impl.page", pagina + 1, paginas),
+                    style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
-                if (avance.total > 0) {
-                    Spacer(Modifier.height(6.dp))
-                    val objetivo = avance.done.toFloat() / avance.total
-                    val animado by androidx.compose.animation.core.animateFloatAsState(
-                        targetValue = objetivo,
-                        animationSpec = androidx.compose.animation.core.tween(600),
-                        label = "avance-${impl.id}",
-                    )
-                    LinearProgressIndicator(
-                        progress = { animado },
-                        modifier = Modifier.fillMaxWidth().height(4.dp),
-                    )
-                    Spacer(Modifier.height(4.dp))
-                    Text(
-                        t("impl.progress", avance.done, avance.total) + tiempo(avance) +
-                            (if (avance.failed > 0) "  ·  " + t("impl.failedN", avance.failed) else ""),
-                        style = MaterialTheme.typography.labelSmall,
-                        color = if (avance.failed > 0) MaterialTheme.colorScheme.error
-                        else MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
+                androidx.compose.material3.TextButton(
+                    enabled = pagina < paginas - 1,
+                    onClick = { pagina++ },
+                ) { Text(t("impl.next") + " ›") }
             }
         }
 
@@ -183,6 +282,17 @@ fun ImplPanel(ctx: AppContext, repos: List<io.acr.forge.RepoRecord>) {
             NewImplDialog(ctx, repos, { creando = false }) { creando = false; version++ }
         }
     }
+}
+
+/** Encabezado de columna de la tabla. */
+@Composable
+private fun ColHead(texto: String, ancho: androidx.compose.ui.unit.Dp) {
+    Text(
+        texto,
+        style = MaterialTheme.typography.labelSmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        modifier = Modifier.width(ancho),
+    )
 }
 
 /** Una cifra del encabezado. Se destaca sólo si pide atención: si todo resalta, nada resalta. */

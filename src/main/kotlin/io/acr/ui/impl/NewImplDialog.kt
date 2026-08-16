@@ -63,70 +63,13 @@ fun NewImplDialog(
                     modifier = Modifier.fillMaxWidth(),
                 )
 
-                Spacer(Modifier.height(8.dp))
-                Text(t("impl.repo"), style = MaterialTheme.typography.labelSmall)
-                Text(
-                    t("impl.repoNote"),
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                Spacer(Modifier.height(12.dp))
+                RepoPicker(
+                    repos = repos,
+                    elegidos = elegidos,
+                    onChange = { elegidos = it },
+                    sugerirRol = { adivinarRol(it) },
                 )
-                FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    repos.forEach { r ->
-                        val puesto = elegidos.firstOrNull { it.repoId == r.id }
-                        FilterChip(
-                            selected = puesto != null,
-                            onClick = {
-                                elegidos = if (puesto != null) elegidos - puesto
-                                else elegidos + io.acr.impl.ImplRepo(r.id, adivinarRol(r.name))
-                            },
-                            label = { Text(r.name) },
-                        )
-                    }
-                }
-                // El rol no cambia la ejecución: le dice al planificador qué es cada repositorio
-                // para que no proponga una pantalla en el backend.
-                elegidos.forEach { e ->
-                    Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
-                        Text(
-                            repos.firstOrNull { it.id == e.repoId }?.name.orEmpty(),
-                            style = MaterialTheme.typography.labelSmall,
-                            modifier = Modifier.width(180.dp),
-                        )
-                        // De qué rama parte. Se ofrecen las del clon en vez de un campo libre:
-                        // escribir mal el nombre no falla al guardar, falla al correr.
-                        val ramas = io.acr.ui.dbState(e.repoId, initial = emptyList<String>()) {
-                            kotlinx.coroutines.runBlocking {
-                                repos.firstOrNull { it.id == e.repoId }?.let {
-                                    io.acr.claude.Git.branches(java.io.File(it.localPath))
-                                }.orEmpty()
-                            }
-                        }
-                        FlowRow(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                            io.acr.impl.RepoRole.entries.forEach { rol ->
-                                FilterChip(
-                                    selected = e.role == rol,
-                                    onClick = {
-                                        elegidos = elegidos.map { if (it.repoId == e.repoId) it.copy(role = rol) else it }
-                                    },
-                                    label = { Text(t(rol.labelKey), style = MaterialTheme.typography.labelSmall) },
-                                )
-                            }
-                            ramas.take(6).forEach { rama ->
-                                FilterChip(
-                                    selected = e.baseBranch == rama,
-                                    onClick = {
-                                        elegidos = elegidos.map {
-                                            if (it.repoId == e.repoId) {
-                                                it.copy(baseBranch = if (it.baseBranch == rama) null else rama)
-                                            } else it
-                                        }
-                                    },
-                                    label = { Text(rama, style = MaterialTheme.typography.labelSmall) },
-                                )
-                            }
-                        }
-                    }
-                }
 
                 Spacer(Modifier.height(10.dp))
                 Text(t("impl.docs"), style = MaterialTheme.typography.labelSmall)
