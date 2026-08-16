@@ -288,8 +288,19 @@ fun ImplDetail(
 
         impl.planSummary?.takeIf { it.isNotBlank() }?.let {
             Spacer(Modifier.height(10.dp))
-            io.acr.ui.CollapsibleCard(t("impl.plan"), ctx.prefs, "implplan-$implId", maxHeight = 180.dp) {
-                Text(it, style = MaterialTheme.typography.bodySmall)
+            io.acr.ui.CollapsibleCard(t("impl.plan"), ctx.prefs, "implplan-$implId", maxHeight = 320.dp) {
+                Column {
+                    Text(it, style = MaterialTheme.typography.bodySmall)
+                    Spacer(Modifier.height(14.dp))
+                    PlanReview(
+                        ctx = ctx,
+                        impl = impl,
+                        tasks = tareas,
+                        repos = misRepos,
+                        running = corriendo,
+                        onDone = { version++ },
+                    )
+                }
             }
         }
 

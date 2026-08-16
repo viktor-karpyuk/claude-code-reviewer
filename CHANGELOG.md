@@ -3,6 +3,38 @@
 Reglas de numeración en [CLAUDE.md](CLAUDE.md): un requerimiento **nuevo** incrementa *major*;
 cambiar uno **existente** incrementa *patch*.
 
+## 62.0.0
+
+**Las tareas ahora tienen pasos.** El detalle de una tarea dice qué hay que lograr; los pasos dicen
+cómo, y ahí se ve si el plan entendió el problema —una tarea de una línea puede esconder cinco
+decisiones y eso no se nota hasta leerla desarmada—. Se guardan con el plan y se cierran con lo que
+el modelo reporta al terminar: lo que no confirmó queda marcado sin hacer, no dado por bueno.
+
+Se cierran al final y no mientras corre porque desde afuera no hay forma de saber en qué paso está:
+los eventos del CLI dicen qué archivo tocó, no qué paso del plan estaba haciendo. Mostrar un avance
+paso a paso sería una barra que no mide nada.
+
+**El prompt de cada tarea queda guardado**, plegado al pie de su detalle. Es lo único que distingue
+un problema del modelo de un problema de lo que se le pidió, y se escribe antes de correr: si la
+tarea revienta a mitad de camino, guardarlo al final habría significado no tenerlo nunca en el único
+caso donde importa.
+
+**Las cuatro fechas de una tarea**: creada, modificada, arranque y fin. Creada y modificada contestan
+si el plan se rehizo; arranque y fin, cuánto tardó. Con una sola no se puede distinguir una tarea
+replanificada de una que nadie tocó.
+
+**Revisión del plan.** El módulo sigue siendo autónomo —no hay que aprobar nada para que arranque—
+pero autónomo no quiere decir que el primer plan sea el bueno, y hasta ahora ante un plan flojo sólo
+quedaba dejarlo correr y arreglar después, o borrar todo y volver a cargar las specs. Ahora se
+escribe en una línea en qué sentido corregirlo —"separá la tarea 4", "falta la migración"— y se
+replanifica con el plan actual a la vista del modelo, no de cero: rehacer perdería las decisiones de
+orden que ya estaban bien y devolvería otras distintas, y entonces no habría forma de saber si la
+revisión mejoró algo o sólo barajó de nuevo. El prompt de revisión está a la vista para no escribir
+una guía que repita lo que ya pide.
+
+Replanificar reemplaza las tareas, así que si alguna ya corrió se avisa cuántas y se pide confirmar.
+Los commits quedan en la rama; lo que se pierde es el registro de qué tarea los hizo.
+
 ## 61.2.0
 
 - **El número de tarea es su propia columna**, primera de la tabla. Pegado al título se leía como

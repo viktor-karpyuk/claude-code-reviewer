@@ -966,6 +966,40 @@ class Store(private val dbPath: Path) : AutoCloseable {
             """
             ALTER TABLE impl_repo ADD COLUMN base_branch TEXT
             """.trimIndent(),
+
+            // v51 — los pasos de cada tarea, el prompt con el que se le pidió, y sus fechas.
+            //
+            // Una tarea dice qué hay que hacer; los pasos dicen cómo. Sirven para dos cosas
+            // distintas: antes de correr, para ver si el plan entendió el problema —una tarea de
+            // una línea puede esconder cinco decisiones—; y mientras corre, para saber por dónde
+            // va en vez de mirar una barra que no se mueve.
+            //
+            // El prompt se guarda porque es lo único que explica por qué una tarea hizo lo que
+            // hizo. Sin él, ante un resultado raro sólo queda adivinar si el problema fue el
+            // modelo o lo que se le pidió.
+            //
+            // Las fechas van las cuatro: creada y modificada dicen si el plan se rehizo, arranque
+            // y fin dicen cuánto tardó. Son preguntas distintas y una sola fecha no contesta las
+            // dos.
+            """
+            CREATE TABLE impl_step (
+                id          TEXT PRIMARY KEY,
+                task_id     TEXT NOT NULL REFERENCES impl_task(id) ON DELETE CASCADE,
+                seq         INTEGER NOT NULL,
+                title       TEXT NOT NULL,
+                status      TEXT NOT NULL DEFAULT 'PENDING',
+                note        TEXT,
+                created_at  TEXT NOT NULL,
+                updated_at  TEXT,
+                started_at  TEXT,
+                finished_at TEXT
+            );--split--
+            CREATE INDEX ix_impl_step ON impl_step(task_id, seq);--split--
+            ALTER TABLE impl_task ADD COLUMN prompt TEXT;--split--
+            ALTER TABLE impl_task ADD COLUMN created_at TEXT;--split--
+            ALTER TABLE impl_task ADD COLUMN updated_at TEXT;--split--
+            ALTER TABLE implementation ADD COLUMN review_guidance TEXT
+            """.trimIndent(),
         )
     }
 }

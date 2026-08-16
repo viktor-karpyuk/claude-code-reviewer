@@ -133,12 +133,39 @@ data class Implementation(
     val baseBranch: String?,
     val status: ImplStatus,
     val planSummary: String?,
+    /**
+     * Lo último que se pidió al revisar el plan.
+     *
+     * Se guarda para que la próxima revisión arranque de ahí en vez de en blanco: casi siempre se
+     * revisa dos veces seguidas por lo mismo, y volver a escribirlo entero invita a escribir menos.
+     */
+    val reviewGuidance: String? = null,
     val planModel: String?,
     val codeModel: String?,
     val error: String?,
     val costUsd: Double?,
     val createdAt: String,
     val plannedAt: String?,
+    val finishedAt: String?,
+)
+
+/**
+ * Un paso dentro de una tarea: lo concreto que hay que hacer.
+ *
+ * Sirven para dos momentos distintos. Antes de correr, para ver si el plan entendió el problema:
+ * una tarea de una línea puede esconder cinco decisiones. Mientras corre, para saber por dónde va.
+ */
+data class ImplStep(
+    val id: String,
+    val taskId: String,
+    val seq: Int,
+    val title: String,
+    val status: TaskStatus,
+    /** Qué pasó con este paso, cuando el modelo lo cuenta. */
+    val note: String?,
+    val createdAt: String,
+    val updatedAt: String?,
+    val startedAt: String?,
     val finishedAt: String?,
 )
 
@@ -175,6 +202,17 @@ data class ImplTask(
     val finishedAt: String?,
     /** Qué tocó, tomado del commit. Null en las tareas que no llegaron a commitear. */
     val diff: TaskDiff? = null,
+    /**
+     * El prompt con el que se le pidió el trabajo.
+     *
+     * Es lo único que explica por qué una tarea hizo lo que hizo: ante un resultado raro, sin esto
+     * sólo queda adivinar si el problema fue el modelo o lo que se le pidió.
+     */
+    val prompt: String? = null,
+    val createdAt: String? = null,
+    /** Última vez que cambió algo suyo. Distinto de terminada: replanificar también la modifica. */
+    val updatedAt: String? = null,
+    val steps: List<ImplStep> = emptyList(),
 ) {
     /** Cuánto tardó de verdad, en minutos. Null mientras no haya terminado. */
     val actualMin: Double?

@@ -177,13 +177,15 @@ class ImplRepository(private val store: Store) {
                 ps.setString(7, implId)
                 ps.executeUpdate()
             }
+            val ahora = Instant.now().toString()
             tasks.forEach { t ->
+                val taskId = UlidCreator.getUlid().toString()
                 conn.prepareStatement(
                     """INSERT INTO impl_task(id, impl_id, seq, title, detail, depends_on, size,
-                             estimate_min, status, repo_id)
-                       VALUES (?,?,?,?,?,?,?,?,?,?)""",
+                             estimate_min, status, repo_id, created_at, updated_at)
+                       VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
                 ).use { ps ->
-                    ps.setString(1, UlidCreator.getUlid().toString())
+                    ps.setString(1, taskId)
                     ps.setString(2, implId)
                     ps.setInt(3, t.seq)
                     ps.setString(4, t.title)
@@ -193,18 +195,73 @@ class ImplRepository(private val store: Store) {
                     if (t.estimateMin == null) ps.setNull(8, java.sql.Types.INTEGER) else ps.setInt(8, t.estimateMin)
                     ps.setString(9, TaskStatus.PENDING.name)
                     ps.setString(10, t.repoId)
+                    ps.setString(11, ahora)
+                    ps.setString(12, ahora)
                     ps.executeUpdate()
+                }
+                t.steps.forEach { paso ->
+                    conn.prepareStatement(
+                        """INSERT INTO impl_step(id, task_id, seq, title, status, created_at)
+                           VALUES (?,?,?,?,?,?)""",
+                    ).use { ps ->
+                        ps.setString(1, UlidCreator.getUlid().toString())
+                        ps.setString(2, taskId)
+                        ps.setInt(3, paso.seq)
+                        ps.setString(4, paso.title)
+                        ps.setString(5, TaskStatus.PENDING.name)
+                        ps.setString(6, ahora)
+                        ps.executeUpdate()
+                    }
                 }
             }
         }
     }
 
-    fun tasks(implId: String): List<ImplTask> =
+    /**
+     * Los pasos de todas las tareas de una implementación, en una sola consulta.
+     *
+     * Agrupados acá y no pedidos por tarea: la pantalla los muestra en una lista de hasta
+     * veinticinco tareas, y una consulta por fila en cada recomposición es exactamente el problema
+     * que se arregló antes con el avance.
+     */
+    private fun stepsOf(implId: String): Map<String, List<io.acr.impl.ImplStep>> =
         store.stmt(
+            """SELECT s.id, s.task_id, s.seq, s.title, s.status, s.note,
+                      s.created_at, s.updated_at, s.started_at, s.finished_at
+                 FROM impl_step s JOIN impl_task t ON t.id = s.task_id
+                WHERE t.impl_id = ? ORDER BY s.seq""",
+        ) { ps ->
+            ps.setString(1, implId)
+            ps.executeQuery().use { rs ->
+                buildList {
+                    while (rs.next()) {
+                        add(
+                            io.acr.impl.ImplStep(
+                                id = rs.getString(1),
+                                taskId = rs.getString(2),
+                                seq = rs.getInt(3),
+                                title = rs.getString(4),
+                                status = runCatching { TaskStatus.valueOf(rs.getString(5)) }
+                                    .getOrDefault(TaskStatus.PENDING),
+                                note = rs.getString(6),
+                                createdAt = rs.getString(7).orEmpty(),
+                                updatedAt = rs.getString(8),
+                                startedAt = rs.getString(9),
+                                finishedAt = rs.getString(10),
+                            ),
+                        )
+                    }
+                }
+            }
+        }.groupBy { it.taskId }
+
+    fun tasks(implId: String): List<ImplTask> {
+        val pasos = stepsOf(implId)
+        return store.stmt(
             """SELECT id, impl_id, seq, title, detail, depends_on, size, estimate_min, status,
                       commit_sha, result, error, cost_usd, started_at, finished_at, repo_id,
                       files_added, files_modified, files_deleted, lines_added, lines_deleted,
-                      files_detail
+                      files_detail, prompt, created_at, updated_at
                  FROM impl_task WHERE impl_id = ? ORDER BY seq""",
         ) { ps ->
             ps.setString(1, implId)
@@ -249,12 +306,17 @@ class ImplRepository(private val store: Store) {
                                             },
                                     )
                                 },
+                                prompt = rs.getString(23),
+                                createdAt = rs.getString(24),
+                                updatedAt = rs.getString(25),
+                                steps = pasos[rs.getString(1)].orEmpty(),
                             ),
                         )
                     }
                 }
             }
         }
+    }
 
     /**
      * El avance de todas las implementaciones, en una sola consulta.
@@ -305,8 +367,79 @@ class ImplRepository(private val store: Store) {
         }
 
     fun startTask(taskId: String) {
-        store.stmt("UPDATE impl_task SET status = ?, started_at = ?, error = NULL WHERE id = ?") { ps ->
+        val ahora = Instant.now().toString()
+        store.stmt(
+            """UPDATE impl_task SET status = ?, started_at = ?, updated_at = ?, error = NULL
+                 WHERE id = ?""",
+        ) { ps ->
             ps.setString(1, TaskStatus.RUNNING.name)
+            ps.setString(2, ahora)
+            ps.setString(3, ahora)
+            ps.setString(4, taskId)
+            ps.executeUpdate()
+        }
+    }
+
+    /**
+     * Guarda el prompt con el que se le pidió el trabajo a la tarea.
+     *
+     * Se guarda al arrancar y no después: si la tarea revienta a mitad de camino, el prompt es
+     * justamente lo que hace falta para entender por qué, y guardarlo al final significaría no
+     * tenerlo nunca en el único caso donde importa.
+     */
+    fun savePrompt(taskId: String, prompt: String) {
+        store.stmt("UPDATE impl_task SET prompt = ?, updated_at = ? WHERE id = ?") { ps ->
+            ps.setString(1, prompt)
+            ps.setString(2, Instant.now().toString())
+            ps.setString(3, taskId)
+            ps.executeUpdate()
+        }
+    }
+
+    /** Marca un paso como en curso. Los pasos se tildan de a uno mientras la tarea avanza. */
+    fun startStep(stepId: String) {
+        val ahora = Instant.now().toString()
+        store.stmt(
+            """UPDATE impl_step SET status = ?, started_at = ?, updated_at = ? WHERE id = ?""",
+        ) { ps ->
+            ps.setString(1, TaskStatus.RUNNING.name)
+            ps.setString(2, ahora)
+            ps.setString(3, ahora)
+            ps.setString(4, stepId)
+            ps.executeUpdate()
+        }
+    }
+
+    /**
+     * Cierra un paso con lo que reportó el modelo.
+     *
+     * Un paso que no se hizo queda FAILED y no PENDING: pendiente se lee como "todavía va a
+     * pasar", y cuando la tarea ya terminó eso es mentira. Lo que quedó sin hacer tiene que
+     * verse como lo que es.
+     */
+    fun finishStep(stepId: String, done: Boolean, note: String?) {
+        val ahora = Instant.now().toString()
+        store.stmt(
+            """UPDATE impl_step SET status = ?, note = ?, finished_at = ?, updated_at = ?,
+                   started_at = COALESCE(started_at, ?) WHERE id = ?""",
+        ) { ps ->
+            ps.setString(1, if (done) TaskStatus.DONE.name else TaskStatus.FAILED.name)
+            ps.setString(2, note?.take(1_000))
+            ps.setString(3, ahora)
+            ps.setString(4, ahora)
+            ps.setString(5, ahora)
+            ps.setString(6, stepId)
+            ps.executeUpdate()
+        }
+    }
+
+    /** Devuelve los pasos de una tarea a pendientes, para reintentarla desde cero. */
+    fun resetSteps(taskId: String) {
+        store.stmt(
+            """UPDATE impl_step SET status = ?, note = NULL, started_at = NULL, finished_at = NULL,
+                   updated_at = ? WHERE task_id = ?""",
+        ) { ps ->
+            ps.setString(1, TaskStatus.PENDING.name)
             ps.setString(2, Instant.now().toString())
             ps.setString(3, taskId)
             ps.executeUpdate()
@@ -323,7 +456,8 @@ class ImplRepository(private val store: Store) {
         store.stmt(
             """UPDATE impl_task SET status = ?, commit_sha = ?, result = ?, cost_usd = ?,
                    finished_at = ?, files_added = ?, files_modified = ?, files_deleted = ?,
-                   lines_added = ?, lines_deleted = ?, files_detail = ? WHERE id = ?""",
+                   lines_added = ?, lines_deleted = ?, files_detail = ?, updated_at = ?
+                 WHERE id = ?""",
         ) { ps ->
             ps.setString(1, TaskStatus.DONE.name)
             ps.setString(2, commitSha)
@@ -346,20 +480,24 @@ class ImplRepository(private val store: Store) {
                     diff.files.joinToString("\n") { f -> f.status.toString() + "|" + f.path + "|" + f.added + "|" + f.deleted },
                 )
             }
-            ps.setString(12, taskId)
+            ps.setString(12, Instant.now().toString())
+            ps.setString(13, taskId)
             ps.executeUpdate()
         }
     }
 
     fun failTask(taskId: String, error: String, costUsd: Double? = null) {
         store.stmt(
-            "UPDATE impl_task SET status = ?, error = ?, cost_usd = ?, finished_at = ? WHERE id = ?",
+            """UPDATE impl_task SET status = ?, error = ?, cost_usd = ?, finished_at = ?,
+                   updated_at = ? WHERE id = ?""",
         ) { ps ->
+            val ahora = Instant.now().toString()
             ps.setString(1, TaskStatus.FAILED.name)
             ps.setString(2, error.take(2_000))
             if (costUsd == null) ps.setNull(3, java.sql.Types.REAL) else ps.setDouble(3, costUsd)
-            ps.setString(4, Instant.now().toString())
-            ps.setString(5, taskId)
+            ps.setString(4, ahora)
+            ps.setString(5, ahora)
+            ps.setString(6, taskId)
             ps.executeUpdate()
         }
     }
@@ -368,12 +506,14 @@ class ImplRepository(private val store: Store) {
     fun resetTask(taskId: String) {
         store.stmt(
             """UPDATE impl_task SET status = ?, error = NULL, result = NULL, started_at = NULL,
-                   finished_at = NULL WHERE id = ?""",
+                   finished_at = NULL, updated_at = ? WHERE id = ?""",
         ) { ps ->
             ps.setString(1, TaskStatus.PENDING.name)
-            ps.setString(2, taskId)
+            ps.setString(2, Instant.now().toString())
+            ps.setString(3, taskId)
             ps.executeUpdate()
         }
+        resetSteps(taskId)
     }
 
     fun finish(implId: String, status: ImplStatus, costUsd: Double?) {
@@ -470,22 +610,43 @@ class ImplRepository(private val store: Store) {
                 ps.executeUpdate()
             }
             conn.prepareStatement(
-                """UPDATE impl_task SET status = ?, error = NULL, started_at = NULL, finished_at = NULL
+                """UPDATE impl_task SET status = ?, error = NULL, started_at = NULL,
+                        finished_at = NULL, updated_at = ?
                     WHERE id = (SELECT task_id FROM impl_question WHERE id = ?)""",
             ).use { ps ->
                 ps.setString(1, io.acr.impl.TaskStatus.PENDING.name)
-                ps.setString(2, questionId)
+                ps.setString(2, Instant.now().toString())
+                ps.setString(3, questionId)
                 ps.executeUpdate()
             }
         }
     }
 
     fun blockTask(taskId: String, question: String) {
-        store.stmt("UPDATE impl_task SET status = ?, error = ?, finished_at = ? WHERE id = ?") { ps ->
+        store.stmt(
+            """UPDATE impl_task SET status = ?, error = ?, finished_at = ?, updated_at = ?
+                 WHERE id = ?""",
+        ) { ps ->
+            val ahora = Instant.now().toString()
             ps.setString(1, io.acr.impl.TaskStatus.BLOCKED.name)
             ps.setString(2, question.take(1_000))
-            ps.setString(3, Instant.now().toString())
-            ps.setString(4, taskId)
+            ps.setString(3, ahora)
+            ps.setString(4, ahora)
+            ps.setString(5, taskId)
+            ps.executeUpdate()
+        }
+    }
+
+    /**
+     * Guarda lo último que se pidió al revisar el plan.
+     *
+     * Para que la próxima revisión arranque de ahí y no en blanco: casi siempre se revisa dos veces
+     * seguidas por lo mismo, y volver a escribirlo entero invita a escribir menos.
+     */
+    fun saveReviewGuidance(implId: String, guidance: String) {
+        store.stmt("UPDATE implementation SET review_guidance = ? WHERE id = ?") { ps ->
+            ps.setString(1, guidance.take(4_000))
+            ps.setString(2, implId)
             ps.executeUpdate()
         }
     }
@@ -498,7 +659,7 @@ class ImplRepository(private val store: Store) {
         store.stmt(
             """SELECT id, repo_id, title, sources, extra_prompt, branch, base_branch, status,
                       plan_summary, plan_model, code_model, error, cost_usd, created_at,
-                      planned_at, finished_at
+                      planned_at, finished_at, review_guidance
                  FROM implementation $tail""",
         ) { ps ->
             bind(ps)
@@ -524,6 +685,7 @@ class ImplRepository(private val store: Store) {
                                 createdAt = rs.getString(14),
                                 plannedAt = rs.getString(15),
                                 finishedAt = rs.getString(16),
+                                reviewGuidance = rs.getString(17),
                             ),
                         )
                     }

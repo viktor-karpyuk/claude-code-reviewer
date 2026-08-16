@@ -88,7 +88,19 @@ class ImplEngine(
      * Corre en modo lectura aunque después se vaya a escribir: planificar es mirar, y darle
      * permisos de escritura a esta etapa sería regalarlos sin motivo.
      */
-    suspend fun plan(repos: List<RepoRecord>, implId: String): Result<Int> {
+    suspend fun plan(
+        repos: List<RepoRecord>,
+        implId: String,
+        /**
+         * En qué sentido revisar el plan que ya existe, cuando esto es una replanificación.
+         *
+         * Null es planificar de cero. Con texto, al modelo se le da el plan actual y esta guía y se
+         * le pide el revisado: replanificar de cero perdería las decisiones de orden que ya estaban
+         * bien y devolvería otras distintas, y entonces no habría forma de saber si la revisión
+         * mejoró algo o simplemente barajó de nuevo.
+         */
+        guidance: String? = null,
+    ): Result<Int> {
         val impl = impls.get(implId) ?: return Result.failure(IllegalStateException("No existe."))
         val principal = repos.firstOrNull()
             ?: return Result.failure(IllegalStateException("La implementación no tiene repositorios."))
@@ -104,8 +116,26 @@ class ImplEngine(
             return Result.failure(IllegalStateException("No encontré ningún .md en lo que cargaste."))
         }
 
+        // El plan actual, para revisarlo en vez de rehacerlo.
+        val revision = guidance?.takeIf { it.isNotBlank() }?.let { guia ->
+            val previas = impls.tasks(implId)
+            val texto = buildString {
+                impl.planSummary?.takeIf { it.isNotBlank() }?.let { appendLine(it).appendLine() }
+                previas.forEach { t ->
+                    appendLine("${t.seq}. ${t.title}")
+                    t.detail.takeIf { d -> d.isNotBlank() }?.let { d -> appendLine("   $d") }
+                    t.steps.forEach { paso -> appendLine("   - ${paso.title}") }
+                }
+            }
+            texto to guia
+        }
+
         impls.setStatus(implId, ImplStatus.PLANNING)
-        log(implId, "Leyendo ${docs.size} documento(s): ${docs.joinToString(", ") { it.name }}")
+        log(
+            implId,
+            if (revision == null) "Leyendo ${docs.size} documento(s): ${docs.joinToString(", ") { it.name }}"
+            else "Revisando el plan con lo que pediste…",
+        )
 
         val base = Git.currentBranch(dir) ?: "develop"
         val modelo = impl.planModel ?: PLAN_MODEL
@@ -121,7 +151,7 @@ class ImplEngine(
                         val rol = impls.reposOf(implId).firstOrNull { it.repoId == r.id }?.role
                         Triple(r.name, (rol ?: RepoRole.OTHER).name, r.localPath)
                     },
-                    base, idioma,
+                    base, idioma, revision,
                 ),
                 model = modelo,
                 // Planificar es mirar: los permisos de escritura llegan recién al implementar.
@@ -141,7 +171,12 @@ class ImplEngine(
             if (tareas.isEmpty()) error("El plan volvió sin tareas.")
 
             impls.savePlan(implId, resumen, rama, base, modelo, tareas)
-            log(implId, "Plan listo: ${tareas.size} tareas, rama «$rama».")
+            guidance?.takeIf { it.isNotBlank() }?.let { impls.saveReviewGuidance(implId, it) }
+            log(
+                implId,
+                if (revision == null) "Plan listo: ${tareas.size} tareas, rama «$rama»."
+                else "Plan revisado: ${tareas.size} tareas.",
+            )
             tareas.size
         }.onFailure {
             running.remove(implId)
@@ -274,18 +309,23 @@ class ImplEngine(
                 impls.startTask(tarea.id)
                 log(implId, "▶ ${tarea.seq}/${todas.size} [${repoTarea.name}] ${tarea.title}")
 
+                val prompt = ImplPrompt.task(
+                    tarea, todas, docs, impl.extraPrompt, idioma,
+                    // Lo ya decidido viaja en cada tarea: sin eso, la siguiente vuelve a toparse
+                    // con la misma duda y frena de nuevo por algo ya resuelto.
+                    decided = impls.questions(implId)
+                        .filter { !it.answer.isNullOrBlank() }
+                        .map { it.question to it.answer!! },
+                )
+                // Se guarda antes de correr: si la tarea revienta a mitad de camino, el prompt es
+                // justo lo que hace falta para entender por qué.
+                impls.savePrompt(tarea.id, prompt)
+
                 val intento = runCatching {
                     ClaudeCli.run(
                         binary = binario,
                         workDir = dir,
-                        prompt = ImplPrompt.task(
-                            tarea, todas, docs, impl.extraPrompt, idioma,
-                            // Lo ya decidido viaja en cada tarea: sin eso, la siguiente vuelve a
-                            // toparse con la misma duda y frena de nuevo por algo ya resuelto.
-                            decided = impls.questions(implId)
-                                .filter { !it.answer.isNullOrBlank() }
-                                .map { it.question to it.answer!! },
-                        ),
+                        prompt = prompt,
                         model = modelo,
                         allowedTools = ImplPrompt.WRITE_TOOLS,
                         disallowedTools = ImplPrompt.DENIED_TOOLS,
@@ -359,6 +399,23 @@ class ImplEngine(
                 // Qué tocó, tomado del commit recién hecho. Se guarda ahora y no se calcula al
                 // mirar: preguntarle a git por cada tarea en cada apertura sería una llamada por
                 // fila, y así sobrevive a que la rama se borre.
+                // Los pasos se cierran con lo que reportó el modelo, al terminar y no mientras
+                // corre: no hay forma de saber desde afuera en cuál está: los eventos del CLI
+                // dicen qué archivo tocó, no qué paso del plan estaba haciendo. Inventar un avance
+                // paso a paso sería mostrar una barra que no mide nada.
+                if (tarea.steps.isNotEmpty()) {
+                    val reportados = salida.steps.associateBy { it.first }
+                    tarea.steps.forEach { paso ->
+                        val r = reportados[paso.seq]
+                        // Un paso del que no dijo nada queda sin hacer, no hecho: dar por bueno lo
+                        // que nadie confirmó es exactamente lo que hace inútil una lista de pasos.
+                        impls.finishStep(paso.id, done = r?.second ?: false, note = r?.third)
+                    }
+                    val hechos = tarea.steps.count { p -> reportados[p.seq]?.second == true }
+                    if (hechos < tarea.steps.size) {
+                        log(implId, "  ($hechos de ${tarea.steps.size} pasos hechos)")
+                    }
+                }
                 val cambios = sha?.let { s -> runCatching { Git.commitStats(dir, s) }.getOrDefault(emptyList()) }
                 impls.finishTask(
                     tarea.id, sha, salida.summary.take(4_000), res.costUsd,
@@ -418,6 +475,8 @@ class ImplEngine(
         val blocked: Boolean,
         val summary: String,
         val question: Pregunta?,
+        /** Qué dijo el modelo de cada paso: número, si lo hizo, y la nota. */
+        val steps: List<Triple<Int, Boolean, String?>> = emptyList(),
     )
 
     private data class Pregunta(
@@ -456,7 +515,21 @@ class ImplEngine(
         }
         // Bloqueada sólo si además dice cuál es la duda: un BLOCKED sin pregunta no se puede
         // contestar y dejaría la implementación trabada sin salida.
-        return TaskOut(blocked = estado == "BLOCKED" && q != null, summary = resumen, question = q)
+        val pasos = (obj["steps_done"] as? JsonArray).orEmpty().mapNotNull { el ->
+            val o = el as? JsonObject ?: return@mapNotNull null
+            val n = o["seq"]?.jsonPrimitive?.contentOrNull?.toIntOrNull() ?: return@mapNotNull null
+            Triple(
+                n,
+                o["done"]?.jsonPrimitive?.contentOrNull?.toBooleanStrictOrNull() ?: false,
+                o["note"]?.jsonPrimitive?.contentOrNull?.takeIf { it.isNotBlank() },
+            )
+        }
+        return TaskOut(
+            blocked = estado == "BLOCKED" && q != null,
+            summary = resumen,
+            question = q,
+            steps = pasos,
+        )
     }
 
     /** Lee el plan que devolvió el modelo. */
@@ -492,6 +565,17 @@ class ImplEngine(
                 status = TaskStatus.PENDING,
                 commitSha = null, result = null, error = null, costUsd = null,
                 startedAt = null, finishedAt = null,
+                // Los pasos se renumeran por posición igual que las tareas, y por la misma razón.
+                // El id va vacío: lo pone la base al guardarlos, junto con el de su tarea.
+                steps = (o["steps"] as? JsonArray).orEmpty()
+                    .mapNotNull { it.jsonPrimitive.contentOrNull?.trim()?.takeIf { s -> s.isNotBlank() } }
+                    .mapIndexed { j, texto ->
+                        ImplStep(
+                            id = "", taskId = "", seq = j + 1, title = texto,
+                            status = TaskStatus.PENDING, note = null,
+                            createdAt = "", updatedAt = null, startedAt = null, finishedAt = null,
+                        )
+                    },
             )
         }
         val rama = obj["branch"]?.jsonPrimitive?.contentOrNull

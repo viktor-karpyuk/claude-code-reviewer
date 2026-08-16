@@ -40,6 +40,10 @@ object ImplPrompt {
      *
      * `depends_on` existe aunque la ejecución sea en orden: es lo que permite saber que una tarea
      * fallida bloquea a otras en vez de seguir construyendo sobre algo que no está.
+     *
+     * `steps` es lo que convierte una tarea en algo revisable antes de correrla. `detail` dice qué
+     * hay que lograr; los pasos dicen cómo, y ahí se ve si el plan entendió el problema: una tarea
+     * de una línea puede esconder cinco decisiones y eso no se nota hasta leerla desarmada.
      */
     val PLAN_SCHEMA = """
     {"type":"object","properties":{
@@ -52,8 +56,9 @@ object ImplPrompt {
         "depends_on":{"type":"array","items":{"type":"integer"}},
         "repo":{"type":"string"},
         "size":{"type":"string","enum":["S","M","L","XL"]},
-        "estimate_min":{"type":"integer"}
-      },"required":["seq","title","detail","repo","size","estimate_min"]}}
+        "estimate_min":{"type":"integer"},
+        "steps":{"type":"array","items":{"type":"string"}}
+      },"required":["seq","title","detail","repo","size","estimate_min","steps"]}}
     },"required":["summary","branch","tasks"]}
     """.trimIndent()
 
@@ -75,6 +80,15 @@ object ImplPrompt {
         repos: List<Triple<String, String, String>>,
         baseBranch: String,
         language: String,
+        /**
+         * El plan anterior y en qué sentido revisarlo, cuando esto es una replanificación.
+         *
+         * Se le da el plan viejo en vez de pedirle uno nuevo desde cero porque revisar y volver a
+         * empezar no dan el mismo resultado: desde cero se pierden las decisiones de orden que ya
+         * estaban bien y aparecen otras distintas, y entonces no hay forma de saber si la revisión
+         * mejoró algo o simplemente barajó de nuevo.
+         */
+        revision: Pair<String, String>? = null,
     ): String = """
         Sos un tech lead planificando una implementación. Devolvé ÚNICAMENTE el JSON que se
         describe al final.
@@ -121,12 +135,47 @@ object ImplPrompt {
           feature. Sin barras iniciales.
         - `summary`: dos o tres oraciones sobre el enfoque y por qué ese orden. Es lo que alguien
           lee para decidir si deja correr esto sin mirar.
+        - `steps`: entre 2 y 8 pasos concretos por tarea, en el orden en que se hacen. Son el cómo:
+          qué archivo se toca, qué se agrega, qué se corre para verificar. `detail` explica el qué y
+          el por qué; los pasos tienen que poder tildarse uno por uno. Nada de "implementar la
+          lógica" —eso repite el título—: si un paso no dice dónde ni qué, no es un paso.
         - Escribí en $language.
+
+        ${revision?.let { (planViejo, guia) ->
+        REVIEW_RULES + "\n\nPLAN ACTUAL\n" + planViejo + "\n\nEN QUÉ SENTIDO REVISARLO\n" + guia
+    }.orEmpty()}
 
         QUÉ NO PONER EN EL PLAN
         - Tareas de "investigar" o "analizar": eso es parte de hacer la tarea.
         - Configurar herramientas que el repositorio ya tiene resueltas.
         - Tests como una tarea aparte al final: cada tarea deja lo suyo probado.
+    """.trimIndent()
+
+    /**
+     * Lo que se le pide al modelo cuando revisa un plan en vez de escribir uno.
+     *
+     * Está acá afuera y no enterrado en el prompt porque la pantalla lo muestra: quien va a escribir
+     * una guía de revisión necesita saber qué se le pide al modelo por defecto, o va a repetirlo con
+     * otras palabras —"que las tareas sean más chicas" cuando eso ya está— y a gastar una corrida
+     * en nada.
+     */
+    val REVIEW_RULES = """
+        ESTO ES UNA REVISIÓN DE UN PLAN QUE YA EXISTE
+        No estás empezando de cero. Abajo está el plan actual y lo que se pidió corregir. Devolvé el
+        plan revisado completo, con la misma forma.
+
+        Mantené lo que está bien: si el orden de unas tareas ya era correcto, dejalo. Cambiar lo que
+        no hacía falta hace imposible saber si la revisión mejoró algo o sólo barajó de nuevo.
+
+        Antes de cambiar nada, revisá el plan contra tres cosas:
+        - **El orden.** ¿Alguna tarea necesita algo que recién aparece más adelante? Eso traba la
+          implementación a la mitad y es lo más caro de descubrir corriendo.
+        - **El tamaño.** ¿Alguna tarea esconde dos trabajos? Si para describirla hace falta un "y
+          además", son dos. Y al revés: tres tareas que tocan el mismo archivo son una.
+        - **Los pasos.** ¿Cada tarea dice cómo se hace, o repite el título en otras palabras? Un
+          paso que no dice dónde ni qué no es un paso.
+
+        Detallá más donde haga falta: una tarea con pasos vagos es una tarea que va a improvisar.
     """.trimIndent()
 
     /**
@@ -141,6 +190,11 @@ object ImplPrompt {
     {"type":"object","properties":{
       "status":{"type":"string","enum":["DONE","BLOCKED"]},
       "summary":{"type":"string"},
+      "steps_done":{"type":"array","items":{"type":"object","properties":{
+        "seq":{"type":"integer"},
+        "done":{"type":"boolean"},
+        "note":{"type":"string"}
+      },"required":["seq","done"]}},
       "question":{"type":["object","null"],"properties":{
         "kind":{"type":"string","enum":["ARCHITECTURE","BUSINESS"]},
         "question":{"type":"string"},
@@ -173,6 +227,12 @@ object ImplPrompt {
         ${task.title}
 
         ${task.detail}
+
+        ${task.steps.takeIf { it.isNotEmpty() }?.let { pasos ->
+        "LOS PASOS que se planificaron para esta tarea. Son una guía, no una jaula: si el " +
+            "repositorio muestra que hay que hacerlo de otra forma, hacelo y contalo en la nota " +
+            "del paso.\n" + pasos.joinToString("\n") { "  ${'$'}{it.seq}. ${'$'}{it.title}" }
+    }.orEmpty()}
 
         EL PLAN COMPLETO, para que sepas qué viene después y no resuelvas de una forma que la
         próxima tarea tenga que deshacer:
@@ -235,6 +295,13 @@ object ImplPrompt {
 
         Al terminar devolvé el JSON del esquema: `status` en "DONE" con un `summary` de pocas
         líneas contando qué cambiaste y por qué, o "BLOCKED" con la pregunta.
+
+        ${if (task.steps.isEmpty()) "" else """
+        En `steps_done` poné una entrada por cada paso, con su número y si lo hiciste. Decí la
+        verdad: un paso marcado hecho que no se hizo es peor que uno sin hacer y admitido, porque
+        el que lea el resultado no va a volver a mirar. En `note` va qué pasó con ese paso cuando
+        no fue lo obvio: por qué no hacía falta, o qué encontraste que lo cambió.
+        """}
     """.trimIndent()
 
     /**

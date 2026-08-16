@@ -695,3 +695,155 @@ class ImplPersistenceTest {
         assertNull(vuelta.actualMin)
     }
 }
+
+/**
+ * Los pasos, el prompt y las fechas de una tarea.
+ *
+ * Todo esto existe para contestar preguntas después de que algo pasó —qué quedó sin hacer, qué se
+ * le pidió, cuándo—, así que lo único que importa es que sobreviva a cerrar la pantalla. Un dato
+ * que sólo vive en memoria no contesta nada: para cuando alguien pregunta, ya no está.
+ */
+class ImplStepsTest {
+
+    private fun conRepo(block: (AppContext, String) -> Unit) {
+        val dir = java.nio.file.Files.createTempDirectory("acr-steps")
+        val ctx = AppContext.bootstrap(dir)
+        try {
+            val repoId = ctx.repos.create(
+                "tmp-s-${System.nanoTime()}", Provider.BITBUCKET, "acme", "demo",
+                System.getProperty("java.io.tmpdir"), null, null, null, "", false,
+                io.acr.forge.SkipRules(), io.acr.forge.ReplyMode.OFF,
+            )
+            block(ctx, repoId)
+        } finally {
+            ctx.close()
+            dir.toFile().deleteRecursively()
+        }
+    }
+
+    private fun paso(seq: Int, titulo: String) = io.acr.impl.ImplStep(
+        id = "", taskId = "", seq = seq, title = titulo, status = TaskStatus.PENDING,
+        note = null, createdAt = "", updatedAt = null, startedAt = null, finishedAt = null,
+    )
+
+    private fun tareaCon(seq: Int, pasos: List<io.acr.impl.ImplStep>) = ImplTask(
+        "", "", null, seq, "tarea $seq", "detalle", emptyList(), TaskSize.M, 20,
+        TaskStatus.PENDING, null, null, null, null, null, null, steps = pasos,
+    )
+
+    @Test
+    fun theStepsOfATaskSurviveBeingSaved() = conRepo { ctx, repoId ->
+        val id = ctx.impls.create(listOf(io.acr.impl.ImplRepo(repoId, io.acr.impl.RepoRole.OTHER, null)), "con pasos", listOf("/tmp/x.md"), null)
+        ctx.impls.savePlan(
+            id, "resumen", "rama", "develop", "fable",
+            listOf(tareaCon(1, listOf(paso(1, "tocar el repositorio"), paso(2, "correr los tests")))),
+        )
+
+        val t = ctx.impls.tasks(id).single()
+        assertEquals(2, t.steps.size, "los pasos se guardan con la tarea")
+        assertEquals(listOf(1, 2), t.steps.map { it.seq }, "y en orden")
+        assertEquals("tocar el repositorio", t.steps.first().title)
+        assertTrue(t.steps.all { it.status == TaskStatus.PENDING })
+    }
+
+    @Test
+    fun aStepNobodyReportedIsNotTakenAsDone() = conRepo { ctx, repoId ->
+        // El punto entero de una lista de pasos es saber qué quedó sin hacer. Dar por bueno lo que
+        // nadie confirmó la convierte en decoración.
+        val id = ctx.impls.create(listOf(io.acr.impl.ImplRepo(repoId, io.acr.impl.RepoRole.OTHER, null)), "parcial", listOf("/tmp/x.md"), null)
+        ctx.impls.savePlan(
+            id, "r", "rama", "develop", "fable",
+            listOf(tareaCon(1, listOf(paso(1, "uno"), paso(2, "dos")))),
+        )
+        val t = ctx.impls.tasks(id).single()
+
+        ctx.impls.finishStep(t.steps[0].id, done = true, note = "listo")
+        ctx.impls.finishStep(t.steps[1].id, done = false, note = "no hacía falta")
+
+        val leidos = ctx.impls.tasks(id).single().steps
+        assertEquals(TaskStatus.DONE, leidos[0].status)
+        assertEquals("listo", leidos[0].note)
+        assertEquals(TaskStatus.FAILED, leidos[1].status, "sin hacer no es pendiente: la tarea ya terminó")
+        assertEquals("no hacía falta", leidos[1].note)
+        assertTrue(leidos.all { it.finishedAt != null }, "se cierran los dos, hechos o no")
+    }
+
+    @Test
+    fun retryingATaskAlsoClearsItsSteps() = conRepo { ctx, repoId ->
+        // Si los pasos quedaran tildados de la corrida anterior, el segundo intento arrancaría
+        // mostrando trabajo que todavía no se hizo de nuevo.
+        val id = ctx.impls.create(listOf(io.acr.impl.ImplRepo(repoId, io.acr.impl.RepoRole.OTHER, null)), "reintento", listOf("/tmp/x.md"), null)
+        ctx.impls.savePlan(id, "r", "rama", "develop", "fable", listOf(tareaCon(1, listOf(paso(1, "uno")))))
+        val t = ctx.impls.tasks(id).single()
+        ctx.impls.finishStep(t.steps[0].id, done = true, note = "hecho")
+
+        ctx.impls.resetTask(t.id)
+
+        val paso = ctx.impls.tasks(id).single().steps.single()
+        assertEquals(TaskStatus.PENDING, paso.status)
+        assertEquals(null, paso.note, "la nota del intento anterior no se arrastra")
+        assertEquals(null, paso.finishedAt)
+    }
+
+    @Test
+    fun thePromptIsSavedBeforeTheTaskRuns() = conRepo { ctx, repoId ->
+        // Se guarda al arrancar y no al terminar: si la tarea revienta a mitad de camino, el
+        // prompt es justo lo que hace falta para entender por qué, y guardarlo al final
+        // significaría no tenerlo nunca en el único caso donde importa.
+        val id = ctx.impls.create(listOf(io.acr.impl.ImplRepo(repoId, io.acr.impl.RepoRole.OTHER, null)), "prompt", listOf("/tmp/x.md"), null)
+        ctx.impls.savePlan(id, "r", "rama", "develop", "fable", listOf(tareaCon(1, emptyList())))
+        val t = ctx.impls.tasks(id).single()
+
+        ctx.impls.savePrompt(t.id, "hacé esto y aquello")
+        ctx.impls.failTask(t.id, "explotó")
+
+        val leida = ctx.impls.tasks(id).single()
+        assertEquals("hacé esto y aquello", leida.prompt, "el prompt sobrevive a la tarea fallida")
+    }
+
+    @Test
+    fun theFourDatesAnswerFourDifferentQuestions() = conRepo { ctx, repoId ->
+        val id = ctx.impls.create(listOf(io.acr.impl.ImplRepo(repoId, io.acr.impl.RepoRole.OTHER, null)), "fechas", listOf("/tmp/x.md"), null)
+        ctx.impls.savePlan(id, "r", "rama", "develop", "fable", listOf(tareaCon(1, emptyList())))
+
+        val creada = ctx.impls.tasks(id).single()
+        assertTrue(creada.createdAt != null, "una tarea planificada ya tiene fecha de creación")
+        assertEquals(null, creada.startedAt, "pero todavía no arrancó")
+
+        ctx.impls.startTask(creada.id)
+        Thread.sleep(5)
+        ctx.impls.finishTask(creada.id, "abc123", "hecho", 0.1)
+
+        val fin = ctx.impls.tasks(id).single()
+        assertTrue(fin.startedAt != null && fin.finishedAt != null)
+        assertTrue(
+            fin.updatedAt != null && fin.updatedAt!! >= fin.createdAt!!,
+            "modificada avanza con la tarea; creada se queda donde estaba",
+        )
+    }
+
+    @Test
+    fun theReviewGuidanceIsRememberedForNextTime() = conRepo { ctx, repoId ->
+        // Casi siempre se revisa dos veces seguidas por lo mismo. Volver a escribirlo entero
+        // invita a escribir menos.
+        val id = ctx.impls.create(listOf(io.acr.impl.ImplRepo(repoId, io.acr.impl.RepoRole.OTHER, null)), "revisión", listOf("/tmp/x.md"), null)
+        assertEquals(null, ctx.impls.get(id)!!.reviewGuidance)
+
+        ctx.impls.saveReviewGuidance(id, "separá la tarea 4")
+        assertEquals("separá la tarea 4", ctx.impls.get(id)!!.reviewGuidance)
+    }
+
+    @Test
+    fun theReviewPromptSaysWhatItLooksAt() {
+        // Está a la vista en la pantalla para que nadie escriba una guía que repita lo que ya
+        // está: pedir "tareas más chicas" cuando el prompt ya lo dice gasta una corrida en nada.
+        val reglas = io.acr.impl.ImplPrompt.REVIEW_RULES
+        assertTrue(reglas.contains("orden", ignoreCase = true))
+        assertTrue(reglas.contains("tamaño", ignoreCase = true))
+        assertTrue(reglas.contains("paso", ignoreCase = true))
+        assertTrue(
+            reglas.contains("Mantené lo que está bien"),
+            "revisar no es rehacer: si se pierde eso, no hay forma de saber si la revisión mejoró algo",
+        )
+    }
+}

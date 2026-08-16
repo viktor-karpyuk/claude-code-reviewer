@@ -14,10 +14,16 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -108,6 +114,19 @@ fun TaskDetailScreen(
                 }
                 Spacer(Modifier.height(18.dp))
 
+                // Los pasos: el cómo. El detalle de arriba dice qué hay que lograr; acá está
+                // desarmado en cosas que se pueden tildar de a una. Antes de correr sirve para ver
+                // si el plan entendió el problema; después, para ver qué quedó sin hacer.
+                if (task.steps.isNotEmpty()) {
+                    val hechos = task.steps.count { it.status == TaskStatus.DONE }
+                    Seccion(
+                        if (yaCorrio) t("impl.stepsDone", hechos, task.steps.size)
+                        else t("impl.steps", task.steps.size),
+                    )
+                    task.steps.forEach { paso -> PasoFila(paso) }
+                    Spacer(Modifier.height(18.dp))
+                }
+
                 task.result?.takeIf { it.isNotBlank() }?.let {
                     Seccion(t("impl.whatItDid"))
                     Text(it, style = MaterialTheme.typography.bodyMedium)
@@ -191,6 +210,28 @@ fun TaskDetailScreen(
                                 d.filesDeleted.takeIf { it > 0 }?.let { t("impl.nDeleted", it) },
                             ).joinToString("\n").ifBlank { "—" },
                         )
+                    }
+                }
+
+                // Las cuatro fechas. Creada y modificada contestan si el plan se rehizo; arranque
+                // y fin, cuánto tardó. Son preguntas distintas y por eso van las cuatro: con una
+                // sola no se puede distinguir una tarea replanificada de una que nadie tocó.
+                if (task.createdAt != null || task.startedAt != null) {
+                    Spacer(Modifier.height(12.dp))
+                    Panel {
+                        Text(
+                            t("impl.dates"),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        Spacer(Modifier.height(6.dp))
+                        task.createdAt?.let { Dato(t("impl.dCreated"), fecha(it)) }
+                        // Sólo si difiere de la creación: repetir la misma fecha dos veces hace
+                        // creer que pasó algo cuando no pasó nada.
+                        task.updatedAt?.takeIf { it != task.createdAt }
+                            ?.let { Dato(t("impl.dUpdated"), fecha(it)) }
+                        task.startedAt?.let { Dato(t("impl.dStarted"), fecha(it)) }
+                        task.finishedAt?.let { Dato(t("impl.dFinished"), fecha(it)) }
                     }
                 }
 
@@ -288,6 +329,49 @@ fun TaskDetailScreen(
             }
             Spacer(Modifier.height(8.dp))
             TaskDiffView(repo = repo, task = task)
+        }
+
+        // --- El prompt, plegado ---
+        // Es largo y casi siempre no se mira, así que va cerrado y al final. Pero cuando una tarea
+        // hizo algo raro, es lo único que distingue un problema del modelo de un problema de lo que
+        // se le pidió, y sin guardarlo esa pregunta no se puede contestar nunca.
+        task.prompt?.takeIf { it.isNotBlank() }?.let { p ->
+            Spacer(Modifier.height(24.dp))
+            var abierto by remember(task.id) { mutableStateOf(false) }
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                TextButton(onClick = { abierto = !abierto }) {
+                    Text((if (abierto) "▾  " else "▸  ") + t("impl.prompt"))
+                }
+                Text(
+                    t("impl.promptNote"),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Spacer(Modifier.weight(1f))
+                if (abierto) {
+                    TextButton(onClick = {
+                        java.awt.Toolkit.getDefaultToolkit().systemClipboard
+                            .setContents(java.awt.datatransfer.StringSelection(p), null)
+                    }) { Text(t("impl.copyPrompt")) }
+                }
+            }
+            if (abierto) {
+                Surface(
+                    color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f),
+                    shape = MaterialTheme.shapes.small,
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    SelectionContainer {
+                        Text(
+                            p,
+                            style = MaterialTheme.typography.bodySmall.copy(
+                                fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                            ),
+                            modifier = Modifier.padding(12.dp),
+                        )
+                    }
+                }
+            }
         }
     }
 }
@@ -443,3 +527,45 @@ internal fun TaskStatusBadge(s: TaskStatus, conTexto: Boolean = true) {
         }
     }
 }
+
+/**
+ * Un paso, con su estado adelante.
+ *
+ * El tilde y la cruz van a la izquierda y no al final porque lo primero que se busca en una lista
+ * de pasos es cuáles quedaron sin hacer, y eso se escanea por la columna, no leyendo cada línea.
+ */
+@Composable
+private fun PasoFila(paso: io.acr.impl.ImplStep) {
+    Row(Modifier.fillMaxWidth().padding(vertical = 3.dp)) {
+        val (simbolo, color) = when (paso.status) {
+            TaskStatus.DONE -> "✓" to io.acr.ui.stats.ChartColors.added
+            TaskStatus.FAILED -> "✗" to MaterialTheme.colorScheme.error
+            TaskStatus.RUNNING -> "▸" to MaterialTheme.colorScheme.primary
+            else -> "·" to MaterialTheme.colorScheme.onSurfaceVariant
+        }
+        Text(simbolo, color = color, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.width(20.dp))
+        Text("${paso.seq}.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.width(24.dp))
+        Column(Modifier.weight(1f)) {
+            Text(
+                paso.title,
+                style = MaterialTheme.typography.bodyMedium,
+                // Lo que quedó sin hacer se atenúa pero no se tacha: tachado se lee como
+                // descartado, y un paso sin hacer no está descartado, está pendiente de explicación.
+                color = if (paso.status == TaskStatus.PENDING || paso.status == TaskStatus.FAILED) {
+                    MaterialTheme.colorScheme.onSurfaceVariant
+                } else {
+                    MaterialTheme.colorScheme.onSurface
+                },
+            )
+            paso.note?.takeIf { it.isNotBlank() }?.let {
+                Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        }
+    }
+}
+
+/** Fecha corta y local. La ISO completa con zona no se lee de un vistazo y acá se mira de reojo. */
+private fun fecha(iso: String): String = runCatching {
+    java.time.Instant.parse(iso).atZone(java.time.ZoneId.systemDefault())
+        .format(java.time.format.DateTimeFormatter.ofPattern("dd/MM HH:mm"))
+}.getOrDefault(iso.take(16))
