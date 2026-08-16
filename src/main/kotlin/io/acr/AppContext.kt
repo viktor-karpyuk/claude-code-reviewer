@@ -52,6 +52,8 @@ class AppContext private constructor(
     val health: io.acr.data.RepoHealthRepository,
     val jira: io.acr.data.JiraRepository,
     val jiraSites: io.acr.data.JiraSiteRepository,
+    val impls: io.acr.data.ImplRepository,
+    val implEngine: io.acr.impl.ImplEngine,
 ) : AutoCloseable {
 
     /** ¿Hay al menos un sitio de Jira conectado y usable? */
@@ -123,12 +125,14 @@ class AppContext private constructor(
             val health = io.acr.data.RepoHealthRepository(store)
             val jira = io.acr.data.JiraRepository(store)
             val jiraSites = io.acr.data.JiraSiteRepository(store, secrets)
+            val impls = io.acr.data.ImplRepository(store)
             val statsCollector = io.acr.stats.StatsCollector(persons, commitStats)
             val replies = ReplyRepository(store)
             val seenPrs = io.acr.data.SeenPrRepository(store)
             val prCache = io.acr.data.PrCacheRepository(store)
             val prLoader = io.acr.forge.PrLoader(prCache)
             val prefs = PrefsRepo(store)
+            val implEngine = io.acr.impl.ImplEngine(impls, prefs)
             // Ninguna review de una corrida anterior puede seguir viva: el estado del motor es
             // en memoria. Sin esto quedan como "corriendo" para siempre en el panel.
             //
@@ -147,7 +151,7 @@ class AppContext private constructor(
                 jiraIssues = { repoId, prId -> jira.issuesOf(repoId, prId) },
             )
             val auto = AutoReviewer(repos, reviews, prefs, engine, notifier, replies, seenPrs, prLoader, findings, approvals, jobs)
-            return AppContext(store, repos, reviews, publications, comments, notes, findings, approvals, jobs, guidelines, replies, seenPrs, prCache, prLoader, prefs, engine, auto, notifier, persons, commitStats, statsCollector, reviewStats, prStats, prHistory, rework, health, jira, jiraSites)
+            return AppContext(store, repos, reviews, publications, comments, notes, findings, approvals, jobs, guidelines, replies, seenPrs, prCache, prLoader, prefs, engine, auto, notifier, persons, commitStats, statsCollector, reviewStats, prStats, prHistory, rework, health, jira, jiraSites, impls, implEngine)
         }
 
         /** La propiedad `acr.dataDir` gana sobre la ubicación estándar; la usan los tests. */

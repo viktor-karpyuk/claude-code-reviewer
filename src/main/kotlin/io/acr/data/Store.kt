@@ -836,6 +836,83 @@ class Store(private val dbPath: Path) : AutoCloseable {
                 created_at   TEXT NOT NULL
             )
             """.trimIndent(),
+
+            // v46 — implementaciones: construir una feature entera a partir de sus specs.
+            //
+            // Es lo primero en esta app que ESCRIBE código. Todo lo demás corre Claude con
+            // permisos de sólo lectura; esto no puede. Por eso cada implementación tiene su propia
+            // rama —nunca la de trabajo— y cada tarea que termina bien queda commiteada: si la
+            // número siete falla, las seis anteriores siguen ahí y se puede seguir desde ahí en
+            // vez de perder todo.
+            //
+            // Las tareas se guardan aparte y no como un JSON adentro de la implementación porque
+            // cada una tiene su estado, su duración y su commit, y eso cambia mientras corre: en
+            // un blob habría que reescribir el documento entero por cada avance.
+            """
+            CREATE TABLE implementation (
+                id            TEXT PRIMARY KEY,
+                repo_id       TEXT NOT NULL REFERENCES repo(id) ON DELETE CASCADE,
+                title         TEXT NOT NULL,
+                sources       TEXT NOT NULL,
+                extra_prompt  TEXT,
+                branch        TEXT,
+                base_branch   TEXT,
+                status        TEXT NOT NULL,
+                plan_summary  TEXT,
+                plan_model    TEXT,
+                code_model    TEXT,
+                error         TEXT,
+                cost_usd      REAL,
+                created_at    TEXT NOT NULL,
+                planned_at    TEXT,
+                finished_at   TEXT
+            );--split--
+            CREATE TABLE impl_task (
+                id            TEXT PRIMARY KEY,
+                impl_id       TEXT NOT NULL REFERENCES implementation(id) ON DELETE CASCADE,
+                seq           INTEGER NOT NULL,
+                title         TEXT NOT NULL,
+                detail        TEXT NOT NULL DEFAULT '',
+                depends_on    TEXT NOT NULL DEFAULT '',
+                size          TEXT,
+                estimate_min  INTEGER,
+                status        TEXT NOT NULL,
+                commit_sha    TEXT,
+                result        TEXT,
+                error         TEXT,
+                cost_usd      REAL,
+                started_at    TEXT,
+                finished_at   TEXT
+            );--split--
+            CREATE INDEX ix_impl_task ON impl_task(impl_id, seq)
+            """.trimIndent(),
+
+            // v47 — lo único que interrumpe una implementación autónoma: una decisión que las
+            // specs no cubren.
+            //
+            // El módulo corre solo de punta a punta, pero hay una clase de cosas que no puede
+            // decidir por su cuenta: arquitectura y negocio. Elegir un patrón de persistencia o
+            // qué pasa cuando un pago se rechaza no es un detalle de implementación — es una
+            // decisión que alguien va a tener que sostener después, y adivinarla produce código
+            // que compila, pasa los tests y hace lo que no era.
+            //
+            // Lo demás —nombres, orden de los parámetros, cómo estructurar una función— se decide
+            // solo: preguntar por eso convertiría la autonomía en un cuestionario.
+            """
+            CREATE TABLE impl_question (
+                id          TEXT PRIMARY KEY,
+                impl_id     TEXT NOT NULL REFERENCES implementation(id) ON DELETE CASCADE,
+                task_id     TEXT,
+                kind        TEXT NOT NULL,
+                question    TEXT NOT NULL,
+                context     TEXT,
+                options     TEXT,
+                answer      TEXT,
+                asked_at    TEXT NOT NULL,
+                answered_at TEXT
+            );--split--
+            CREATE INDEX ix_impl_question ON impl_question(impl_id, answered_at)
+            """.trimIndent(),
         )
     }
 }

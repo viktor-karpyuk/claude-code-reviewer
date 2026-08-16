@@ -158,6 +158,45 @@ object Git {
         run(dir, listOf("git", "cat-file", "-e", "$sha^{commit}")).ok
     }
 
+    /** La rama en la que está parado el clon. */
+    suspend fun currentBranch(dir: File): String? = withContext(Dispatchers.IO) {
+        run(dir, listOf("git", "rev-parse", "--abbrev-ref", "HEAD"))
+            .takeIf { it.ok }?.output?.trim()?.takeIf { it.isNotBlank() && it != "HEAD" }
+    }
+
+    /** ¿Hay cambios sin commitear? Escribir encima de trabajo ajeno se los llevaría en el commit. */
+    suspend fun isDirty(dir: File): Boolean = withContext(Dispatchers.IO) {
+        run(dir, listOf("git", "status", "--porcelain")).output.isNotBlank()
+    }
+
+    /**
+     * Se para en [branch], creándola desde [base] si no existe.
+     *
+     * Si ya existe se reusa en vez de crear una variante: retomar una implementación frenada es el
+     * caso normal, y una `feature-x-2` dejaría el trabajo partido en dos ramas que después hay que
+     * unir a mano.
+     */
+    suspend fun checkoutBranch(dir: File, branch: String, base: String): Result =
+        withContext(Dispatchers.IO) {
+            val existe = run(dir, listOf("git", "rev-parse", "--verify", branch)).ok
+            if (existe) run(dir, listOf("git", "checkout", branch))
+            else run(dir, listOf("git", "checkout", "-b", branch, base))
+        }
+
+    /**
+     * Commitea todo lo que haya, y devuelve el sha.
+     *
+     * Lo hace la herramienta y no el modelo: así el mensaje es uniforme y, sobre todo, no depende
+     * de que el modelo se acuerde de hacerlo. Sin un commit por tarea, una falla en la séptima se
+     * lleva puesto todo lo anterior.
+     */
+    suspend fun commitAll(dir: File, message: String): String? = withContext(Dispatchers.IO) {
+        run(dir, listOf("git", "add", "-A"))
+        val res = run(dir, listOf("git", "commit", "-m", message))
+        if (!res.ok) return@withContext null
+        run(dir, listOf("git", "rev-parse", "HEAD")).takeIf { it.ok }?.output?.trim()
+    }
+
     /** El commit en el que está parado el clon. Sirve para anotar hasta dónde se procesó. */
     suspend fun currentHead(dir: File): String? = withContext(Dispatchers.IO) {
         run(dir, listOf("git", "rev-parse", "HEAD")).takeIf { it.ok }?.output?.trim()

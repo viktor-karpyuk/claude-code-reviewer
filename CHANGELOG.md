@@ -3,6 +3,38 @@
 Reglas de numeración en [CLAUDE.md](CLAUDE.md): un requerimiento **nuevo** incrementa *major*;
 cambiar uno **existente** incrementa *patch*.
 
+## 55.0.0
+
+Requerimiento nuevo: **módulo de implementaciones**. De las specs al código, sin supervisión.
+
+Se le cargan los documentos —archivos `.md` sueltos o una carpeta entera, que se recorre— más un
+prompt con lo que no está escrito ahí, y construye la feature completa.
+
+**Dos modelos, y no por gusto.** Planifica con **Fable 5** porque el orden de las tareas es la
+decisión que más cuesta deshacer: si la tercera necesita algo que recién aparece en la novena, la
+implementación se traba a la mitad con medio trabajo hecho. Escribe el código con **Opus 5**, que
+es un trabajo distinto, más largo y más repetitivo.
+
+**Corre 100% autónomo**, con una sola excepción: **decisiones de arquitectura o de negocio que los
+documentos no cubren**. Ahí no inventa — deja la tarea esperando, sigue con todo lo demás que
+pueda avanzar, y pregunta con las alternativas que ve para que se conteste eligiendo. Adivinar una
+de esas produce código que compila, pasa los tests y hace lo que no era. Todo el resto —nombres,
+estructura, orden de los parámetros— lo decide solo: preguntar por eso lo volvería un cuestionario.
+
+**Es lo primero de esta app que escribe código.** Todo lo demás corre Claude en sólo lectura. Por
+eso trabaja en **su propia rama**, nunca en la de trabajo, se niega a arrancar si hay cambios sin
+commitear, y **cada tarea que termina bien queda commiteada**: si la séptima falla, las seis
+anteriores siguen ahí. Empujar al remoto no está permitido: eso lo decide una persona.
+
+**Avance y estimación.** Cada tarea trae su tamaño y sus minutos estimados, y se mide lo que tardó
+de verdad. Lo que falta se corrige con ese desvío: si las primeras tardaron el doble, lo que queda
+también va a tardar el doble, y sostener la estimación original sería sostener un número que ya se
+sabe malo. El desvío aparece recién cuando hay tareas terminadas — antes sería 1,0 y mostraría una
+precisión inventada.
+
+Una tarea que falla se **reintenta una vez** antes de darse por perdida: sin nadie mirando, una
+caída pasajera frenaría todo hasta que alguien la mire, que es justo lo que no puede pasar.
+
 ## 54.0.0
 
 Requerimiento nuevo: **varios Jira, agregados como se agregan los repositorios**.

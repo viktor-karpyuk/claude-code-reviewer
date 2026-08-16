@@ -15,6 +15,9 @@ sealed interface Selection {
 
     /** Todos los repositorios, con su estado y desde donde se agrega uno nuevo. */
     data object Repos : Selection
+
+    /** Implementaciones: de las specs al código. */
+    data object Impls : Selection
     data class Repo(val repoId: String) : Selection
     data class Review(val repoId: String, val prId: Long) : Selection
 
