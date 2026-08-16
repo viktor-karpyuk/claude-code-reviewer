@@ -591,3 +591,107 @@ class ImplTaskDetailTest {
         assertEquals("", ctx.impls.tasks(id).single().detail)
     }
 }
+
+/**
+ * Que el estado de cada tarea quede persistido en cada cambio.
+ *
+ * La pantalla lee de la base, así que lo que no se guarde no existe: una tarea que arranca, se
+ * completa o se bloquea sin escribir su fila deja la pantalla mostrando la foto anterior, y la
+ * implementación corriendo sin que nadie pueda saber en qué anda.
+ */
+class ImplPersistenceTest {
+
+    private fun conRepo(block: (AppContext, String) -> Unit) {
+        val dir = java.nio.file.Files.createTempDirectory("acr-impl-p")
+        val ctx = AppContext.bootstrap(dir)
+        try {
+            val repoId = ctx.repos.create(
+                "tmp-p-${System.nanoTime()}", Provider.BITBUCKET, "acme", "demo",
+                System.getProperty("java.io.tmpdir"), null, null, null, "", false,
+                io.acr.forge.SkipRules(), io.acr.forge.ReplyMode.OFF,
+            )
+            block(ctx, repoId)
+        } finally {
+            ctx.close()
+            dir.toFile().deleteRecursively()
+        }
+    }
+
+    private fun tarea(seq: Int) = ImplTask(
+        "", "", null, seq, "t$seq", "detalle $seq", emptyList(), TaskSize.M, 15,
+        TaskStatus.PENDING, null, null, null, null, null, null,
+    )
+
+    @Test
+    fun everyTransitionIsWrittenDown() = conRepo { ctx, repoId ->
+        val id = ctx.impls.create(
+            listOf(io.acr.impl.ImplRepo(repoId, io.acr.impl.RepoRole.BACKEND)), "f", listOf("/x"), null,
+        )
+        ctx.impls.savePlan(id, "s", "b", "develop", "m", listOf(tarea(1)))
+        val t = ctx.impls.tasks(id).single()
+
+        // Cada paso se relee de la base, no de memoria: es lo que ve la pantalla.
+        assertEquals(TaskStatus.PENDING, ctx.impls.tasks(id).single().status)
+
+        ctx.impls.startTask(t.id)
+        val corriendo = ctx.impls.tasks(id).single()
+        assertEquals(TaskStatus.RUNNING, corriendo.status)
+        assertNotNull(corriendo.startedAt, "sin arranque guardado no se puede medir cuánto lleva")
+
+        ctx.impls.finishTask(t.id, "sha1", "listo", 0.7)
+        val hecha = ctx.impls.tasks(id).single()
+        assertEquals(TaskStatus.DONE, hecha.status)
+        assertEquals("sha1", hecha.commitSha)
+        assertEquals("listo", hecha.result)
+        assertEquals(0.7, hecha.costUsd)
+        assertNotNull(hecha.finishedAt)
+    }
+
+    @Test
+    fun theTaskNumberIsItsOwnField() = conRepo { ctx, repoId ->
+        // Se referencia por número —"la 3 depende de la 1"— así que tiene que ser un dato y no
+        // parte del título.
+        val id = ctx.impls.create(
+            listOf(io.acr.impl.ImplRepo(repoId, io.acr.impl.RepoRole.BACKEND)), "f", listOf("/x"), null,
+        )
+        ctx.impls.savePlan(id, "s", "b", "develop", "m", listOf(tarea(1), tarea(2), tarea(3)))
+        val ts = ctx.impls.tasks(id)
+        assertEquals(listOf(1, 2, 3), ts.map { it.seq })
+        assertTrue(ts.none { it.title.startsWith("1.") }, "el número no está pegado al título")
+    }
+
+    @Test
+    fun blockingAndAnsweringLeaveTheirTrace() = conRepo { ctx, repoId ->
+        val id = ctx.impls.create(
+            listOf(io.acr.impl.ImplRepo(repoId, io.acr.impl.RepoRole.BACKEND)), "f", listOf("/x"), null,
+        )
+        ctx.impls.savePlan(id, "s", "b", "develop", "m", listOf(tarea(1)))
+        val t = ctx.impls.tasks(id).single()
+
+        ctx.impls.startTask(t.id)
+        ctx.impls.blockTask(t.id, "¿qué pasa si falla?")
+        assertEquals(TaskStatus.BLOCKED, ctx.impls.tasks(id).single().status)
+
+        val q = ctx.impls.ask(id, t.id, io.acr.impl.QuestionKind.BUSINESS, "¿qué pasa si falla?", null, emptyList())
+        ctx.impls.answer(q, "cancelar")
+        assertEquals(TaskStatus.PENDING, ctx.impls.tasks(id).single().status, "contestar la devuelve a la cola")
+    }
+
+    @Test
+    fun aRetriedTaskForgetsTheFailedAttempt() = conRepo { ctx, repoId ->
+        // Si arrastrara la duración del intento fallido, el tiempo real de la tarea mentiría.
+        val id = ctx.impls.create(
+            listOf(io.acr.impl.ImplRepo(repoId, io.acr.impl.RepoRole.BACKEND)), "f", listOf("/x"), null,
+        )
+        ctx.impls.savePlan(id, "s", "b", "develop", "m", listOf(tarea(1)))
+        val t = ctx.impls.tasks(id).single()
+        ctx.impls.startTask(t.id)
+        ctx.impls.failTask(t.id, "se cayó")
+        ctx.impls.resetTask(t.id)
+
+        val vuelta = ctx.impls.tasks(id).single()
+        assertNull(vuelta.startedAt)
+        assertNull(vuelta.finishedAt)
+        assertNull(vuelta.actualMin)
+    }
+}

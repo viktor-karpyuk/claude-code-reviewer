@@ -67,21 +67,24 @@ fun ImplDetail(
     // Qué tarea se está mirando. Expandir la fila obligaba a empujar el resto de la tabla fuera de
     // la vista para leer algo que igual no entraba.
     var tareaAbierta by remember(implId) { mutableStateOf<String?>(null) }
+    // Un tic por segundo mientras algo corre. Es la clave que hace que las lecturas de la base se
+    // repitan: sin él, la pantalla depende de que el motor emita una línea de log para enterarse
+    // de que una tarea cambió de estado.
+    var tic by remember(implId) { mutableStateOf(0) }
     val progreso by ctx.implEngine.progress.collectAsState()
     val vivo = progreso[implId]
 
-    val impl = io.acr.ui.dbState(implId, version, vivo, initial = null as io.acr.impl.Implementation?) {
+    val impl = io.acr.ui.dbState(implId, version, vivo, tic, initial = null as io.acr.impl.Implementation?) {
         ctx.impls.get(implId)
     } ?: return
-    val tareas = io.acr.ui.dbState(implId, version, vivo, initial = emptyList<io.acr.impl.ImplTask>()) {
+    val tareas = io.acr.ui.dbState(implId, version, vivo, tic, initial = emptyList<io.acr.impl.ImplTask>()) {
         ctx.impls.tasks(implId)
     }
-    val preguntas = io.acr.ui.dbState(implId, version, vivo, initial = emptyList<io.acr.impl.ImplQuestion>()) {
+    val preguntas = io.acr.ui.dbState(implId, version, vivo, tic, initial = emptyList<io.acr.impl.ImplQuestion>()) {
         ctx.impls.questions(implId)
     }
-    // Un tic por segundo mientras algo corre: sin esto los minutos y la barra sólo se actualizan
-    // cuando una tarea termina, y entre medio la pantalla parece colgada.
-    var tic by remember(implId) { mutableStateOf(0) }
+    // Late mientras haya algo corriendo, esté abierta la lista o el detalle de una tarea: es lo
+    // que hace que el estado persistido llegue a la pantalla sin tener que salir y volver.
     androidx.compose.runtime.LaunchedEffect(corriendoAlgo(tareas)) {
         while (corriendoAlgo(tareas)) {
             kotlinx.coroutines.delay(1_000)
@@ -106,6 +109,9 @@ fun ImplDetail(
     // La tarea abierta reemplaza a la pantalla: lo que pasó en una tarea es un tema en sí mismo y
     // no un desplegable dentro de una tabla.
     tareaAbierta?.let { id ->
+        // Se busca en la lista que ya se releyó de la base en esta composición, y esa lista se
+        // refresca con cada latido y con cada avance: así una tarea que cambia de estado mientras
+        // su pantalla está abierta se actualiza sola en vez de mostrar la foto de cuando se abrió.
         tareas.firstOrNull { it.id == id }?.let { tar ->
             TaskDetailScreen(
                 ctx = ctx,
@@ -308,6 +314,7 @@ fun ImplDetail(
         // --- Tareas, como tabla ---
         Spacer(Modifier.height(14.dp))
         Row(Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
+            Cab("#", 40.dp)
             Cab(t("impl.thStatus"), 120.dp)
             Text(
                 t("impl.thTask"),
@@ -330,11 +337,20 @@ fun ImplDetail(
                     .padding(vertical = 6.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
+                // El número en su propia columna: pegado al título se lee como parte del texto y
+                // no sirve para lo que sirve un número de tarea, que es referenciarla.
+                Text(
+                    tar.seq.toString(),
+                    style = MaterialTheme.typography.labelSmall
+                        .copy(fontFamily = FontFamily.Monospace),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.width(40.dp),
+                )
                 Row(Modifier.width(120.dp), verticalAlignment = Alignment.CenterVertically) {
                     TaskStatusBadge(tar.status)
                 }
                 Column(Modifier.weight(1f)) {
-                    Text("${tar.seq}. ${tar.title}", style = MaterialTheme.typography.bodySmall)
+                    Text(tar.title, style = MaterialTheme.typography.bodySmall)
                     tar.runningMin()?.let { va ->
                         val est = tar.estimateMin ?: tar.size?.minutes
                         Text(

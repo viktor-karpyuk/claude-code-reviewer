@@ -3,6 +3,19 @@
 Reglas de numeración en [CLAUDE.md](CLAUDE.md): un requerimiento **nuevo** incrementa *major*;
 cambiar uno **existente** incrementa *patch*.
 
+## 61.2.0
+
+- **El número de tarea es su propia columna**, primera de la tabla. Pegado al título se leía como
+  parte del texto y no servía para lo que sirve un número de tarea: referenciarla —"la 3 depende de
+  la 1"—.
+- **La pantalla refleja siempre lo que está guardado.** Las tareas ya se persistían en cada
+  transición, pero la vista dependía de que el motor emitiera una línea de log para enterarse: si
+  una tarea cambiaba de estado en un silencio, había que salir y volver. Ahora un latido por segundo
+  releé la base mientras algo corre, esté abierta la lista o el detalle de una tarea.
+
+Hay tests que fijan que cada transición —arrancar, completar, fallar, bloquear, reintentar— quede
+escrita: la pantalla lee de la base, así que lo que no se guarda no existe.
+
 ## 61.1.0
 
 El detalle de tarea, rediseñado. Era una pila de cajas grises apiladas, todas del mismo peso: había
