@@ -396,6 +396,141 @@ object ImplPrompt {
         Devolvé el JSON del esquema.
     """.trimIndent()
 
+    /** Lo que devuelve el análisis de los documentos. */
+    val SPECS_SCHEMA = """
+    {"type":"object","properties":{
+      "summary":{"type":"string"},
+      "document":{"type":"string"},
+      "issues":{"type":"array","items":{"type":"object","properties":{
+        "kind":{"type":"string","enum":["MISSING","AMBIGUOUS","CONTRADICTION","ASSUMPTION"]},
+        "where":{"type":"string"},
+        "what":{"type":"string"},
+        "resolved":{"type":"boolean"}
+      },"required":["kind","what","resolved"]}}
+    },"required":["summary","document","issues"]}
+    """.trimIndent()
+
+    /**
+     * Prompt para mejorar los documentos antes de planificar sobre ellos.
+     *
+     * Un plan no puede ser mejor que las specs de las que sale. Lo que las specs no dicen, el
+     * planificador lo inventa —y lo inventa bien, con seguridad, sin marcarlo— así que el hueco
+     * aparece recién cuando el código está escrito y hace otra cosa.
+     *
+     * **No reescribe los documentos originales.** Deja uno nuevo al lado con lo que falta, lo que
+     * es ambiguo y lo que se contradice. Editar en el lugar borraría la versión que alguien escribió
+     * y acordó con otros, y dejaría sin forma de saber qué se cambió: una spec es un acuerdo, no un
+     * borrador de la app.
+     */
+    fun improveSpecs(
+        docs: List<SourceDoc>,
+        repos: List<Triple<String, String, String>>,
+        extra: String?,
+        language: String,
+    ): String = """
+        Sos un analista funcional revisando los documentos de los que va a salir una implementación.
+        Sólo lectura: no escribas ni modifiques archivos.
+
+        REPOSITORIOS
+        ${repos.joinToString("\n") { (nombre, rol, ruta) -> "- $nombre — $rol — $ruta" }}
+
+        Miralos antes de opinar. La mitad de lo que "falta" en una spec ya está resuelto en el
+        código, y señalarlo como hueco hace que el planificador vuelva a construir algo que existe.
+
+        LOS DOCUMENTOS
+        ${docs.joinToString("\n\n") { "--- ${it.name} ---\n${it.content}" }}
+
+        ${extra?.takeIf { it.isNotBlank() }?.let { "PARÁMETROS ADICIONALES, mandan sobre los documentos:\n$it" }.orEmpty()}
+
+        QUÉ BUSCAR
+        - **Lo que falta.** Casos borde sin definir, estados sin transición, errores sin
+          comportamiento, permisos sin decir quién, datos sin decir qué pasa si no están.
+        - **Lo ambiguo.** Frases que se pueden implementar de dos formas distintas y las dos cumplen
+          lo escrito. Son las peores: nadie las nota hasta que el código hace la otra.
+        - **Lo que se contradice.** Dos documentos que dicen cosas distintas sobre lo mismo, o un
+          mockup que no coincide con el texto.
+        - **Lo que se está asumiendo.** Lo que el documento da por sabido y no está en ningún lado.
+
+        QUÉ DEVOLVER
+        En `document`, un markdown completo y autocontenido —el que se va a guardar al lado de las
+        specs y va a entrar en el plan—. Que resuelva lo que se pueda resolver mirando el código y
+        el resto de los documentos, y que **liste como preguntas abiertas lo que no**. Resolver algo
+        de negocio inventando la respuesta es exactamente lo que esto viene a evitar: si no está y
+        no se deduce, va como pregunta.
+
+        Empezalo con un título y una línea diciendo qué es y de qué documentos salió.
+
+        En `issues`, cada cosa encontrada con `resolved` en true si el documento nuevo la contesta,
+        o false si queda como pregunta abierta.
+
+        No repitas los documentos originales: el que escribas se lee **además** de ellos, no en su
+        lugar. Escribí en $language.
+    """.trimIndent()
+
+    /** Lo que devuelve la auditoría del plan contra los documentos. */
+    val AUDIT_SCHEMA = """
+    {"type":"object","properties":{
+      "summary":{"type":"string"},
+      "covered":{"type":"integer"},
+      "issues":{"type":"array","items":{"type":"object","properties":{
+        "kind":{"type":"string","enum":["MISSING","EXTRA","WRONG_ORDER","CONTRADICTS","VAGUE"]},
+        "requirement":{"type":"string"},
+        "task":{"type":"integer"},
+        "what":{"type":"string"},
+        "fix":{"type":"string"}
+      },"required":["kind","what"]}}
+    },"required":["summary","issues"]}
+    """.trimIndent()
+
+    /**
+     * Prompt para auditar el plan contra los documentos.
+     *
+     * Planificar y verificar el plan son trabajos distintos, y el que planificó es mal juez: para
+     * él el plan cubre todo, porque lo armó pensando eso. Esta pasada va al revés —de los
+     * documentos al plan, requisito por requisito— que es el único orden en el que se ve lo que
+     * quedó afuera. Yendo del plan a los documentos, lo que falta no aparece nunca: no hay tarea que
+     * lo mencione.
+     */
+    fun auditPlan(
+        docs: List<SourceDoc>,
+        plan: String,
+        repos: List<Triple<String, String, String>>,
+        language: String,
+    ): String = """
+        Sos un tech lead auditando un plan de implementación contra los documentos que lo originaron.
+        Sólo lectura.
+
+        REPOSITORIOS
+        ${repos.joinToString("\n") { (nombre, rol, ruta) -> "- $nombre — $rol — $ruta" }}
+
+        Miralos: una tarea que "falta" puede estar ya resuelta en el código, y entonces no falta.
+
+        LOS DOCUMENTOS
+        ${docs.joinToString("\n\n") { "--- ${it.name} ---\n${it.content}" }}
+
+        EL PLAN
+        $plan
+
+        CÓMO AUDITAR
+        Andá **de los documentos al plan**, requisito por requisito, y por cada uno preguntá qué
+        tarea lo cubre. Ese orden importa: yendo del plan a los documentos, lo que falta no aparece
+        nunca, porque no hay ninguna tarea que lo mencione.
+
+        Marcá:
+        - `MISSING`: un requisito que ninguna tarea cubre.
+        - `EXTRA`: una tarea que no sale de ningún requisito. No siempre está mal —puede ser trabajo
+          técnico necesario— pero decilo, porque también es como se cuela trabajo que nadie pidió.
+        - `WRONG_ORDER`: una tarea que necesita algo que recién aparece más adelante.
+        - `CONTRADICTS`: una tarea que hace algo distinto de lo que el documento pide.
+        - `VAGUE`: una tarea cuyo texto no alcanza para saber si cubre el requisito o no.
+
+        En `covered` poné cuántos requisitos identificaste que sí están cubiertos. En `fix`, qué
+        habría que cambiar en el plan: es lo que se usa después para replanificar.
+
+        Si el plan está bien, decilo con `issues` vacío. Inventar un problema menor para justificar
+        la pasada hace que el número deje de significar algo. Escribí en $language.
+    """.trimIndent()
+
     /**
      * Herramientas de escritura.
      *

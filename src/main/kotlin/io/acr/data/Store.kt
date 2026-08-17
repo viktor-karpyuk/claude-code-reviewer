@@ -1112,6 +1112,17 @@ class Store(private val dbPath: Path, val settings: DbSettings = DbSettings()) :
             -- cuál fue una decisión de una persona, replanificar pisaría el nombre elegido.
             ALTER TABLE implementation ADD COLUMN branch_fixed INTEGER
             """.trimIndent(),
+
+            // v53 — de qué es cada pasada.
+            //
+            // Empezaron siendo todas sobre el código, pero hay otras dos que contestan preguntas
+            // distintas y en momentos distintos: si los documentos alcanzan para construir esto, y
+            // si el plan cubre lo que los documentos piden. Van a la misma tabla porque son lo
+            // mismo —una pasada de análisis con su resultado— y separarlas en tres tablas iguales
+            // sólo haría que la pantalla tenga que unirlas de nuevo.
+            """
+            ALTER TABLE impl_review ADD COLUMN kind TEXT
+            """.trimIndent(),
         )
     }
 }

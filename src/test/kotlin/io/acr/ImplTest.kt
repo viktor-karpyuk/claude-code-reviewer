@@ -1204,3 +1204,188 @@ class ImplReviewTest {
         assertTrue(p.contains("No lo repitas"))
     }
 }
+
+/**
+ * Las dos pasadas de análisis que no miran código: los documentos y el plan.
+ *
+ * Las dos existen por la misma razón: un plan no puede ser mejor que las specs de las que sale, y
+ * el que planificó es mal juez de su propio plan. Lo que se prueba acá es el criterio de cada
+ * prompt, que es donde están las decisiones.
+ */
+class ImplAnalysisTest {
+
+    private fun conRepo(block: (AppContext, String) -> Unit) {
+        val dir = java.nio.file.Files.createTempDirectory("acr-an")
+        val ctx = AppContext.bootstrap(dir)
+        try {
+            val repoId = ctx.repos.create(
+                "tmp-a-${System.nanoTime()}", Provider.BITBUCKET, "acme", "demo",
+                System.getProperty("java.io.tmpdir"), null, null, null, "", false,
+                io.acr.forge.SkipRules(), io.acr.forge.ReplyMode.OFF,
+            )
+            block(ctx, repoId)
+        } finally {
+            ctx.close()
+            dir.toFile().deleteRecursively()
+        }
+    }
+
+    @Test
+    fun theSpecsPassNeverRewritesTheOriginals() {
+        // Una spec es un acuerdo entre personas, no un borrador de esta app: reescribirla en el
+        // lugar borraría lo que alguien redactó y acordó, y dejaría sin forma de saber qué cambió.
+        val p = io.acr.impl.ImplPrompt.improveSpecs(
+            listOf(io.acr.impl.SourceDoc("req.md", "lo que se pide")),
+            listOf(Triple("be", "BACKEND", "/tmp/be")), null, "español",
+        )
+        assertTrue(p.contains("no escribas ni modifiques archivos", ignoreCase = true), p.take(400))
+        assertTrue(p.contains("además"), "el documento nuevo se lee además de los originales, no en su lugar")
+    }
+
+    @Test
+    fun whatCannotBeDeducedBecomesAQuestionInsteadOfAnInvention() {
+        // Es el punto entero de la pasada: si inventa la respuesta de negocio que falta, produce
+        // exactamente el problema que venía a evitar, y encima con más autoridad.
+        val p = io.acr.impl.ImplPrompt.improveSpecs(
+            listOf(io.acr.impl.SourceDoc("req.md", "x")), listOf(Triple("be", "BACKEND", "/tmp")),
+            null, "español",
+        )
+        assertTrue(p.contains("preguntas abiertas"))
+        assertTrue(p.contains("si no está y") || p.contains("no se deduce"))
+    }
+
+    @Test
+    fun theAuditGoesFromTheDocumentsToThePlanAndNotTheOtherWay() {
+        // Es la decisión que hace que la auditoría sirva: yendo del plan a los documentos, lo que
+        // falta no aparece nunca, porque no hay ninguna tarea que lo mencione.
+        val p = io.acr.impl.ImplPrompt.auditPlan(
+            listOf(io.acr.impl.SourceDoc("req.md", "x")), "1. tarea",
+            listOf(Triple("be", "BACKEND", "/tmp")), "español",
+        )
+        assertTrue(p.contains("de los documentos al plan"))
+        assertTrue(p.contains("requisito por requisito"))
+        listOf("MISSING", "EXTRA", "WRONG_ORDER", "CONTRADICTS", "VAGUE").forEach {
+            assertTrue(p.contains(it), "clasifica $it")
+        }
+    }
+
+    @Test
+    fun anEmptyAuditIsAValidAnswer() {
+        val p = io.acr.impl.ImplPrompt.auditPlan(
+            emptyList(), "1. tarea", listOf(Triple("be", "BACKEND", "/tmp")), "español",
+        )
+        assertTrue(p.contains("Si el plan está bien, decilo"))
+    }
+
+    @Test
+    fun eachKindOfPassIsStoredAsWhatItIs() = conRepo { ctx, repoId ->
+        // Van a la misma tabla porque son lo mismo —una pasada de análisis con su resultado— pero
+        // contestan preguntas distintas, y la pantalla tiene que poder decir cuál es cuál.
+        val id = ctx.impls.create(
+            listOf(io.acr.impl.ImplRepo(repoId, io.acr.impl.RepoRole.OTHER, null)),
+            "análisis", listOf("/tmp/x.md"), null,
+        )
+        ctx.impls.saveReview(id, null, 1, 3, 2, "docs", "…", null, 0.1, io.acr.impl.ReviewKind.SPECS)
+        ctx.impls.saveReview(id, null, 1, 1, 0, "plan", "…", null, 0.1, io.acr.impl.ReviewKind.PLAN)
+        ctx.impls.saveReview(id, null, 1, 0, 0, "código", null, null, 0.1)
+
+        val tipos = ctx.impls.reviews(id).map { it.kind }
+        assertTrue(io.acr.impl.ReviewKind.SPECS in tipos)
+        assertTrue(io.acr.impl.ReviewKind.PLAN in tipos)
+        assertTrue(io.acr.impl.ReviewKind.CODE in tipos, "las viejas, sin tipo guardado, son de código")
+    }
+
+    @Test
+    fun theNewDocumentJoinsTheOnesThePlannerReads() = conRepo { ctx, repoId ->
+        // Si el documento de aclaraciones no entra en las fuentes, el análisis fue decorativo: el
+        // plan se sigue armando con las specs incompletas.
+        val id = ctx.impls.create(
+            listOf(io.acr.impl.ImplRepo(repoId, io.acr.impl.RepoRole.OTHER, null)),
+            "docs", listOf("/tmp/a.md"), null,
+        )
+        ctx.impls.addSource(id, "/tmp/00-aclaraciones.md")
+        assertEquals(listOf("/tmp/a.md", "/tmp/00-aclaraciones.md"), ctx.impls.get(id)!!.sources)
+
+        // Y no se duplica si se corre dos veces.
+        ctx.impls.addSource(id, "/tmp/00-aclaraciones.md")
+        assertEquals(2, ctx.impls.get(id)!!.sources.size)
+    }
+}
+
+/**
+ * El Gantt: dónde cae cada tarea en el tiempo.
+ *
+ * Lo único que importa acá es que el diagrama y el motor cuenten la misma historia. Un Gantt que
+ * muestra un orden distinto del que va a pasar no es una previsión, es una ilustración.
+ */
+class GanttLayoutTest {
+
+    private fun tarea(
+        seq: Int,
+        repoId: String,
+        dep: List<Int> = emptyList(),
+        estimado: Int = 10,
+        real: String? = null,
+    ) = ImplTask(
+        "t$seq", "i", repoId, seq, "tarea $seq", "", dep, TaskSize.M, estimado,
+        if (real != null) TaskStatus.DONE else TaskStatus.PENDING,
+        null, null, null, null,
+        real?.let { "2026-01-01T00:00:00Z" }, real,
+    )
+
+    private fun carriles(vararg r: String) = r.withIndex().associate { (i, x) -> x as String? to i }
+
+    @Test
+    fun independentTasksStartAtTheSameMoment() {
+        // Es lo que hace que el diagrama valga: dos barras que arrancan juntas son dos tareas que
+        // van a correr juntas.
+        val barras = io.acr.ui.impl.layout(
+            listOf(tarea(1, "be"), tarea(2, "fe")), carriles("be", "fe"),
+        )
+        assertEquals(0.0, barras[0].startMin)
+        assertEquals(0.0, barras[1].startMin)
+    }
+
+    @Test
+    fun aDependentTaskStartsWhenItsDependencyEnds() {
+        val barras = io.acr.ui.impl.layout(
+            listOf(tarea(1, "be", estimado = 30), tarea(2, "fe", dep = listOf(1))),
+            carriles("be", "fe"),
+        )
+        assertEquals(30.0, barras[1].startMin)
+    }
+
+    @Test
+    fun twoTasksInTheSameRepoAreDrawnOneAfterTheOther() {
+        // Aunque no dependan entre sí. El repositorio es el límite real del paralelismo, y
+        // dibujarlas superpuestas prometería algo que el motor no va a hacer.
+        val barras = io.acr.ui.impl.layout(
+            listOf(tarea(1, "be", estimado = 20), tarea(2, "be", estimado = 10)),
+            carriles("be"),
+        )
+        assertEquals(0.0, barras[0].startMin)
+        assertEquals(20.0, barras[1].startMin, "la segunda espera a que se libere el repositorio")
+    }
+
+    @Test
+    fun whatAlreadyRanUsesWhatItActuallyTook() {
+        // Para lo hecho, lo que tardó; para lo que falta, la estimación. Mezclarlos es la lectura
+        // que sirve: lo que pasó, y desde ahí lo que se espera.
+        val hecha = tarea(1, "be", estimado = 10, real = "2026-01-01T00:40:00Z")
+        val barras = io.acr.ui.impl.layout(listOf(hecha, tarea(2, "be")), carriles("be"))
+        assertEquals(40.0, barras[0].durationMin, "cuarenta minutos reales, no diez estimados")
+        assertEquals(40.0, barras[1].startMin)
+    }
+
+    @Test
+    fun anImpossibleDependencyDoesNotPushATaskIntoTheFuture() {
+        // El mismo criterio que usa el motor: una dependencia hacia adelante es un error de plan y
+        // se ignora. Si el diagrama la respetara, mostraría una tarea esperando algo que el motor
+        // no va a esperar.
+        val barras = io.acr.ui.impl.layout(
+            listOf(tarea(1, "be", dep = listOf(2)), tarea(2, "be")),
+            carriles("be"),
+        )
+        assertEquals(0.0, barras[0].startMin)
+    }
+}

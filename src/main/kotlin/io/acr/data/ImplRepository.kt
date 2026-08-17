@@ -662,11 +662,12 @@ class ImplRepository(private val store: Store) {
         detail: String?,
         commitSha: String?,
         costUsd: Double?,
+        kind: io.acr.impl.ReviewKind = io.acr.impl.ReviewKind.CODE,
     ) {
         store.stmt(
             """INSERT INTO impl_review(id, impl_id, task_id, pass, findings, fixed, summary,
-                     detail, commit_sha, cost_usd, created_at)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
+                     detail, commit_sha, cost_usd, created_at, kind)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
         ) { ps ->
             ps.setString(1, UlidCreator.getUlid().toString())
             ps.setString(2, implId)
@@ -679,6 +680,7 @@ class ImplRepository(private val store: Store) {
             ps.setString(9, commitSha)
             if (costUsd == null) ps.setNull(10, java.sql.Types.REAL) else ps.setDouble(10, costUsd)
             ps.setString(11, Instant.now().toString())
+            ps.setString(12, kind.name)
             ps.executeUpdate()
         }
     }
@@ -686,7 +688,7 @@ class ImplRepository(private val store: Store) {
     fun reviews(implId: String): List<io.acr.impl.ReviewPass> =
         store.stmt(
             """SELECT id, impl_id, task_id, pass, findings, fixed, summary, detail, commit_sha,
-                      cost_usd, created_at
+                      cost_usd, created_at, kind
                  FROM impl_review WHERE impl_id = ? ORDER BY created_at, pass""",
         ) { ps ->
             ps.setString(1, implId)
@@ -706,12 +708,30 @@ class ImplRepository(private val store: Store) {
                                 commitSha = rs.getString(9),
                                 costUsd = rs.getObject(10)?.let { rs.getDouble(10) },
                                 createdAt = rs.getString(11).orEmpty(),
+                                kind = io.acr.impl.ReviewKind.fromApi(rs.getString(12)),
                             ),
                         )
                     }
                 }
             }
         }
+
+    /**
+     * Suma un documento a los que ya tiene, sin tocar el resto.
+     *
+     * Existe porque el análisis de las specs deja un documento nuevo y tiene que quedar entre los
+     * que el planificador va a leer. Reescribir la lista entera desde afuera se prestaba a perder
+     * los que ya estaban.
+     */
+    fun addSource(implId: String, path: String) {
+        val actual = get(implId)?.sources.orEmpty()
+        if (path in actual) return
+        store.stmt("UPDATE implementation SET sources = ? WHERE id = ?") { ps ->
+            ps.setString(1, (actual + path).joinToString("\n"))
+            ps.setString(2, implId)
+            ps.executeUpdate()
+        }
+    }
 
     /**
      * Fija el nombre de la rama, o lo devuelve a automático con null.

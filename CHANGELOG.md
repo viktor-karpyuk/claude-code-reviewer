@@ -3,6 +3,38 @@
 Reglas de numeración en [CLAUDE.md](CLAUDE.md): un requerimiento **nuevo** incrementa *major*;
 cambiar uno **existente** incrementa *patch*.
 
+## 66.0.0
+
+**Analizar los documentos antes de planificar sobre ellos.** Un plan no puede ser mejor que las
+specs de las que sale, y lo que las specs no dicen el planificador lo inventa —bien, con seguridad,
+sin marcarlo— así que el hueco aparece recién cuando el código está escrito y hace otra cosa. La
+pasada busca lo que falta, lo ambiguo, lo que se contradice y lo que se está dando por sabido.
+
+**No reescribe los documentos originales.** Deja uno nuevo al lado, con lo que se puede resolver
+mirando el código y el resto de las specs, y con el resto **como preguntas abiertas**: resolver algo
+de negocio inventando la respuesta es exactamente lo que la pasada viene a evitar. El documento
+nuevo se suma a los que el planificador lee. Una spec es un acuerdo entre personas, no un borrador
+de esta app: reescribirla en el lugar borraría lo que alguien redactó y acordó.
+
+**Auditar el plan contra los documentos.** Planificar y verificar el plan son trabajos distintos, y
+el que planificó es mal juez: para él el plan cubre todo, porque lo armó pensando eso. La auditoría
+va **de los documentos al plan**, requisito por requisito, que es el único orden en el que se ve lo
+que falta — yendo del plan a los documentos, lo que no está no aparece nunca, porque no hay ninguna
+tarea que lo mencione. Marca lo que ningún task cubre, lo que sobra, lo que está fuera de orden y lo
+que contradice la spec, y deja todo eso escrito como guía de replanificación. No cambia el plan
+solo: replanificar tira las tareas y eso no puede pasar sin que alguien lo decida.
+
+**El plan en el tiempo, como Gantt.** Una tabla ordenada por número contesta "qué falta"; no
+contesta "por qué esta tarea todavía no arrancó" ni "cuánto de esto puede pasar a la vez". El
+diagrama coloca cada tarea usando la misma regla que usa el motor para ejecutar —dependencias
+cumplidas, un repositorio a la vez— porque un diagrama que muestra un orden distinto del que va a
+pasar no es una previsión, es una ilustración. Para lo ya corrido usa lo que tardó de verdad; para
+lo que falta, la estimación. Se redibuja con cada latido, así que la barra de la tarea en curso
+crece sola.
+
+Y una tarea planificada antes de que existieran los pasos ahora lo dice, en vez de mostrar el hueco:
+sin eso parecía que la tarea no tuviera nada adentro.
+
 ## 65.0.0
 
 **Pasadas de revisión sobre el código ya escrito.** Implementar y revisar son trabajos distintos, y

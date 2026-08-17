@@ -161,6 +161,24 @@ fun ImplDetail(
             // Ajustar sin perder lo hecho: cambiar un parámetro o sumar un repositorio no puede
             // obligar a empezar de cero.
             TextButton(onClick = { editando = true }) { Text(t("common.edit")) }
+            // Analizar los documentos antes de planificar sobre ellos: un plan no puede ser mejor
+            // que las specs de las que sale, y lo que las specs no dicen el planificador lo
+            // inventa sin marcarlo.
+            var analizando by remember(implId) { mutableStateOf(false) }
+            TextButton(
+                enabled = !corriendo && !analizando,
+                onClick = {
+                    analizando = true
+                    ctx.appScope.launch {
+                        ctx.implEngine.improveSpecs(misRepos, implId)
+                        analizando = false
+                        version++
+                    }
+                },
+            ) { Text(t("impl.analyzeDocs")) }
+            if (analizando) {
+                CircularProgressIndicator(Modifier.height(16.dp).width(16.dp), strokeWidth = 2.dp)
+            }
             EstadoBadge(impl.status)
         }
 
@@ -307,6 +325,19 @@ fun ImplDetail(
             }
         }
 
+        // --- El plan en el tiempo ---
+        // Una tabla ordenada por número contesta "qué falta"; no contesta "por qué esta tarea
+        // todavía no arrancó" ni "cuánto de esto puede pasar a la vez". Se redibuja con cada
+        // latido, así que la barra de la tarea en curso crece sola.
+        if (tareas.isNotEmpty()) {
+            Spacer(Modifier.height(12.dp))
+            io.acr.ui.CollapsibleCard(
+                t("impl.gantt"), ctx.prefs, "implgantt-$implId", maxHeight = 420.dp,
+            ) {
+                GanttView(tareas, misRepos) { tareaAbierta = it.id }
+            }
+        }
+
         // --- Lo que encontró la revisión ---
         // Va antes del esfuerzo porque es lo que cambia una decisión: una implementación completa
         // con cuatro hallazgos sin arreglar no está en el mismo estado que una limpia, y el costo
@@ -330,7 +361,8 @@ fun ImplDetail(
                             )
                             Column(Modifier.weight(1f)) {
                                 Text(
-                                    t("impl.reviewPass", rev.pass) +
+                                    t("impl.reviewKind" + rev.kind.name) + "  ·  " +
+                                        t("impl.reviewPass", rev.pass) +
                                         rev.taskId?.let { id ->
                                             tareas.firstOrNull { it.id == id }?.let { "  ·  #${it.seq}" }
                                         }.orEmpty() +

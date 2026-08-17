@@ -585,6 +585,221 @@ class ImplEngine(
     }
 
     /**
+     * Analiza los documentos y deja uno nuevo con lo que falta y lo que es ambiguo.
+     *
+     * Un plan no puede ser mejor que las specs de las que sale. Lo que las specs no dicen, el
+     * planificador lo inventa —bien, con seguridad, sin marcarlo— y el hueco aparece recién cuando
+     * el código está escrito y hace otra cosa.
+     *
+     * **No toca los documentos originales.** Escribe uno nuevo al lado y lo suma a los que el
+     * planificador va a leer. Una spec es un acuerdo entre personas, no un borrador de esta app:
+     * reescribirla en el lugar borraría lo que alguien redactó y acordó, y dejaría sin forma de
+     * saber qué se cambió.
+     */
+    suspend fun improveSpecs(repos: List<RepoRecord>, implId: String): Result<String> {
+        val impl = impls.get(implId) ?: return Result.failure(IllegalStateException("No existe."))
+        val principal = repos.firstOrNull()
+            ?: return Result.failure(IllegalStateException("La implementación no tiene repositorios."))
+        val binario = ClaudeCli.resolveBinary(prefs.get(io.acr.AppContext.PREF_CLAUDE_BINARY))
+            ?: return Result.failure(IllegalStateException("No encuentro el ejecutable de Claude Code."))
+        val docs = loadSources(impl.sources)
+        if (docs.isEmpty()) return Result.failure(IllegalStateException("No hay documentos que analizar."))
+
+        val idioma = prefs.get(io.acr.AppContext.PREF_LANGUAGE) ?: "español"
+        log(implId, "Analizando ${docs.size} documento(s)…")
+
+        return runCatching {
+            val res = ClaudeCli.run(
+                binary = binario,
+                workDir = File(principal.localPath),
+                prompt = ImplPrompt.improveSpecs(docs, describir(repos, implId), impl.extraPrompt, idioma),
+                model = impl.planModel ?: PLAN_MODEL,
+                allowedTools = listOf("Read", "Grep", "Glob", "Bash(git *)", "Bash(ls *)", "Bash(find *)"),
+                disallowedTools = ImplPrompt.DENIED_TOOLS,
+                jsonSchema = ImplPrompt.SPECS_SCHEMA,
+                register = { running["$implId#specs"] = it },
+                onEvent = { evt -> resumir(evt)?.let { log(implId, it) } },
+            )
+            running.remove("$implId#specs")
+            if (!res.ok) error(res.stderr.ifBlank { "El análisis no devolvió nada." })
+
+            val salida = parseSpecs(res.structured ?: res.text)
+            if (salida.documento.isBlank()) error("El análisis volvió sin documento.")
+
+            // Al lado de las specs, no adentro de la app: es un documento del proyecto y tiene que
+            // poder leerse, versionarse y discutirse como los otros. Si esa carpeta no se puede
+            // escribir, cae al directorio de datos antes que perderse.
+            val destino = destinoDoc(impl.sources, impl.title)
+            destino.parentFile?.mkdirs()
+            destino.writeText(salida.documento)
+            impls.addSource(implId, destino.absolutePath)
+
+            val abiertas = salida.issues.count { !it.second }
+            impls.saveReview(
+                implId, null, 1, salida.issues.size, salida.issues.size - abiertas,
+                salida.resumen, salida.issues.joinToString("\n") { it.first },
+                null, res.costUsd, io.acr.impl.ReviewKind.SPECS,
+            )
+            log(
+                implId,
+                "Documento agregado: ${destino.name} · ${salida.issues.size} cosa(s) encontradas" +
+                    (if (abiertas > 0) ", $abiertas quedan como pregunta." else "."),
+            )
+            destino.absolutePath
+        }.onFailure { running.remove("$implId#specs") }
+    }
+
+    /**
+     * Audita el plan contra los documentos: qué quedó afuera, qué sobra, qué se contradice.
+     *
+     * Planificar y verificar el plan son trabajos distintos, y el que planificó es mal juez: para
+     * él el plan cubre todo, porque lo armó pensando eso. Esta pasada va de los documentos al plan
+     * y no al revés, que es el único orden en el que se ve lo que falta —yendo del plan a los
+     * documentos, lo que no está no aparece nunca, porque no hay tarea que lo mencione—.
+     *
+     * No cambia el plan. Deja el resultado escrito para poder usarlo como guía de la revisión, que
+     * es una decisión aparte: replanificar tira las tareas y eso no puede pasar solo.
+     */
+    suspend fun auditPlan(repos: List<RepoRecord>, implId: String): Result<Int> {
+        val impl = impls.get(implId) ?: return Result.failure(IllegalStateException("No existe."))
+        val principal = repos.firstOrNull()
+            ?: return Result.failure(IllegalStateException("La implementación no tiene repositorios."))
+        val binario = ClaudeCli.resolveBinary(prefs.get(io.acr.AppContext.PREF_CLAUDE_BINARY))
+            ?: return Result.failure(IllegalStateException("No encuentro el ejecutable de Claude Code."))
+        val tareas = impls.tasks(implId)
+        if (tareas.isEmpty()) return Result.failure(IllegalStateException("Todavía no hay plan que auditar."))
+
+        val docs = loadSources(impl.sources)
+        val idioma = prefs.get(io.acr.AppContext.PREF_LANGUAGE) ?: "español"
+        val plan = buildString {
+            impl.planSummary?.takeIf { it.isNotBlank() }?.let { appendLine(it).appendLine() }
+            tareas.forEach { t ->
+                appendLine("${t.seq}. ${t.title}")
+                t.detail.takeIf { it.isNotBlank() }?.let { appendLine("   $it") }
+                t.steps.forEach { p -> appendLine("   - ${p.title}") }
+            }
+        }
+        log(implId, "Auditando el plan contra ${docs.size} documento(s)…")
+
+        return runCatching {
+            val res = ClaudeCli.run(
+                binary = binario,
+                workDir = File(principal.localPath),
+                prompt = ImplPrompt.auditPlan(docs, plan, describir(repos, implId), idioma),
+                model = impl.planModel ?: PLAN_MODEL,
+                allowedTools = listOf("Read", "Grep", "Glob", "Bash(git *)", "Bash(ls *)", "Bash(find *)"),
+                disallowedTools = ImplPrompt.DENIED_TOOLS,
+                jsonSchema = ImplPrompt.AUDIT_SCHEMA,
+                register = { running["$implId#audit"] = it },
+                onEvent = { evt -> resumir(evt)?.let { log(implId, it) } },
+            )
+            running.remove("$implId#audit")
+            if (!res.ok) error(res.stderr.ifBlank { "La auditoría no devolvió nada." })
+
+            val salida = parseAudit(res.structured ?: res.text)
+            impls.saveReview(
+                implId, null, 1, salida.issues.size, salida.cubiertos,
+                salida.resumen, salida.issues.joinToString("\n"),
+                null, res.costUsd, io.acr.impl.ReviewKind.PLAN,
+            )
+            // Lo encontrado queda como guía de revisión: es exactamente lo que hay que corregir, y
+            // volver a escribirlo a mano para replanificar sería copiar lo que la app ya sabe.
+            if (salida.issues.isNotEmpty()) {
+                impls.saveReviewGuidance(
+                    implId,
+                    "La auditoría del plan contra los documentos encontró esto. Corregilo:\n" +
+                        salida.issues.joinToString("\n") { "- $it" },
+                )
+            }
+            log(
+                implId,
+                if (salida.issues.isEmpty()) "El plan cubre los documentos."
+                else "${salida.issues.size} cosa(s) para corregir en el plan.",
+            )
+            salida.issues.size
+        }.onFailure { running.remove("$implId#audit") }
+    }
+
+    /** Nombre, rol y ruta de cada repositorio, como los espera el prompt. */
+    private fun describir(repos: List<RepoRecord>, implId: String): List<Triple<String, String, String>> {
+        val cfg = impls.reposOf(implId)
+        return repos.map { r ->
+            Triple(r.name, (cfg.firstOrNull { it.repoId == r.id }?.role ?: RepoRole.OTHER).name, r.localPath)
+        }
+    }
+
+    /**
+     * Dónde dejar el documento de aclaraciones.
+     *
+     * Al lado de las specs: es un documento del proyecto y tiene que poder leerse, versionarse y
+     * discutirse como los otros. Si esa carpeta no existe o no se puede escribir, va al directorio
+     * de datos de la app antes que perderse.
+     */
+    private fun destinoDoc(sources: List<String>, titulo: String): File {
+        val base = sources.map { File(it) }
+            .firstOrNull { it.exists() }
+            ?.let { if (it.isDirectory) it else it.parentFile }
+        val nombre = "00-aclaraciones-" +
+            titulo.lowercase().replace(Regex("[^a-z0-9]+"), "-").trim('-').take(40).ifBlank { "impl" } +
+            ".md"
+        val destino = base?.let { File(it, nombre) }
+        return if (destino != null && (base.canWrite())) {
+            destino
+        } else {
+            File(System.getProperty("user.home"), ".acr/docs/$nombre")
+        }
+    }
+
+    private data class SpecsOut(
+        val resumen: String,
+        val documento: String,
+        /** Cada cosa encontrada y si el documento nuevo la contesta. */
+        val issues: List<Pair<String, Boolean>>,
+    )
+
+    private fun parseSpecs(raw: String): SpecsOut {
+        val limpio = raw.trim().removePrefix("```json").removePrefix("```").removeSuffix("```").trim()
+        val obj = runCatching {
+            kotlinx.serialization.json.Json { ignoreUnknownKeys = true; isLenient = true }
+                .parseToJsonElement(limpio).jsonObject
+        }.getOrNull() ?: return SpecsOut(raw.take(500), raw, emptyList())
+        fun texto(o: JsonObject, k: String) = o[k]?.jsonPrimitive?.contentOrNull.orEmpty()
+        val items = (obj["issues"] as? JsonArray).orEmpty().mapNotNull { it as? JsonObject }
+        return SpecsOut(
+            resumen = texto(obj, "summary"),
+            documento = texto(obj, "document"),
+            issues = items.map { o ->
+                val resuelto = o["resolved"]?.jsonPrimitive?.contentOrNull?.toBooleanStrictOrNull() ?: false
+                val donde = texto(o, "where").takeIf { it.isNotBlank() }?.let { " · $it" }.orEmpty()
+                ("[" + texto(o, "kind") + "]" + donde + " " + texto(o, "what") +
+                    (if (resuelto) "" else "  → queda como pregunta")) to resuelto
+            },
+        )
+    }
+
+    private data class AuditOut(val resumen: String, val cubiertos: Int, val issues: List<String>)
+
+    private fun parseAudit(raw: String): AuditOut {
+        val limpio = raw.trim().removePrefix("```json").removePrefix("```").removeSuffix("```").trim()
+        val obj = runCatching {
+            kotlinx.serialization.json.Json { ignoreUnknownKeys = true; isLenient = true }
+                .parseToJsonElement(limpio).jsonObject
+        }.getOrNull() ?: return AuditOut(raw.take(1_000), 0, emptyList())
+        fun texto(o: JsonObject, k: String) = o[k]?.jsonPrimitive?.contentOrNull.orEmpty()
+        val items = (obj["issues"] as? JsonArray).orEmpty().mapNotNull { it as? JsonObject }
+        return AuditOut(
+            resumen = texto(obj, "summary"),
+            cubiertos = obj["covered"]?.jsonPrimitive?.contentOrNull?.toIntOrNull() ?: 0,
+            issues = items.map { o ->
+                val tarea = texto(o, "task").takeIf { it.isNotBlank() }?.let { " (tarea $it)" }.orEmpty()
+                val req = texto(o, "requirement").takeIf { it.isNotBlank() }?.let { " · $it" }.orEmpty()
+                val arreglo = texto(o, "fix").takeIf { it.isNotBlank() }?.let { " → $it" }.orEmpty()
+                "[" + texto(o, "kind") + "]$tarea$req " + texto(o, "what") + arreglo
+            },
+        )
+    }
+
+    /**
      * Pasadas de revisión sobre el código ya escrito.
      *
      * Implementar y revisar son trabajos distintos, y el modelo que acaba de escribir algo es el

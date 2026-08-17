@@ -179,6 +179,23 @@ data class Implementation(
  * `taskId` en null es una pasada final, sobre la rama entera. Con tarea, es la revisión que corre
  * justo después de esa tarea.
  */
+enum class ReviewKind {
+    /** Sobre el código ya escrito: bugs, performance, diseño, arquitectura. */
+    CODE,
+
+    /** Sobre los documentos: qué falta, qué es ambiguo, qué se contradice. */
+    SPECS,
+
+    /** Sobre el plan: si las tareas cubren lo que los documentos piden. */
+    PLAN,
+    ;
+
+    companion object {
+        fun fromApi(s: String?): ReviewKind =
+            entries.firstOrNull { it.name.equals(s, ignoreCase = true) } ?: CODE
+    }
+}
+
 data class ReviewPass(
     val id: String,
     val implId: String,
@@ -191,6 +208,7 @@ data class ReviewPass(
     val commitSha: String?,
     val costUsd: Double?,
     val createdAt: String,
+    val kind: ReviewKind = ReviewKind.CODE,
 )
 
 /**

@@ -125,6 +125,17 @@ fun TaskDetailScreen(
                     )
                     task.steps.forEach { paso -> PasoFila(paso) }
                     Spacer(Modifier.height(18.dp))
+                } else {
+                    // Un plan viejo no tiene pasos: se agregaron después y no se pueden inventar
+                    // sobre un plan ya hecho sin volver a pensarlo. Decirlo es mejor que dejar el
+                    // hueco, porque si no parece que la tarea no tuviera nada adentro.
+                    Seccion(t("impl.steps", 0))
+                    Text(
+                        t("impl.noSteps"),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Spacer(Modifier.height(18.dp))
                 }
 
                 task.result?.takeIf { it.isNotBlank() }?.let {

@@ -12,6 +12,7 @@ import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -59,6 +60,7 @@ fun PlanReview(
     var guia by remember(impl.id) { mutableStateOf(impl.reviewGuidance.orEmpty()) }
     var verPrompt by remember(impl.id) { mutableStateOf(false) }
     var confirmando by remember(impl.id) { mutableStateOf(false) }
+    var auditando by remember(impl.id) { mutableStateOf(false) }
     var revisando by remember(impl.id) { mutableStateOf(false) }
 
     // Replanificar reemplaza las tareas, así que el registro de las que ya corrieron se pierde. Los
@@ -113,8 +115,24 @@ fun PlanReview(
 
         Spacer(Modifier.height(8.dp))
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            // Auditar es lo que llena la guía sin tener que escribirla: va de los documentos al
+            // plan, requisito por requisito, y deja anotado lo que falta. No cambia nada por su
+            // cuenta —replanificar tira las tareas y eso no puede pasar solo—.
+            OutlinedButton(
+                enabled = !running && !revisando && !auditando && repos.isNotEmpty() && tasks.isNotEmpty(),
+                onClick = {
+                    auditando = true
+                    scope.launch {
+                        ctx.implEngine.auditPlan(repos, impl.id)
+                        auditando = false
+                        guia = ctx.impls.get(impl.id)?.reviewGuidance.orEmpty()
+                        onDone()
+                    }
+                },
+            ) { Text(t("impl.audit")) }
+            if (auditando) CircularProgressIndicator(Modifier.height(18.dp).width(18.dp), strokeWidth = 2.dp)
             Button(
-                enabled = !running && !revisando && guia.isNotBlank() && repos.isNotEmpty(),
+                enabled = !running && !revisando && !auditando && guia.isNotBlank() && repos.isNotEmpty(),
                 onClick = {
                     if (hechas > 0 && !confirmando) {
                         confirmando = true
