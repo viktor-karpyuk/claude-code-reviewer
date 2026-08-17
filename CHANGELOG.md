@@ -3,6 +3,36 @@
 Reglas de numeración en [CLAUDE.md](CLAUDE.md): un requerimiento **nuevo** incrementa *major*;
 cambiar uno **existente** incrementa *patch*.
 
+## 67.0.0
+
+**Retomar una implementación que falló ahora reintenta de verdad.** El motor sólo toma tareas
+pendientes, y una tarea fallida ya no lo es: retomar no hacía nada, terminaba al instante y volvía a
+mostrar el error de la vez anterior. No era que la pantalla mostrara información vieja — es que no
+había pasado nada nuevo que mostrar.
+
+Ahora, al retomar, las tareas fallidas vuelven a la cola con su error y sus tiempos limpios, y el
+feed arranca en blanco: las líneas de la corrida anterior encima de las nuevas hacían imposible
+saber si el "✗" que uno estaba leyendo era de ahora o de hace media hora. Las bloqueadas no se
+tocan: esperan una decisión que nadie tomó, y relanzarlas las haría chocar contra la misma pregunta.
+
+**Las enumeraciones de una descripción se ven en vertical.** Los modelos las escriben en línea —"hay
+que 1) migrar la tabla, 2) exponer el endpoint, 3) cablear la pantalla"— y como párrafo corrido eso
+se lee como una sola oración larga donde los números son ruido. Puestas una debajo de otra se leen
+como lo que son: cosas distintas que hay que hacer, contables de un vistazo. La marca se conserva
+tal cual venía —`1)`, `-`, `a)`— porque si el plan numeró, el número es parte del contenido y
+alguien lo va a usar para referirse a un item.
+
+Lo delicado no era partir sino no partir donde no hay lista:
+
+- Hacen falta **al menos dos marcas**. Un "1)" solo es una aclaración, no una enumeración.
+- Un número **entre paréntesis** no es un item. Los planes reales están llenos de `(mockup 01)` y
+  `(tarea 13)`: el número va precedido y seguido de espacio, igual que un item, y sin mirar el
+  paréntesis el texto se partía justo en el medio de una idea. Salió de probar el desarmador contra
+  las descripciones que hay en la base, no contra ejemplos inventados.
+- `v1.2` y `Art. 5.` tampoco.
+- Los saltos de línea que ya estaban ganan sobre cualquier heurística: si alguien separó, esa
+  separación es información real sobre cómo quiso que se leyera.
+
 ## 66.1.0
 
 **Lanzar un análisis ahora se ve.** El botón está en el encabezado y el feed de actividad queda a

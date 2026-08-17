@@ -110,7 +110,11 @@ fun TaskDetailScreen(
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 } else {
-                    Text(task.detail, style = MaterialTheme.typography.bodyMedium)
+                    // Las enumeraciones se desarman y se ponen una debajo de otra. Los modelos las
+                    // escriben en línea —"hay que 1) migrar, 2) exponer, 3) cablear"— y como
+                    // párrafo corrido eso se lee como una sola oración larga donde los números son
+                    // ruido. En vertical se cuentan de un vistazo.
+                    Enumerado(task.detail)
                 }
                 Spacer(Modifier.height(18.dp))
 
@@ -580,3 +584,38 @@ private fun fecha(iso: String): String = runCatching {
     java.time.Instant.parse(iso).atZone(java.time.ZoneId.systemDefault())
         .format(java.time.format.DateTimeFormatter.ofPattern("dd/MM HH:mm"))
 }.getOrDefault(iso.take(16))
+
+/**
+ * Un texto que puede traer enumeraciones, puesto en vertical.
+ *
+ * La marca se conserva tal cual venía —`1)`, `-`, `a)`— en vez de normalizarse a un bullet: si el
+ * plan numeró, el número es parte del contenido y alguien lo va a usar para referirse a un item.
+ */
+@Composable
+private fun Enumerado(texto: String) {
+    val bloques = remember(texto) { io.acr.impl.splitBlocks(texto) }
+    Column {
+        bloques.forEach { b ->
+            if (b.marker == null) {
+                Text(
+                    b.text,
+                    style = MaterialTheme.typography.bodyMedium,
+                    modifier = Modifier.padding(bottom = 4.dp),
+                )
+            } else {
+                Row(Modifier.fillMaxWidth().padding(bottom = 3.dp)) {
+                    Text(
+                        b.marker,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        // Ancho fijo para que los textos queden alineados entre sí: con el ancho
+                        // del marcador variando, la columna de texto baila y la lista deja de
+                        // leerse como lista.
+                        modifier = Modifier.width(26.dp),
+                    )
+                    Text(b.text, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
+                }
+            }
+        }
+    }
+}

@@ -502,6 +502,25 @@ class ImplRepository(private val store: Store) {
         }
     }
 
+    /**
+     * Devuelve a pendientes todas las tareas fallidas de una implementación.
+     *
+     * Es lo que hace que "retomar" signifique algo. Sin esto, retomar una implementación fallida no
+     * reintentaba nada —el motor sólo toma tareas pendientes, y las fallidas ya no lo eran— así que
+     * terminaba al instante volviendo a mostrar el error de la vez anterior, como si nada hubiera
+     * pasado. Y no había pasado nada.
+     *
+     * Las bloqueadas no se tocan: esperan una decisión que nadie tomó todavía, y volver a lanzarlas
+     * las haría chocar contra la misma pregunta.
+     *
+     * Devuelve cuántas volvieron a la cola.
+     */
+    fun retryFailed(implId: String): Int {
+        val fallidas = tasks(implId).filter { it.status == TaskStatus.FAILED }
+        fallidas.forEach { resetTask(it.id) }
+        return fallidas.size
+    }
+
     /** Vuelve a dejar pendiente una tarea, para reintentarla sin rehacer el plan. */
     fun resetTask(taskId: String) {
         store.stmt(

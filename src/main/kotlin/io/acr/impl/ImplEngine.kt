@@ -243,7 +243,15 @@ class ImplEngine(
         }
 
         cancelled.remove(implId)
+        // Retomar tiene que reintentar lo que falló. El motor sólo toma tareas pendientes, así que
+        // sin esto una implementación fallida se retomaba, no hacía nada, y volvía a terminar
+        // mostrando el mismo error —que además ya no describía nada actual—.
+        val reencoladas = impls.retryFailed(implId)
+        // Y el feed arranca limpio: las líneas de la corrida anterior arriba de las nuevas hacen
+        // imposible saber si el "✗" que se está leyendo es de ahora o de hace media hora.
+        clear(implId)
         impls.setStatus(implId, ImplStatus.RUNNING)
+        if (reencoladas > 0) log(implId, "Reintentando $reencoladas tarea(s) que habían fallado.")
         // La misma rama en todos: buscar el trabajo de una implementación en tres repositorios con
         // tres nombres distintos es un problema que no hace falta tener.
         val configurados = impls.reposOf(implId)

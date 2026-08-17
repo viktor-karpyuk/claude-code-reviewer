@@ -1389,3 +1389,161 @@ class GanttLayoutTest {
         assertEquals(0.0, barras[0].startMin)
     }
 }
+
+/**
+ * Desarmar las enumeraciones de una descripción.
+ *
+ * Los modelos las escriben en línea y como párrafo corrido se leen como una sola oración larga
+ * donde los números son ruido. Lo delicado no es partir: es no partir donde no hay lista.
+ */
+class TextLayoutTest {
+
+    private fun bloques(s: String) = io.acr.impl.splitBlocks(s)
+
+    @Test
+    fun anInlineEnumerationBecomesOneItemPerLine() {
+        val b = bloques("Hay que 1) migrar la tabla, 2) exponer el endpoint, 3) cablear la pantalla")
+        assertEquals(4, b.size, "la frase que introduce más los tres items")
+        assertEquals("Hay que", b[0].text)
+        assertEquals(null, b[0].marker)
+        assertEquals("1)", b[1].marker)
+        assertEquals("migrar la tabla", b[1].text)
+        assertEquals("cablear la pantalla", b[3].text)
+    }
+
+    @Test
+    fun theMarkerIsKeptAsItWasWritten() {
+        // Si el plan numeró, el número es parte del contenido: alguien lo va a usar para referirse
+        // a un item. Normalizarlo todo a un bullet perdería esa referencia.
+        assertEquals(listOf("a)", "b)"), bloques("Dos formas: a) una, b) otra").drop(1).map { it.marker })
+    }
+
+    @Test
+    fun aSingleMarkerIsNotAList() {
+        // "1)" solo es una aclaración, no una enumeración. Partir ahí inventaría una estructura
+        // que el texto no tiene.
+        val b = bloques("El caso 1) es el único que importa acá")
+        assertEquals(1, b.size)
+        assertEquals(null, b.single().marker)
+    }
+
+    @Test
+    fun versionNumbersAndDecimalsAreNotItems() {
+        // El error que esto evita: `v1.2` y `Art. 5.` convertidos en items de una lista que nadie
+        // escribió, con el texto partido justo en el medio de una idea.
+        val b = bloques("Migrar de v1.2 a v2.0 sin romper el contrato 3.1 del acuerdo")
+        assertEquals(1, b.size, "nada de esto es una lista: ${b.map { it.text }}")
+    }
+
+    @Test
+    fun existingLineBreaksWin() {
+        // Si alguien ya separó, esa separación gana sobre cualquier heurística: es información
+        // real sobre cómo quiso que se leyera.
+        val b = bloques("- primero\n- segundo\n- tercero")
+        assertEquals(3, b.size)
+        assertTrue(b.all { it.marker == "-" })
+        assertEquals("primero", b.first().text)
+    }
+
+    @Test
+    fun plainProseIsLeftAlone() {
+        val texto = "Esto es un párrafo común, sin ninguna lista adentro."
+        assertEquals(listOf(texto), bloques(texto).map { it.text })
+    }
+
+    @Test
+    fun aReferenceInParenthesesIsNotAListItem() {
+        // Salió de mirar descripciones de verdad: los planes están llenos de "(mockup 01)" y
+        // "(tarea 13)". El número va precedido y seguido de espacio, igual que un item, así que
+        // sin mirar el paréntesis el texto se partía justo en el medio de una idea.
+        val real = "En timelogbook-v4: rediseñar pages/management/absences/absences.component " +
+            "(mockup 01) con tarjetas de saldo por tipo, usando GET /absences/me/balances, y crear " +
+            "absence-request-dialog/ (mockup 02) con preview en vivo (tarea 13), medio día por extremo."
+        val b = bloques(real)
+        assertEquals(1, b.size, "ninguna de estas es una lista: ${b.map { it.text }}")
+    }
+
+    @Test
+    fun theIntroSentenceIsNotThrownAway() {
+        // Sin ella los items quedan sin decir de qué son.
+        val b = bloques("Pasos del import: 1) leer, 2) validar")
+        assertEquals("Pasos del import", b.first().text, "se le saca el dos puntos, no la frase")
+    }
+}
+
+/**
+ * Retomar una implementación que falló.
+ *
+ * El motor sólo toma tareas pendientes. Una tarea fallida ya no lo es, así que sin volver a
+ * encolarla "retomar" no hacía nada: terminaba al instante y volvía a mostrar el error de la vez
+ * anterior, que además ya no describía nada actual.
+ */
+class ImplResumeTest {
+
+    private fun conRepo(block: (AppContext, String) -> Unit) {
+        val dir = java.nio.file.Files.createTempDirectory("acr-res")
+        val ctx = AppContext.bootstrap(dir)
+        try {
+            val repoId = ctx.repos.create(
+                "tmp-res-${System.nanoTime()}", Provider.BITBUCKET, "acme", "demo",
+                System.getProperty("java.io.tmpdir"), null, null, null, "", false,
+                io.acr.forge.SkipRules(), io.acr.forge.ReplyMode.OFF,
+            )
+            block(ctx, repoId)
+        } finally {
+            ctx.close()
+            dir.toFile().deleteRecursively()
+        }
+    }
+
+    private fun tarea(seq: Int) = ImplTask(
+        "", "", null, seq, "tarea $seq", "detalle", emptyList(), TaskSize.M, 10,
+        TaskStatus.PENDING, null, null, null, null, null, null,
+        steps = listOf(
+            io.acr.impl.ImplStep("", "", 1, "un paso", TaskStatus.PENDING, null, "", null, null, null),
+        ),
+    )
+
+    @Test
+    fun resumingPutsTheFailedTasksBackInTheQueue() = conRepo { ctx, repoId ->
+        val id = ctx.impls.create(
+            listOf(io.acr.impl.ImplRepo(repoId, io.acr.impl.RepoRole.OTHER, null)),
+            "retomar", listOf("/tmp/x.md"), null,
+        )
+        ctx.impls.savePlan(id, "r", "rama", "develop", "fable", listOf(tarea(1), tarea(2), tarea(3)))
+        val tareas = ctx.impls.tasks(id)
+        ctx.impls.finishTask(tareas[0].id, "abc", "hecha", 0.1)
+        ctx.impls.failTask(tareas[1].id, "explotó")
+        ctx.impls.blockTask(tareas[2].id, "¿qué hacemos acá?")
+
+        assertEquals(1, ctx.impls.retryFailed(id), "sólo la fallida vuelve a la cola")
+
+        val despues = ctx.impls.tasks(id).associateBy { it.seq }
+        assertEquals(TaskStatus.DONE, despues[1]!!.status, "lo hecho no se toca")
+        assertEquals(TaskStatus.PENDING, despues[2]!!.status)
+        assertEquals(
+            TaskStatus.BLOCKED, despues[3]!!.status,
+            "la bloqueada espera una decisión que nadie tomó: relanzarla la haría chocar contra la misma pregunta",
+        )
+    }
+
+    @Test
+    fun theOldErrorDoesNotSurviveTheRetry() = conRepo { ctx, repoId ->
+        // Es la mitad del problema: aunque se reintente, el texto del error viejo colgado de la
+        // tarea sigue leyéndose como si fuera de ahora.
+        val id = ctx.impls.create(
+            listOf(io.acr.impl.ImplRepo(repoId, io.acr.impl.RepoRole.OTHER, null)),
+            "error viejo", listOf("/tmp/x.md"), null,
+        )
+        ctx.impls.savePlan(id, "r", "rama", "develop", "fable", listOf(tarea(1)))
+        val t = ctx.impls.tasks(id).single()
+        ctx.impls.failTask(t.id, "unrecognized_model")
+
+        ctx.impls.retryFailed(id)
+
+        val vuelta = ctx.impls.tasks(id).single()
+        assertEquals(null, vuelta.error)
+        assertEquals(null, vuelta.finishedAt, "ni la hora en que falló")
+        assertEquals(TaskStatus.PENDING, vuelta.steps.single().status, "los pasos también arrancan de cero")
+    }
+}
