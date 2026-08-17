@@ -606,7 +606,11 @@ class ImplEngine(
         if (docs.isEmpty()) return Result.failure(IllegalStateException("No hay documentos que analizar."))
 
         val idioma = prefs.get(io.acr.AppContext.PREF_LANGUAGE) ?: "español"
-        log(implId, "Analizando ${docs.size} documento(s)…")
+        // Uno por línea y con su tamaño: "analizando 9 documentos" no deja ver que el que
+        // importaba entró vacío, y ese es el modo de fallar más callado que tiene esto.
+        log(implId, "Leyendo ${docs.size} documento(s):")
+        docs.forEach { d -> log(implId, "  · ${d.name} (${d.content.length} caracteres)") }
+        log(implId, "Analizando qué falta, qué es ambiguo y qué se contradice…")
 
         return runCatching {
             val res = ClaudeCli.run(
@@ -646,7 +650,10 @@ class ImplEngine(
                     (if (abiertas > 0) ", $abiertas quedan como pregunta." else "."),
             )
             destino.absolutePath
-        }.onFailure { running.remove("$implId#specs") }
+        }.onFailure {
+            running.remove("$implId#specs")
+            log(implId, "Error: ${it.message.orEmpty().take(300)}")
+        }
     }
 
     /**
@@ -679,7 +686,9 @@ class ImplEngine(
                 t.steps.forEach { p -> appendLine("   - ${p.title}") }
             }
         }
-        log(implId, "Auditando el plan contra ${docs.size} documento(s)…")
+        log(implId, "Leyendo ${docs.size} documento(s):")
+        docs.forEach { d -> log(implId, "  · ${d.name} (${d.content.length} caracteres)") }
+        log(implId, "Auditando las ${tareas.size} tareas contra lo que piden los documentos…")
 
         return runCatching {
             val res = ClaudeCli.run(
@@ -717,7 +726,10 @@ class ImplEngine(
                 else "${salida.issues.size} cosa(s) para corregir en el plan.",
             )
             salida.issues.size
-        }.onFailure { running.remove("$implId#audit") }
+        }.onFailure {
+            running.remove("$implId#audit")
+            log(implId, "Error: ${it.message.orEmpty().take(300)}")
+        }
     }
 
     /** Nombre, rol y ruta de cada repositorio, como los espera el prompt. */

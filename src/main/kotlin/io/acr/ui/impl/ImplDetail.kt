@@ -67,6 +67,8 @@ fun ImplDetail(
     // Qué tarea se está mirando. Expandir la fila obligaba a empujar el resto de la tabla fuera de
     // la vista para leer algo que igual no entraba.
     var tareaAbierta by remember(implId) { mutableStateOf<String?>(null) }
+    // Si esto viviera dentro del encabezado, la tarjeta de actividad no podría leerlo.
+    var analizando by remember(implId) { mutableStateOf(false) }
     // Un tic por segundo mientras algo corre. Es la clave que hace que las lecturas de la base se
     // repitan: sin él, la pantalla depende de que el motor emita una línea de log para enterarse
     // de que una tarea cambió de estado.
@@ -164,7 +166,6 @@ fun ImplDetail(
             // Analizar los documentos antes de planificar sobre ellos: un plan no puede ser mejor
             // que las specs de las que sale, y lo que las specs no dicen el planificador lo
             // inventa sin marcarlo.
-            var analizando by remember(implId) { mutableStateOf(false) }
             TextButton(
                 enabled = !corriendo && !analizando,
                 onClick = {
@@ -178,8 +179,59 @@ fun ImplDetail(
             ) { Text(t("impl.analyzeDocs")) }
             if (analizando) {
                 CircularProgressIndicator(Modifier.height(16.dp).width(16.dp), strokeWidth = 2.dp)
+                Spacer(Modifier.width(8.dp))
+                // Qué está haciendo ahora mismo, acá arriba y no sólo en el feed del pie: el botón
+                // está en el encabezado y el feed queda a una pantalla de scroll, así que quien
+                // aprieta no ve nada y cree que no pasó nada.
+                Text(
+                    vivo?.lines?.lastOrNull()?.trim()?.take(90) ?: t("impl.analyzing"),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
             }
             EstadoBadge(impl.status)
+        }
+
+        // Qué está pasando ahora mismo, arriba de todo.
+        //
+        // El feed completo está al pie, a una pantalla de scroll de los botones que lanzan cosas:
+        // quien aprieta "analizar" no ve nada y concluye que no pasó nada. Esto muestra las últimas
+        // líneas donde se aprieta, y desaparece cuando no hay nada corriendo.
+        val activo = analizando || corriendo
+        if (activo) {
+            vivo?.lines?.takeIf { it.isNotEmpty() }?.let { lineas ->
+                Spacer(Modifier.height(10.dp))
+                Column(
+                    Modifier.fillMaxWidth()
+                        .clip(RoundedCornerShape(6.dp))
+                        .background(MaterialTheme.colorScheme.surfaceVariant)
+                        .padding(10.dp),
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        CircularProgressIndicator(
+                            Modifier.height(14.dp).width(14.dp),
+                            strokeWidth = 2.dp,
+                        )
+                        Spacer(Modifier.width(8.dp))
+                        Text(
+                            lineas.last().trim(),
+                            style = MaterialTheme.typography.bodySmall,
+                            maxLines = 1,
+                        )
+                    }
+                    // Las anteriores, atenuadas: lo último dice qué pasa ahora, las de atrás dicen
+                    // que viene avanzando y no que se colgó en el primer paso.
+                    lineas.dropLast(1).takeLast(5).reversed().forEach { l ->
+                        Text(
+                            l.trim(),
+                            style = MaterialTheme.typography.labelSmall
+                                .copy(fontFamily = FontFamily.Monospace),
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1,
+                        )
+                    }
+                }
+            }
         }
 
         // De dónde parte cada repositorio y en qué rama trabaja. Estaba decidido en silencio por
@@ -416,6 +468,7 @@ fun ImplDetail(
         Row(Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
             Cab("#", 40.dp)
             Cab(t("impl.thStatus"), 120.dp)
+            Cab(t("impl.thDeps"), 90.dp)
             Text(
                 t("impl.thTask"),
                 style = MaterialTheme.typography.labelSmall,
@@ -449,6 +502,14 @@ fun ImplDetail(
                 Row(Modifier.width(120.dp), verticalAlignment = Alignment.CenterVertically) {
                     TaskStatusBadge(tar.status)
                 }
+                // De quién depende, en su propia columna. Estaba sólo debajo del título y sólo
+                // mientras la tarea seguía pendiente, así que una vez hecha no quedaba forma de
+                // reconstruir el orden que el plan había decidido.
+                Celda(
+                    tar.dependsOn.filter { d -> tareas.any { it.seq == d } }
+                        .takeIf { it.isNotEmpty() }?.joinToString(", ") { "#$it" } ?: "—",
+                    90.dp,
+                )
                 Column(Modifier.weight(1f)) {
                     Text(tar.title, style = MaterialTheme.typography.bodySmall)
                     // Qué la está frenando. Sin esto, una tarea pendiente en medio de otras que

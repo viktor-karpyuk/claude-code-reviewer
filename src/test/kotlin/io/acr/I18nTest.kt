@@ -34,3 +34,30 @@ class I18nTest {
         assertEquals(Lang.ES, Lang.fromCode(null))
     }
 }
+
+/**
+ * Claves repetidas dentro de un mismo idioma.
+ *
+ * `mapOf` se queda con la última, en silencio. Una clave escrita dos veces no es sólo desorden: la
+ * segunda gana, y así el español terminó mostrando "Status" en la columna de estado durante quién
+ * sabe cuánto. El compilador no dice nada y la pantalla tampoco.
+ */
+class I18nDuplicateTest {
+
+    private fun duplicadas(desde: String, hasta: String?): List<String> {
+        val src = java.io.File("src/main/kotlin/io/acr/i18n/I18n.kt").readText()
+        val ini = src.indexOf(desde)
+        val fin = hasta?.let { src.indexOf(it) }?.takeIf { it > ini } ?: src.length
+        val claves = Regex("""^\s{8}"([\w.]+)" to """, RegexOption.MULTILINE)
+            .findAll(src.substring(ini, fin)).map { it.groupValues[1] }.toList()
+        return claves.groupingBy { it }.eachCount().filterValues { it > 1 }.keys.sorted()
+    }
+
+    @Test
+    fun noKeyIsDefinedTwiceInTheSameLanguage() {
+        val es = duplicadas("private val es: Map<String, String> = mapOf(", "private val en: Map<String, String> = mapOf(")
+        val en = duplicadas("private val en: Map<String, String> = mapOf(", "private val tables:")
+        kotlin.test.assertTrue(es.isEmpty(), "repetidas en español: $es")
+        kotlin.test.assertTrue(en.isEmpty(), "repetidas en inglés: $en")
+    }
+}

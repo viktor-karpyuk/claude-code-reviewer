@@ -3,6 +3,29 @@
 Reglas de numeración en [CLAUDE.md](CLAUDE.md): un requerimiento **nuevo** incrementa *major*;
 cambiar uno **existente** incrementa *patch*.
 
+## 66.1.0
+
+**Lanzar un análisis ahora se ve.** El botón está en el encabezado y el feed de actividad queda a
+una pantalla de scroll, así que apretar "Analizar los documentos" no mostraba nada y parecía que no
+había pasado nada. Ahora aparece una tarjeta arriba con lo que está haciendo en este momento y las
+últimas líneas debajo — lo último dice qué pasa ahora, las de atrás dicen que viene avanzando y no
+que se colgó en el primer paso. Los errores del análisis también se ven: antes se los tragaba.
+
+Y el análisis dice qué documento está leyendo, uno por uno y con su tamaño. "Analizando 9
+documentos" no deja ver que el que importaba entró vacío, que es la forma más callada que tiene esto
+de fallar.
+
+**Las dependencias son una columna de la tabla de tareas.** Estaban sólo debajo del título y sólo
+mientras la tarea seguía pendiente, así que una vez hecha no quedaba forma de reconstruir el orden
+que el plan había decidido.
+
+**Treinta textos volvieron a estar en español.** Un bloque en inglés se había pegado dentro del mapa
+español y, al ser el último, ganaba: `mapOf` se queda con la última definición sin decir nada. El
+detalle de una tarea mostraba "pending", "Estimated", "Size", "code", "tests" con la app en
+español. Había un bloque en español dentro del mapa inglés por el mismo motivo. Ahora hay un test
+que falla si una clave se define dos veces en el mismo idioma: el compilador no dice nada y la
+pantalla tampoco, así que tenía que decirlo alguien.
+
 ## 66.0.0
 
 **Analizar los documentos antes de planificar sobre ellos.** Un plan no puede ser mejor que las
