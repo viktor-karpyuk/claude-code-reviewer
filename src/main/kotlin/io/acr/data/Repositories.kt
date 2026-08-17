@@ -68,7 +68,7 @@ class RepoRepository(private val store: Store, private val secrets: Secrets) {
             ps.setString(4, owner)
             ps.setString(5, slug)
             ps.setString(6, localPath)
-            if (token.isNullOrBlank()) ps.setNull(7, java.sql.Types.BLOB) else ps.setBytes(7, secrets.encrypt(token))
+            if (token.isNullOrBlank()) ps.setNull(7, java.sql.Types.VARBINARY) else ps.setBytes(7, secrets.encrypt(token))
             ps.setString(8, Instant.now().toString())
             ps.setString(9, projectKind?.name ?: AUTO)
             ps.setString(10, defaultDepth?.name ?: AUTO)

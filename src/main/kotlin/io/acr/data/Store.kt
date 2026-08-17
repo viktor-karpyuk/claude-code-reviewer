@@ -5,16 +5,96 @@ import java.sql.Connection
 import java.sql.DriverManager
 
 /**
- * SQLite storage. Forward-only migrations applied transactionally at startup, mirroring the
- * mongo-explorer v3 approach: a migration is never edited once shipped, only appended to.
+ * El almacenamiento. Migraciones sólo hacia adelante, aplicadas en transacción al arrancar: una
+ * migración no se edita nunca una vez publicada, sólo se agrega la siguiente.
+ *
+ * SQLite es el motor de fábrica y sigue siendo el caso normal: un archivo, sin instalar nada. Se
+ * puede apuntar a un PostgreSQL o un MySQL propio, y para eso el SQL de la app —que está escrito en
+ * SQLite— pasa por [Dialect] en el borde. La traducción es chica a propósito y vive en un solo
+ * lugar; ver el comentario de esa clase.
  */
-class Store(private val dbPath: Path) : AutoCloseable {
+class Store(private val dbPath: Path, val settings: DbSettings = DbSettings()) : AutoCloseable {
 
-    val conn: Connection = DriverManager.getConnection("jdbc:sqlite:$dbPath").apply {
-        createStatement().use {
-            it.execute("PRAGMA journal_mode=WAL")
-            it.execute("PRAGMA foreign_keys=ON")
+    val engine: DbEngine = settings.engine
+
+    private val raw: Connection = DriverManager.getConnection(
+        settings.jdbcUrl(dbPath),
+        settings.user.takeIf { settings.isServer },
+        settings.password.takeIf { settings.isServer },
+    ).apply {
+        if (!settings.isServer) {
+            createStatement().use {
+                it.execute("PRAGMA journal_mode=WAL")
+                it.execute("PRAGMA foreign_keys=ON")
+            }
         }
+    }
+
+    /**
+     * Las columnas que el esquema indexa. Sólo MySQL las necesita —para saber qué `TEXT` puede ser
+     * largo de verdad y cuál necesita un largo declarado— y calcularlas cuesta un recorrido del
+     * DDL, así que se hace una vez y sólo cuando hace falta.
+     */
+    private val indexed: Set<String> by lazy {
+        if (engine == DbEngine.MYSQL) Dialect.indexedColumns(MIGRATIONS) else emptySet()
+    }
+
+    /**
+     * Las claves primarias, preguntadas al motor y recordadas.
+     *
+     * Hacen falta para traducir el upsert: `INSERT OR REPLACE` no dice sobre qué columna choca y
+     * PostgreSQL sí lo exige. Se leen del esquema real en vez de mantenerse a mano, que es lo que
+     * se desactualiza en la primera tabla nueva.
+     */
+    private val pkCache = java.util.concurrent.ConcurrentHashMap<String, List<String>>()
+
+    private fun primaryKeys(tabla: String): List<String> = pkCache.getOrPut(tabla.lowercase()) {
+        runCatching {
+            val orden = sortedMapOf<Short, String>()
+            raw.metaData.getPrimaryKeys(null, null, tabla.lowercase()).use { rs ->
+                while (rs.next()) orden[rs.getShort("KEY_SEQ")] = rs.getString("COLUMN_NAME")
+            }
+            orden.values.toList()
+        }.getOrDefault(emptyList())
+    }
+
+    private fun sql(s: String): String = Dialect.translate(s, engine, indexed, ::primaryKeys)
+
+    /**
+     * La conexión que ve el resto de la app, con el SQL ya traducido.
+     *
+     * Es un proxy y no un método `store.sql(...)` que haya que acordarse de llamar: hay cientos de
+     * `prepareStatement` repartidos por los repositorios, algunos adentro de transacciones que usan
+     * la conexión directamente, y un solo lugar olvidado sería una consulta que corre sin traducir
+     * y falla —o peor, no falla— en el motor de otro. Con SQLite el proxy no se arma: el caso
+     * normal no paga nada.
+     */
+    val conn: Connection = if (engine == DbEngine.SQLITE) {
+        raw
+    } else {
+        java.lang.reflect.Proxy.newProxyInstance(
+            Connection::class.java.classLoader,
+            arrayOf(Connection::class.java),
+        ) { _, method, args ->
+            val a = args ?: emptyArray()
+            val traducidos = when (method.name) {
+                "prepareStatement", "prepareCall", "nativeSQL" ->
+                    a.mapIndexed { i, v -> if (i == 0 && v is String) sql(v) else v }.toTypedArray()
+                else -> a
+            }
+            runCatching { method.invoke(raw, *traducidos) }
+                .getOrElse { throw (it as? java.lang.reflect.InvocationTargetException)?.targetException ?: it }
+        } as Connection
+    }
+
+    /**
+     * Ejecuta una sentencia suelta con el SQL traducido.
+     *
+     * `Statement.execute(sql)` no pasa por el proxy de la conexión —el `Statement` ya es del driver
+     * real— así que las migraciones y cualquier DDL van por acá.
+     */
+    fun exec(s: String) {
+        raw.createStatement().use { it.execute(sql(s)) }
     }
 
     /**
@@ -57,10 +137,8 @@ class Store(private val dbPath: Path) : AutoCloseable {
     }
 
     private fun migrate() {
-        conn.createStatement().use {
-            it.execute("CREATE TABLE IF NOT EXISTS schema_version (version INTEGER NOT NULL)")
-        }
-        val current = conn.createStatement().use { st ->
+        exec("CREATE TABLE IF NOT EXISTS schema_version (version INTEGER NOT NULL)")
+        val current = raw.createStatement().use { st ->
             st.executeQuery("SELECT COALESCE(MAX(version), 0) FROM schema_version").use { rs ->
                 if (rs.next()) rs.getInt(1) else 0
             }
@@ -74,26 +152,26 @@ class Store(private val dbPath: Path) : AutoCloseable {
         }
         MIGRATIONS.drop(current).forEachIndexed { offset, sql ->
             val version = current + offset + 1
-            conn.autoCommit = false
+            raw.autoCommit = false
             try {
-                conn.createStatement().use { st -> sql.split(";--split--").forEach { st.execute(it) } }
-                conn.prepareStatement("INSERT INTO schema_version(version) VALUES (?)").use { ps ->
+                sql.split(";--split--").forEach { exec(it) }
+                raw.prepareStatement("INSERT INTO schema_version(version) VALUES (?)").use { ps ->
                     ps.setInt(1, version)
                     ps.executeUpdate()
                 }
-                conn.commit()
+                raw.commit()
             } catch (e: Exception) {
-                conn.rollback()
+                runCatching { raw.rollback() }
                 throw IllegalStateException("Migration $version failed: ${e.message}", e)
             } finally {
-                conn.autoCommit = true
+                raw.autoCommit = true
             }
         }
     }
 
     /** Versión de esquema aplicada, y cuántas conoce este build. Para la pantalla de info. */
     fun schemaVersion(): Pair<Int, Int> = synchronized(lock) {
-        val applied = conn.createStatement().use { st ->
+        val applied = raw.createStatement().use { st ->
             st.executeQuery("SELECT COALESCE(MAX(version), 0) FROM schema_version").use {
                 if (it.next()) it.getInt(1) else 0
             }
@@ -103,9 +181,9 @@ class Store(private val dbPath: Path) : AutoCloseable {
 
     val path: String = dbPath.toString()
 
-    override fun close() = conn.close()
+    override fun close() = raw.close()
 
-    private companion object {
+    companion object {
         val MIGRATIONS = listOf(
             // v1 — repositories and reviews
             """

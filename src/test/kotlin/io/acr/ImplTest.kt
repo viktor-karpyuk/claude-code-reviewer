@@ -847,3 +847,128 @@ class ImplStepsTest {
         )
     }
 }
+
+/**
+ * La traducción del SQL, sin necesidad de un servidor.
+ *
+ * Los tests contra motores reales ([io.acr.DbEngineIT]) son los que valen, pero sólo corren donde
+ * hay un PostgreSQL o un MySQL escuchando. Estos fijan las reglas en cualquier máquina: son las
+ * decisiones del traductor, y si alguna cambia sin querer, esto lo dice antes que un usuario.
+ */
+class DialectTest {
+
+    private val pkDe = mapOf(
+        "impl_repo" to listOf("impl_id", "repo_id"),
+        "pref" to listOf("k"),
+    )
+
+    private fun pg(sql: String) =
+        io.acr.data.Dialect.translate(sql, io.acr.data.DbEngine.POSTGRES, emptySet()) { pkDe[it].orEmpty() }
+
+    private fun my(sql: String, indexadas: Set<String> = emptySet()) =
+        io.acr.data.Dialect.translate(sql, io.acr.data.DbEngine.MYSQL, indexadas) { pkDe[it].orEmpty() }
+
+    @Test
+    fun sqliteIsLeftExactlyAsItWas() {
+        // El motor de fábrica no paga nada por esto. Un traductor que "mejora" el SQL del caso
+        // normal es un riesgo puro: no arregla nada y puede romper todo.
+        val sql = "INSERT OR REPLACE INTO pref(k, v) VALUES (?,?)"
+        assertEquals(sql, io.acr.data.Dialect.translate(sql, io.acr.data.DbEngine.SQLITE, emptySet()) { emptyList() })
+    }
+
+    @Test
+    fun theUpsertDeclaresWhatItCollidesWith() {
+        // PostgreSQL exige saber sobre qué columna choca; SQLite no lo dice. Se resuelve contra la
+        // clave real de la tabla en vez de adivinarla.
+        val r = pg("INSERT OR REPLACE INTO impl_repo(impl_id, repo_id, role, base_branch) VALUES (?,?,?,?)")
+        assertTrue(r.contains("ON CONFLICT (impl_id, repo_id)"), r)
+        assertTrue(r.contains("role = EXCLUDED.role"), r)
+        assertTrue(!r.contains("impl_id = EXCLUDED.impl_id"), "la clave no se actualiza a sí misma: $r")
+    }
+
+    @Test
+    fun anUpsertWithoutAKnownKeyDegradesToAnInsert() {
+        // Inventar una clave sería peor: fallar con "duplicate key" es un error que se entiende;
+        // escribir sobre la fila equivocada, no.
+        val r = pg("INSERT OR REPLACE INTO tabla_rara(a, b) VALUES (?,?)")
+        assertTrue(r.startsWith("INSERT INTO tabla_rara"), r)
+        assertTrue(!r.contains("ON CONFLICT"), r)
+    }
+
+    @Test
+    fun ignoringADuplicateMeansDoingNothing() {
+        assertTrue(pg("INSERT OR IGNORE INTO pref(k, v) VALUES (?,?)").endsWith("ON CONFLICT DO NOTHING"))
+        assertTrue(my("INSERT OR IGNORE INTO pref(k, v) VALUES (?,?)").startsWith("INSERT IGNORE INTO"))
+    }
+
+    @Test
+    fun datesEndUpComparableOnBothSides() {
+        // El error que esto evita es "operator does not exist: date = text": la mitad de la
+        // comparación quedaba como fecha y la otra como texto, y PostgreSQL las rechaza.
+        val r = pg("SELECT COUNT(*) FROM review WHERE date(created_at)=date('now')")
+        assertTrue(r.contains("to_char"), r)
+        assertTrue(!r.contains("date(created_at)"), r)
+        assertTrue(r.contains("to_char(now(), 'YYYY-MM-DD')"), r)
+    }
+
+    @Test
+    fun groupingByPeriodKeepsMeaningTheSameThing() {
+        assertTrue(pg("SELECT strftime('%Y-%m', created_at) FROM review").contains("'YYYY-MM'"))
+        // En MySQL %M es el nombre del mes, no los minutos: traducirlo mal daría "August" donde
+        // debería ir "08" y el agrupamiento sería otro sin fallar.
+        assertTrue(my("SELECT strftime('%Y-%m', created_at) FROM review").contains("date_format"))
+    }
+
+    @Test
+    fun subtractingTwoInstantsStillGivesDays() {
+        val r = pg("SELECT julianday(closed_on) - julianday(created_on) FROM pr_stat")
+        assertTrue(r.contains("EXTRACT(EPOCH"), r)
+        assertTrue(r.contains("86400"), "en días, no en segundos: $r")
+    }
+
+    @Test
+    fun concatenationDoesNotSilentlyBecomeALogicalOr() {
+        // `||` en MySQL es un OR y devolvería 0 sin error, que es el peor resultado posible: sin
+        // falla visible y con los datos mal.
+        val r = my("SELECT repo_id||'#'||pr_id FROM review")
+        assertTrue(r.contains("concat(repo_id, '#', pr_id)"), r)
+    }
+
+    @Test
+    fun indexedTextGetsALengthAndTheRestStaysLong() {
+        // MySQL no puede indexar un TEXT sin decirle cuántos caracteres; y una columna que guarda
+        // el cuerpo de una review no puede quedar en 255.
+        val ddl = "CREATE TABLE x (\n  id TEXT PRIMARY KEY,\n  body TEXT\n)"
+        val r = my(ddl, indexadas = setOf("id"))
+        assertTrue(r.contains("id VARCHAR(255)"), r)
+        assertTrue(r.contains("body LONGTEXT"), r)
+    }
+
+    @Test
+    fun bytesAreBytesInEachEngine() {
+        assertTrue(pg("CREATE TABLE x (token_cipher BLOB)").contains("BYTEA"))
+        assertTrue(my("CREATE TABLE x (token_cipher BLOB)").contains("LONGBLOB"))
+    }
+
+    @Test
+    fun theReservedWordOfTheSchemaIsQuoted() {
+        // `key` es la única columna del esquema que MySQL reserva.
+        assertTrue(my("SELECT key FROM jira_issue").contains("`key`"))
+    }
+
+    @Test
+    fun tablesAreCopiedAfterTheOnesTheyDependOn() {
+        // Copiar una fila hija antes que su madre la rechaza la clave foránea. La alternativa
+        // —apagar la verificación— pide permisos que en una base ajena no se tienen.
+        val orden = io.acr.data.DbPorter().order(io.acr.data.Store.MIGRATIONS)
+        assertTrue(orden.contains("repo") && orden.contains("review"))
+        assertTrue(
+            orden.indexOf("repo") < orden.indexOf("review"),
+            "repo va antes que review, que la referencia",
+        )
+        assertTrue(
+            orden.indexOf("impl_task") < orden.indexOf("impl_step"),
+            "y una tarea antes que sus pasos",
+        )
+    }
+}

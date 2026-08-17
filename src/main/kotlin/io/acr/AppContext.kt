@@ -54,6 +54,16 @@ class AppContext private constructor(
     val jiraSites: io.acr.data.JiraSiteRepository,
     val impls: io.acr.data.ImplRepository,
     val implEngine: io.acr.impl.ImplEngine,
+    /** Dónde viven la base y la clave. La pantalla de la base lo necesita para poder mudarse. */
+    val dataDir: Path,
+    val secrets: Secrets,
+    /**
+     * Por qué no se pudo abrir la base configurada, si es que no se pudo.
+     *
+     * Cuando esto tiene texto, la app está corriendo sobre la base de fábrica y no sobre la que
+     * alguien eligió. Sin avisarlo, la pantalla se ve igual que si los datos se hubieran perdido.
+     */
+    val dbFallback: String? = null,
 ) : AutoCloseable {
 
     /** ¿Hay al menos un sitio de Jira conectado y usable? */
@@ -105,8 +115,22 @@ class AppContext private constructor(
          */
         fun bootstrap(dataDir: Path = resolveDataDir()): AppContext {
             val dir = dataDir.also { Files.createDirectories(it) }
-            val store = Store(dir.resolve("acr.db"))
+            // Los secretos primero: la contraseña de la base está cifrada con la clave maestra, así
+            // que hay que poder descifrarla antes de saber a qué base conectarse.
             val secrets = Secrets(keyPathFor(dir))
+            // Si la base configurada no responde, se abre la de fábrica igual.
+            //
+            // Un servidor caído no puede dejar la app sin arrancar: la pantalla donde se arregla la
+            // conexión está adentro de la app. Se guarda el error para poder mostrarlo, porque una
+            // app que arranca con datos vacíos y sin decir por qué se ve exactamente igual que una
+            // que los perdió.
+            val configurada = io.acr.data.DbSettings.load(dir, secrets)
+            var fallo: String? = null
+            val store = runCatching { Store(dir.resolve("acr.db"), configurada) }.getOrElse { e ->
+                if (!configurada.isServer) throw e
+                fallo = "${configurada.describe()}: ${e.message ?: e::class.simpleName}"
+                Store(dir.resolve("acr.db"))
+            }
             val repos = RepoRepository(store, secrets)
             val reviews = ReviewRepository(store)
             val publications = PublicationRepository(store)
@@ -151,7 +175,7 @@ class AppContext private constructor(
                 jiraIssues = { repoId, prId -> jira.issuesOf(repoId, prId) },
             )
             val auto = AutoReviewer(repos, reviews, prefs, engine, notifier, replies, seenPrs, prLoader, findings, approvals, jobs)
-            return AppContext(store, repos, reviews, publications, comments, notes, findings, approvals, jobs, guidelines, replies, seenPrs, prCache, prLoader, prefs, engine, auto, notifier, persons, commitStats, statsCollector, reviewStats, prStats, prHistory, rework, health, jira, jiraSites, impls, implEngine)
+            return AppContext(store, repos, reviews, publications, comments, notes, findings, approvals, jobs, guidelines, replies, seenPrs, prCache, prLoader, prefs, engine, auto, notifier, persons, commitStats, statsCollector, reviewStats, prStats, prHistory, rework, health, jira, jiraSites, impls, implEngine, dir, secrets, fallo)
         }
 
         /** La propiedad `acr.dataDir` gana sobre la ubicación estándar; la usan los tests. */

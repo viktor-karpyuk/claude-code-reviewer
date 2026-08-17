@@ -9,7 +9,7 @@ plugins {
 
 group = "io.acr"
 // Fuente ÚNICA de la versión. Ver CLAUDE.md para cuándo incrementar qué.
-version = "62.0.0"
+version = "63.0.0"
 
 repositories {
     mavenCentral()
@@ -33,8 +33,14 @@ dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-swing:1.9.0")
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.7.3")
 
-    // SQLite
+    // SQLite, el motor de fábrica
     implementation("org.xerial:sqlite-jdbc:3.46.1.0")
+
+    // Y los dos motores que se pueden usar en su lugar. Van adentro del paquete y no como
+    // descarga opcional: hacer que "elegí PostgreSQL" dependa de bajar un driver a mano es
+    // convertir una opción en un trámite.
+    implementation("org.postgresql:postgresql:42.7.4")
+    implementation("com.mysql:mysql-connector-j:9.1.0")
 
     // ULID primary keys
     implementation("com.github.f4b6a3:ulid-creator:5.2.3")
@@ -94,7 +100,13 @@ compose.desktop {
 
             // Trimmed jlink runtime. java.net.http is required by the forge clients;
             // java.sql by sqlite-jdbc.
-            modules("java.sql", "java.naming", "java.net.http", "jdk.crypto.ec", "jdk.unsupported")
+            // `java.security.jgss` y `java.transaction.xa` los pide el driver de PostgreSQL;
+            // `java.management` el de MySQL. Sin ellos la app arranca y sólo falla al conectar,
+            // que es el peor momento para enterarse.
+            modules(
+                "java.sql", "java.naming", "java.net.http", "jdk.crypto.ec", "jdk.unsupported",
+                "java.security.jgss", "java.transaction.xa", "java.management",
+            )
 
             macOS {
                 bundleID = "io.acr.reviewer"

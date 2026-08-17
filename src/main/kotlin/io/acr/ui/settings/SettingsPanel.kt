@@ -218,6 +218,11 @@ fun SettingsPanel(
 
         Spacer(Modifier.height(4.dp))
         HorizontalDivider()
+        Spacer(Modifier.height(12.dp))
+        DatabasePanel(ctx)
+
+        Spacer(Modifier.height(4.dp))
+        HorizontalDivider()
         JiraSettings(ctx)
 
         Spacer(Modifier.height(4.dp))

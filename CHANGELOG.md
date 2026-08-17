@@ -3,6 +3,43 @@
 Reglas de numeración en [CLAUDE.md](CLAUDE.md): un requerimiento **nuevo** incrementa *major*;
 cambiar uno **existente** incrementa *patch*.
 
+## 63.0.0
+
+**Se puede elegir la base de datos: SQLite, PostgreSQL o MySQL.** SQLite sigue siendo la de fábrica
+y sigue siendo el caso normal —un archivo, sin instalar ni configurar nada—. Esto es para quien
+necesita otra cosa: una base compartida por un equipo, una que ya tiene backup, una que su
+organización exige. Hasta ahora había que elegir entre eso y usar la app.
+
+Toda la app está escrita en SQL de SQLite y va a seguir estándolo. La traducción al dialecto de cada
+motor pasa en un solo lugar, en el borde, y es chica a propósito: las diferencias que importan son
+un puñado —los tipos del DDL, el upsert, dos funciones de fecha, la concatenación— y están
+enumeradas. Lo que no está enumerado no se traduce, porque un traductor que intenta entender SQL
+arbitrario se equivoca en silencio, y una consulta mal traducida devuelve datos mal en vez de
+fallar.
+
+**Y se pueden mudar los datos de una base a otra.** Elegir motor sin poder mudarse no es una
+elección: quien arrancó con SQLite —o sea, todos— tendría que empezar de cero, y eso significa
+perder las reviews, las estadísticas y los hallazgos de meses.
+
+La mudanza está hecha para no poder mentir:
+
+- Se copia a una base vacía. Si el destino ya tiene filas, no se mezcla —mezclar dos bases con las
+  mismas claves deja filas pisadas y un resultado que nadie puede verificar—.
+- Se cuenta cada tabla de los dos lados y se comparan. Una copia que dice "listo" sin contar no vale
+  nada: estos errores son silenciosos por naturaleza, y una tabla a medias parece completa hasta que
+  alguien busca algo viejo.
+- La app no se muda hasta que la copia cerró. Si algo falla, sigue usando la base de siempre, que
+  queda intacta. La de origen no se borra nunca: es la red de seguridad.
+
+Si la base configurada no responde al arrancar, la app abre la de fábrica igual y lo dice. Un
+servidor caído no puede dejar sin arrancar a la app que contiene la pantalla donde se arregla la
+conexión, pero arrancar con datos vacíos sin avisar se ve exactamente igual que haberlos perdido.
+
+Hay tests que corren el esquema entero y las consultas que de verdad se traducen contra un
+PostgreSQL y un MySQL reales, y uno que mueve datos de SQLite a PostgreSQL y los vuelve a leer del
+otro lado, tokens cifrados incluidos. Un traductor de SQL probado sólo contra sí mismo no prueba
+nada.
+
 ## 62.0.0
 
 **Las tareas ahora tienen pasos.** El detalle de una tarea dice qué hay que lograr; los pasos dicen
