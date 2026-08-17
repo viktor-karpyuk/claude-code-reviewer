@@ -61,11 +61,23 @@ class ImplTest {
         java.io.File(dir, "02-mockups.md").writeText("las pantallas")
         java.io.File(dir, "sub").mkdirs()
         java.io.File(dir, "sub/03-plan.md").writeText("el plan")
-        java.io.File(dir, "notas.txt").writeText("esto no es markdown")
+        java.io.File(dir, "notas.txt").writeText("esto también es una spec")
+        // Basura de un repositorio que convive con las specs: entra en el recorrido pero no en el
+        // prompt. Sin saltearla, elegir una carpeta que vive dentro de un proyecto arrastra miles
+        // de archivos que se comen el presupuesto antes de llegar a la spec que importaba.
+        java.io.File(dir, "node_modules/paquete").mkdirs()
+        java.io.File(dir, "node_modules/paquete/README.md").writeText("no es del proyecto")
+        java.io.File(dir, "imagen.png").writeText("binario")
 
         val docs = loadSources(listOf(dir.absolutePath))
-        assertEquals(3, docs.size, "los tres .md, incluido el de la subcarpeta")
-        assertTrue(docs.none { it.name.endsWith(".txt") })
+        assertEquals(4, docs.size, "los .md de todos los niveles y el .txt: ${docs.map { it.name }}")
+        assertTrue(docs.any { it.name == "03-plan.md" }, "el de la subcarpeta también")
+        assertTrue(docs.any { it.name == "notas.txt" }, "una spec en .txt es una spec")
+        assertTrue(docs.none { it.name == "imagen.png" }, "lo que no es texto no entra")
+        assertTrue(
+            docs.none { it.content == "no es del proyecto" },
+            "node_modules no es documentación aunque esté adentro",
+        )
         dir.deleteRecursively()
     }
 
@@ -2021,5 +2033,37 @@ class RecoveryHolesTest {
         ctx.impls.finishTask(t.id, "abc123", "listo", 0.1)
 
         assertEquals(TaskStatus.DONE, ctx.impls.taskStatus(t.id))
+    }
+}
+
+/** Duraciones: minutos hasta la hora, `HH:MM` a partir de ahí. */
+class DuracionTest {
+
+    @Test
+    fun underAnHourItStaysInMinutes() {
+        assertEquals("0′", io.acr.impl.minutosLegibles(0.0))
+        assertEquals("45′", io.acr.impl.minutosLegibles(45.0))
+        assertEquals("59′", io.acr.impl.minutosLegibles(59.4))
+    }
+
+    @Test
+    fun pastAnHourItReadsAsHoursAndMinutes() {
+        // "185 min" obliga a dividir por sesenta para saber si son tres horas o cinco, y ese
+        // cálculo se hace mal justo cuando la cifra importa.
+        assertEquals("1:00", io.acr.impl.minutosLegibles(60.0))
+        assertEquals("3:05", io.acr.impl.minutosLegibles(185.0))
+        assertEquals("12:30", io.acr.impl.minutosLegibles(750.0))
+    }
+
+    @Test
+    fun theMinutesAreAlwaysTwoDigits() {
+        // "3:5" se lee como tres y medio. El cero adelante no es decoración.
+        assertEquals("2:07", io.acr.impl.minutosLegibles(127.0))
+    }
+
+    @Test
+    fun nothingIsADashAndNotAZero() {
+        // Cero minutos y "no se sabe" son cosas distintas: una tarea que no arrancó no tardó cero.
+        assertEquals("—", io.acr.impl.minutosLegibles(null as Double?))
     }
 }

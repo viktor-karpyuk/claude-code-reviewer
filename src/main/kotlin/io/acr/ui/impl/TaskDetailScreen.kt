@@ -630,11 +630,11 @@ private fun TiraDeCifras(task: ImplTask, yaCorrio: Boolean) {
         Cifra(
             etiqueta = t("impl.thTime"),
             valor = when {
-                real != null -> "${real.toInt()}′"
-                est != null -> "~$est′"
+                real != null -> io.acr.impl.minutosLegibles(real)
+                est != null -> "~" + io.acr.impl.minutosLegibles(est)
                 else -> "—"
             },
-            nota = est?.takeIf { real != null }?.let { t("impl.ofEstimated", it) },
+            nota = est?.takeIf { real != null }?.let { t("impl.ofEstimated", io.acr.impl.minutosLegibles(it)) },
             alerta = real != null && est != null && real > est,
             modifier = Modifier.weight(1f),
         )
@@ -740,9 +740,9 @@ private fun LineaDeVida(task: ImplTask) {
 
     Row(Modifier.fillMaxWidth().padding(bottom = 16.dp), verticalAlignment = Alignment.CenterVertically) {
         Hito(t("impl.dCreated"), task.createdAt)
-        Tramo(espera?.let { t("impl.waited", it) })
+        Tramo(espera?.let { t("impl.waited", io.acr.impl.minutosLegibles(it.toDouble())) })
         Hito(t("impl.dStarted"), task.startedAt)
-        Tramo(corrida?.let { t("impl.ran", it) })
+        Tramo(corrida?.let { t("impl.ran", io.acr.impl.minutosLegibles(it.toDouble())) })
         Hito(t("impl.dFinished"), task.finishedAt)
         task.updatedAt?.takeIf { it != task.createdAt && it != task.finishedAt }?.let {
             Spacer(Modifier.width(16.dp))

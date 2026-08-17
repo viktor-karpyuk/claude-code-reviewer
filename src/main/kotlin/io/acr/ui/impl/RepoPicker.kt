@@ -136,6 +136,25 @@ fun RepoPicker(
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun TarjetaRepo(repo: RepoRecord, actual: ImplRepo, onChange: (ImplRepo) -> Unit) {
+    // Una carpeta no tiene de qué rama partir.
+    //
+    // Elegir rama base tiene sentido cuando se pasó un repositorio conectado: ahí hay un develop,
+    // un main y ramas de otros, y hay que decir de cuál. Cuando alguien señala una carpeta está
+    // diciendo "el código va acá", y preguntarle por una rama es pedirle que conteste algo que no
+    // se preguntó.
+    if (repo.localOnly) {
+        Column(
+            Modifier.fillMaxWidth()
+                .padding(start = 32.dp, top = 2.dp, bottom = 6.dp),
+        ) {
+            Text(
+                t("impl.folderTarget"),
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        return
+    }
     val ramas = io.acr.ui.dbState(repo.id, initial = emptyList<String>()) {
         kotlinx.coroutines.runBlocking {
             io.acr.claude.Git.branches(java.io.File(repo.localPath))

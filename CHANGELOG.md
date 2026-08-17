@@ -3,6 +3,33 @@
 Reglas de numeración en [CLAUDE.md](CLAUDE.md): un requerimiento **nuevo** incrementa *major*;
 cambiar uno **existente** incrementa *patch*.
 
+## 71.0.0
+
+**Cincuenta y cuatro textos mostraban el marcador crudo.** `Vivos ({0})`, `3 de {1} tareas`,
+`intento {0}`: todo lo que agregué desde la v63 usaba `{0}` para los parámetros, y la app formatea
+con `String.format`, que sólo entiende `%s`. El compilador no dice nada —es una cadena válida— y el
+test de traducciones tampoco, porque la clave existía en los dos idiomas. Ahora hay un test que
+falla si un texto usa marcadores que no se sustituyen, y otro que formatea cada texto con argumentos
+de prueba para que un marcador mal escrito explote acá y no en la pantalla de alguien.
+
+**Las duraciones pasan a `HH:MM` cuando superan la hora.** "185 min" obliga a dividir por sesenta
+para saber si son tres horas o cinco, y ese cálculo se hace mal justo cuando la cifra importa
+—cuando algo se está yendo de tiempo—. Debajo de la hora siguen siendo minutos, que es como se
+piensa una tarea.
+
+**Una carpeta de documentos se lee entera.** Todas las subcarpetas, y no sólo los `.md`: también
+`.txt`, `.rst`, `.adoc` y demás formatos de texto. Las specs reales aparecen exportadas de un
+documento o sacadas de una wiki, y aceptar sólo Markdown hacía que una carpeta llena de
+requerimientos se leyera como vacía — con un "0 documentos" que parecía un error de la app cuando
+era una decisión suya. Se saltean `node_modules`, `build`, `.git` y compañía: una carpeta de specs
+suele vivir dentro de un repositorio, y sin eso una sola elección arrastraba miles de archivos que
+se comían el presupuesto antes de llegar a la spec que importaba.
+
+**Una carpeta ya no pregunta de qué rama partir.** Elegir rama base tiene sentido con un repositorio
+conectado, donde hay un develop, un main y ramas de otros. Cuando alguien señala una carpeta está
+diciendo "el código va acá". Y si la carpeta se acaba de inicializar y no tiene ningún commit, no
+hay de dónde partir: se queda donde está y el primer commit de la primera tarea abre la rama.
+
 ## 70.1.0
 
 Barrido de bugs sobre lo que se agregó en las últimas versiones, buscados releyendo el código con la

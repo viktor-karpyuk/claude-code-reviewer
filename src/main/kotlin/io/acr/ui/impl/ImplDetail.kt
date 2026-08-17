@@ -352,8 +352,8 @@ fun ImplDetail(
             Spacer(Modifier.height(4.dp))
             Text(
                 t("impl.progress", avance.done, avance.total) +
-                    "  ·  " + t("impl.estimated", avance.estimatedMin) +
-                    "  ·  " + t("impl.elapsed", avance.elapsedMin.toInt()) + tiempo(avance),
+                    "  ·  " + t("impl.estimated", io.acr.impl.minutosLegibles(avance.estimatedMin)) +
+                    "  ·  " + t("impl.elapsed", io.acr.impl.minutosLegibles(avance.elapsedMin)) + tiempo(avance),
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -440,7 +440,7 @@ fun ImplDetail(
             Text(t("impl.effort"), style = MaterialTheme.typography.titleSmall)
             Spacer(Modifier.height(4.dp))
             Row(horizontalArrangement = Arrangement.spacedBy(18.dp)) {
-                Metrica(t("impl.mTime"), "${esfuerzo.minutes.toInt()} min")
+                Metrica(t("impl.mTime"), io.acr.impl.minutosLegibles(esfuerzo.minutes))
                 Metrica(t("impl.mCost"), "$" + "%.2f".format(esfuerzo.costUsd))
                 // Creado y modificado separados: cuatro archivos nuevos son superficie nueva para
                 // mirar entera, y dos modificados son un diff que leer. No son lo mismo.
@@ -565,7 +565,8 @@ fun ImplDetail(
                     tar.runningMin()?.let { va ->
                         val est = tar.estimateMin ?: tar.size?.minutes
                         Text(
-                            t("impl.runningFor", va.toInt()) + (est?.let { " / $it" }.orEmpty()) +
+                            t("impl.runningFor", io.acr.impl.minutosLegibles(va)) +
+                                (est?.let { " / " + io.acr.impl.minutosLegibles(it) }.orEmpty()) +
                                 (if (est != null && va > est) "  " + t("impl.overrun") else ""),
                             style = MaterialTheme.typography.labelSmall,
                             color = if (est != null && va > est) io.acr.ui.stats.ChartColors.major
@@ -577,9 +578,11 @@ fun ImplDetail(
                     Celda(misRepos.firstOrNull { it.id == tar.repoId }?.name.orEmpty(), 110.dp)
                 }
                 Celda(
-                    tar.actualMin?.let { "${it.toInt()}′" }?.plus(
-                        (tar.estimateMin ?: tar.size?.minutes)?.let { " / $it′" }.orEmpty(),
-                    ) ?: (tar.estimateMin ?: tar.size?.minutes)?.let { "~$it′" } ?: "—",
+                    tar.actualMin?.let { io.acr.impl.minutosLegibles(it) }?.plus(
+                        (tar.estimateMin ?: tar.size?.minutes)
+                            ?.let { " / " + io.acr.impl.minutosLegibles(it) }.orEmpty(),
+                    ) ?: (tar.estimateMin ?: tar.size?.minutes)
+                        ?.let { "~" + io.acr.impl.minutosLegibles(it) } ?: "—",
                     110.dp,
                 )
                 Celda(

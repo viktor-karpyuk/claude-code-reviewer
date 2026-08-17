@@ -61,3 +61,42 @@ class I18nDuplicateTest {
         kotlin.test.assertTrue(en.isEmpty(), "repetidas en inglés: $en")
     }
 }
+
+/**
+ * Que los textos con parámetros de verdad los sustituyan.
+ *
+ * `t()` formatea con `String.format`, así que un texto escrito con `{0}` sale tal cual: la pantalla
+ * mostraba literalmente "Vivos ({0})" y "3 de {1} tareas". El compilador no dice nada —es una
+ * cadena válida— y el test de traducciones tampoco, porque la clave existía en los dos idiomas.
+ */
+class I18nPlaceholderTest {
+
+    private fun claves(): List<Pair<String, String>> {
+        val src = java.io.File("src/main/kotlin/io/acr/i18n/I18n.kt").readText()
+        return Regex("""^\s{8}"([\w.]+)" to "(.*)",?$""", RegexOption.MULTILINE)
+            .findAll(src).map { it.groupValues[1] to it.groupValues[2] }.toList()
+    }
+
+    @Test
+    fun noTextUsesBracePlaceholders() {
+        val malas = claves().filter { Regex("""\{\d\}""").containsMatchIn(it.second) }.map { it.first }
+        kotlin.test.assertTrue(
+            malas.isEmpty(),
+            "estas saldrían con el marcador crudo en la pantalla: $malas",
+        )
+    }
+
+    @Test
+    fun everyPlaceholderSurvivesFormatting() {
+        // Cada texto se formatea con argumentos de prueba: si el marcador está mal escrito,
+        // `String.format` explota acá y no en la pantalla de alguien.
+        claves().forEach { (clave, texto) ->
+            val real = texto.replace("\\$", "$").replace("\\\"", "\"")
+            val cuantos = Regex("""%(\d\$)?[sd]""").findAll(real).count()
+            if (cuantos == 0) return@forEach
+            val args = Array<Any?>(cuantos + 2) { 1 }
+            kotlin.runCatching { real.format(*args) }
+                .onFailure { kotlin.test.fail("«$clave» no se puede formatear: ${it.message}") }
+        }
+    }
+}

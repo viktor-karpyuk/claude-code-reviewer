@@ -339,8 +339,16 @@ class ImplEngine(
                 ?: Git.currentBranch(File(r.localPath))
                 ?: "develop"
             baseDe[r.id] = base
-            log(implId, "${r.name}: «$rama» desde «$base»…")
-            Git.checkoutBranch(File(r.localPath), rama, base)
+            // Una carpeta recién inicializada no tiene ningún commit, así que no hay de dónde
+            // partir: `git checkout -b x base` falla porque `base` no existe todavía. Se queda
+            // donde está y el primer commit de la primera tarea crea la rama.
+            val virgen = Git.currentHead(File(r.localPath)) == null
+            if (virgen) {
+                log(implId, "${r.name}: repositorio sin historial, el primer commit abre la rama.")
+            } else {
+                log(implId, "${r.name}: «$rama» desde «$base»…")
+                Git.checkoutBranch(File(r.localPath), rama, base)
+            }
         }
 
         val docs = loadSources(impl.sources)

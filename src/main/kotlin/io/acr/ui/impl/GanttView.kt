@@ -185,13 +185,16 @@ fun GanttView(
         // interpretar el dibujo.
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text(
-                t("impl.ganttSoFar", hechas, tasks.size, minutosHechos.toInt(), total.toInt()),
+                t(
+                    "impl.ganttSoFar", hechas, tasks.size,
+                    io.acr.impl.minutosLegibles(minutosHechos), io.acr.impl.minutosLegibles(total),
+                ),
                 style = MaterialTheme.typography.labelMedium,
             )
             elapsedMin?.takeIf { it > 0 }?.let {
                 Spacer(Modifier.width(10.dp))
                 Text(
-                    t("impl.ganttElapsed", it.toInt()),
+                    t("impl.ganttElapsed", io.acr.impl.minutosLegibles(it)),
                     style = MaterialTheme.typography.labelSmall,
                     // Pasarse de lo planificado no es un error, pero es lo único acá que puede
                     // cambiar una decisión: se marca.
@@ -293,7 +296,7 @@ fun GanttView(
                     // Cuántos minutos son. Sin esto hay que medir contra el eje para saber si una
                     // barra son diez minutos o cuarenta.
                     drawText(
-                        medidor, "${b.durationMin.toInt()}m",
+                        medidor, io.acr.impl.minutosLegibles(b.durationMin),
                         topLeft = Offset(x0 + anchoBarra + 4f * d, y - 6f * d), style = chico,
                     )
                 }

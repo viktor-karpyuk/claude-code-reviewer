@@ -6,11 +6,36 @@ import java.io.File
 data class SourceDoc(val name: String, val content: String)
 
 /**
+ * Formatos que se leen de una carpeta de documentos.
+ *
+ * Markdown es lo habitual pero no lo único: las specs reales aparecen como `.txt` exportado de un
+ * documento, `.rst` de una wiki, `.adoc` de un proyecto Java. Aceptar sólo `.md` hacía que una
+ * carpeta llena de requerimientos se leyera como vacía, y el aviso "0 documentos" parecía un error
+ * de la app cuando era una decisión suya.
+ *
+ * Un archivo elegido a mano se lee sea cual sea su extensión: si alguien lo señaló, quiere ese.
+ */
+private val TEXTO = setOf("md", "markdown", "mdx", "txt", "text", "rst", "adoc", "asciidoc", "org")
+
+/**
+ * Carpetas que no son documentación aunque estén adentro.
+ *
+ * Una carpeta de specs vive muchas veces dentro de un repositorio, y sin esto una sola elección
+ * arrastraba miles de archivos de `node_modules` o de `build` — que no aportan nada y se comen el
+ * presupuesto del prompt antes de llegar a la spec que importaba.
+ */
+private val BASURA = setOf(
+    ".git", ".idea", ".vscode", ".gradle", "node_modules", "build", "target", "dist", "out",
+    "vendor", "__pycache__", ".venv", "venv", ".next", ".cache",
+)
+
+/**
  * Junta los documentos que describen lo que hay que construir.
  *
- * Acepta archivos sueltos o una carpeta —en cuyo caso toma los `.md` que haya adentro, incluidos
- * los de subcarpetas—, porque las specs de un proyecto casi nunca son un solo archivo: suelen ser
- * una carpeta con requerimientos, mockups y un plan.
+ * Acepta archivos sueltos o una carpeta. Una carpeta se lee **entera**, con todas sus subcarpetas:
+ * las specs de un proyecto casi nunca son un solo archivo ni un solo nivel — suelen ser
+ * requerimientos, mockups, ADRs y un plan repartidos en subcarpetas, y pedirle a alguien que las
+ * elija de a una es pedirle que arme a mano una lista que ya existe.
  *
  * Se ordenan por ruta y no por fecha: el orden alfabético de una carpeta de specs suele ser el que
  * eligió quien las escribió, con prefijos numéricos, y respetarlo cuesta nada.
@@ -20,9 +45,16 @@ fun loadSources(paths: List<String>, maxPerFile: Int = 120_000): List<SourceDoc>
         val f = File(p)
         when {
             f.isDirectory -> f.walkTopDown()
-                .filter { it.isFile && it.extension.equals("md", ignoreCase = true) }
+                .onEnter { it.name !in BASURA && !(it.name.startsWith(".") && it.name.length > 1) }
+                .filter { it.isFile && it.extension.lowercase() in TEXTO }
                 .sortedBy { it.path }
+                // Tope duro: una carpeta mal elegida —la raíz de un repositorio, por ejemplo—
+                // puede tener miles de archivos de texto, y mandarlos todos no da un plan mejor,
+                // da un prompt que el modelo no puede leer entero.
+                .take(300)
                 .toList()
+            // Un archivo señalado a mano se lee sea cual sea su extensión: si alguien lo eligió,
+            // quiere ese.
             f.isFile -> listOf(f)
             else -> emptyList()
         }
