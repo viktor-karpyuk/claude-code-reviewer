@@ -3,6 +3,49 @@
 Reglas de numeración en [CLAUDE.md](CLAUDE.md): un requerimiento **nuevo** incrementa *major*;
 cambiar uno **existente** incrementa *patch*.
 
+## 68.0.0
+
+**El Gantt es ahora un gráfico de verdad, y vive arriba de la tabla de tareas.** Sale de las mismas
+tareas que la tabla —es el plan visto en el tiempo en vez de en orden— así que no hay nada nuevo que
+cargar. Lo que se ve siempre es una tira: cada tarea, un tramo del ancho de su duración, coloreado
+por su estado. Una barra de progreso sola dice "8 de 24"; esta dice además dónde están las que
+fallaron y las que esperan una decisión, que es lo que decide si vale la pena abrir el diagrama.
+
+Al tocarla se despliega el diagrama completo, dibujado y no armado con cajas:
+
+- **Flechas de dependencia** en codo, con punta: dicen quién espera a quién sin tener que cruzar
+  números. Una diagonal entre filas lejanas cruza media pantalla y se confunde con las barras que
+  atraviesa.
+- **Relleno parcial** en cada barra: el contorno es lo planificado, el relleno es lo hecho al
+  momento de mirar. Con una sola forma habría que elegir entre mostrar el plan o mostrar el avance.
+  La que está corriendo nunca se llena del todo — una barra llena mientras la tarea sigue trabajando
+  diría que terminó.
+- **La línea de ahora**, punteada: marca el tiempo real transcurrido sobre un eje dibujado en tiempo
+  planificado. Que quede a la derecha de lo último terminado es exactamente la señal de que se está
+  yendo de tiempo, y eso no se ve en ninguna otra pantalla.
+- Eje con marcas redondas, duración escrita al lado de cada barra, y leyenda.
+
+**Cada tarea dice si es paralelizable**, con un icono en la tabla y en el diagrama. Sale del mismo
+calendario que dibuja el Gantt y no de una marca aparte: si fueran dos fuentes distintas podrían
+decir cosas distintas, y el que mira le creería al icono. Una tarea es paralelizable si su tramo se
+superpone con el de otra — lo cual ya está decidido por sus dependencias y por el repositorio en el
+que corre.
+
+**Los colores de estado pasaron a significar siempre lo mismo.** Rojo: se rompió. Verde: salió bien.
+Azul: está pasando. **Naranja: hace falta una persona** — una decisión o una revisión, no "atención"
+genérico. Estaban resueltos en tres lugares distintos y dos usaban el color primario del tema para
+"corriendo", que según el tema salía violeta.
+
+**El detalle de una tarea se rediseñó.** Los números —tiempo, costo, pasos, archivos, líneas— pasan
+a una tira de cifras a lo ancho: estaban en renglones etiqueta/valor en la columna derecha, y eso se
+lee en vez de barrerse. El tiempo lleva su estimación al lado, porque cuarenta minutos puede ser
+rapidísimo o el doble de lo previsto.
+
+Y las cuatro fechas se volvieron una **línea de vida**: creada → arrancó → terminó, con los dos
+tramos escritos encima. Lo que importa no son los instantes sino cuánto esperó antes de arrancar
+—que en una implementación larga suele ser más de lo que tardó en correr— y cuánto tardó; sueltas,
+había que restarlas mentalmente.
+
 ## 67.0.0
 
 **Retomar una implementación que falló ahora reintenta de verdad.** El motor sólo toma tareas

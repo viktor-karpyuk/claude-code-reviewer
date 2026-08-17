@@ -377,23 +377,11 @@ fun ImplDetail(
             }
         }
 
-        // --- El plan en el tiempo ---
-        // Una tabla ordenada por número contesta "qué falta"; no contesta "por qué esta tarea
-        // todavía no arrancó" ni "cuánto de esto puede pasar a la vez". Se redibuja con cada
-        // latido, así que la barra de la tarea en curso crece sola.
-        if (tareas.isNotEmpty()) {
-            Spacer(Modifier.height(12.dp))
-            io.acr.ui.CollapsibleCard(
-                t("impl.gantt"), ctx.prefs, "implgantt-$implId", maxHeight = 420.dp,
-            ) {
-                GanttView(tareas, misRepos) { tareaAbierta = it.id }
-            }
-        }
-
         // --- Lo que encontró la revisión ---
         // Va antes del esfuerzo porque es lo que cambia una decisión: una implementación completa
         // con cuatro hallazgos sin arreglar no está en el mismo estado que una limpia, y el costo
         // total no dice nada de eso.
+        val paralelas = remember(tareas) { paralelasDe(tareas) }
         val revisiones = io.acr.ui.dbState(implId, version, vivo, tic, initial = emptyList<io.acr.impl.ReviewPass>()) {
             ctx.impls.reviews(implId)
         }
@@ -463,10 +451,47 @@ fun ImplDetail(
             }
         }
 
-        // --- Tareas, como tabla ---
+        // --- Las tareas: primero la tira, después la tabla ---
+        //
+        // La tira sale de las mismas tareas que la tabla de abajo, no de otro lado: es el plan
+        // visto en el tiempo en vez de en orden. Se ve siempre porque contesta de un vistazo lo
+        // único que una tabla no puede contestar —cuánto va hecho y si algo se está yendo de
+        // tiempo— y se despliega en el Gantt completo, con las duraciones, cuando eso no alcanza.
+        if (tareas.isNotEmpty()) {
+            Spacer(Modifier.height(14.dp))
+            var ganttAbierto by remember(implId) { mutableStateOf(false) }
+            val transcurrido = avance.elapsedMin.takeIf { it > 0 && avance.done < avance.total }
+            Column(
+                Modifier.fillMaxWidth()
+                    .clip(RoundedCornerShape(8.dp))
+                    .clickable { ganttAbierto = !ganttAbierto }
+                    .padding(vertical = 8.dp),
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        (if (ganttAbierto) "▾  " else "▸  ") + t("impl.gantt"),
+                        style = MaterialTheme.typography.titleSmall,
+                    )
+                    Spacer(Modifier.width(10.dp))
+                    Text(
+                        if (ganttAbierto) t("impl.ganttHide") else t("impl.ganttShow"),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                Spacer(Modifier.height(6.dp))
+                TiraDeAvance(tareas)
+                if (ganttAbierto) {
+                    Spacer(Modifier.height(14.dp))
+                    GanttView(tareas, misRepos, elapsedMin = transcurrido) { tareaAbierta = it.id }
+                }
+            }
+        }
+
         Spacer(Modifier.height(14.dp))
         Row(Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
-            Cab("#", 40.dp)
+            Cab("#", 28.dp)
+            Cab("⇉", 20.dp)
             Cab(t("impl.thStatus"), 120.dp)
             Cab(t("impl.thDeps"), 90.dp)
             Text(
@@ -497,7 +522,16 @@ fun ImplDetail(
                     style = MaterialTheme.typography.labelSmall
                         .copy(fontFamily = FontFamily.Monospace),
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.width(40.dp),
+                    modifier = Modifier.width(28.dp),
+                )
+                // Si va a correr acompañada. Sale del mismo calendario que dibuja el Gantt, no de
+                // una marca aparte: si fueran dos fuentes distintas podrían decir cosas distintas.
+                Text(
+                    if (tar.seq in paralelas) "⇉" else "→",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = if (tar.seq in paralelas) StatusColors.RUNNING
+                    else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f),
+                    modifier = Modifier.width(20.dp),
                 )
                 Row(Modifier.width(120.dp), verticalAlignment = Alignment.CenterVertically) {
                     TaskStatusBadge(tar.status)
@@ -759,4 +793,41 @@ private fun colorDe(s: TaskStatus) = when (s) {
     TaskStatus.FAILED -> MaterialTheme.colorScheme.error
     TaskStatus.BLOCKED -> io.acr.ui.stats.ChartColors.major
     else -> MaterialTheme.colorScheme.onSurfaceVariant
+}
+
+/**
+ * El plan en una sola línea: cada tarea, un tramo, coloreado por su estado.
+ *
+ * Es lo que se ve sin desplegar nada. Una barra de progreso sola dice "8 de 24" y nada más; esta
+ * dice además dónde están las que fallaron y las que esperan una decisión, que es lo que decide si
+ * hay que abrir el diagrama o no. El ancho de cada tramo es su duración, así que una tarea larga
+ * pesa lo que pesa y no lo mismo que una de cinco minutos.
+ */
+@Composable
+private fun TiraDeAvance(tareas: List<io.acr.impl.ImplTask>) {
+    val duraciones = remember(tareas) {
+        tareas.map { t ->
+            t to ((t.actualMin ?: t.runningMin() ?: t.estimateMin?.toDouble()
+                ?: t.size?.minutes?.toDouble() ?: 15.0).coerceAtLeast(1.0))
+        }
+    }
+    val total = duraciones.sumOf { it.second }.coerceAtLeast(1.0)
+    Row(
+        Modifier.fillMaxWidth().height(10.dp).clip(RoundedCornerShape(3.dp)),
+        horizontalArrangement = Arrangement.spacedBy(1.dp),
+    ) {
+        duraciones.forEach { (t, dur) ->
+            androidx.compose.foundation.layout.Box(
+                Modifier
+                    .weight((dur / total).toFloat())
+                    .height(10.dp)
+                    // Lo pendiente en tenue y no en gris pleno: si todo pesa lo mismo, lo hecho
+                    // deja de destacarse, que es lo único que se busca acá.
+                    .background(
+                        StatusColors.of(t.status)
+                            .copy(alpha = if (t.status == io.acr.impl.TaskStatus.PENDING) 0.22f else 1f),
+                    ),
+            )
+        }
+    }
 }

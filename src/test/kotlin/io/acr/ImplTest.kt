@@ -1547,3 +1547,89 @@ class ImplResumeTest {
         assertEquals(TaskStatus.PENDING, vuelta.steps.single().status, "los pasos también arrancan de cero")
     }
 }
+
+/**
+ * Paralelizable: si una tarea va a correr acompañada.
+ *
+ * Se deduce del mismo calendario que dibuja el diagrama y no de una marca aparte. Si fueran dos
+ * fuentes distintas, el icono y el dibujo podrían decir cosas distintas — y el que mira le creería
+ * al icono, que es el que está en la tabla.
+ */
+class ParallelIconTest {
+
+    private fun tarea(seq: Int, repoId: String, dep: List<Int> = emptyList(), min: Int = 10) =
+        ImplTask(
+            "t$seq", "i", repoId, seq, "tarea $seq", "", dep, TaskSize.M, min,
+            TaskStatus.PENDING, null, null, null, null, null, null,
+        )
+
+    @Test
+    fun twoTasksInDifferentReposWithNoDependencyRunTogether() {
+        val p = io.acr.ui.impl.paralelasDe(listOf(tarea(1, "be"), tarea(2, "fe")))
+        assertEquals(setOf(1, 2), p)
+    }
+
+    @Test
+    fun aChainIsNeverParallel() {
+        // Cada una espera a la anterior: por más repositorios que haya, esto es una fila.
+        val p = io.acr.ui.impl.paralelasDe(
+            listOf(tarea(1, "be"), tarea(2, "fe", dep = listOf(1)), tarea(3, "otro", dep = listOf(2))),
+        )
+        assertTrue(p.isEmpty(), "ninguna corre acompañada: $p")
+    }
+
+    @Test
+    fun twoTasksInTheSameRepoAreNotParallelEither() {
+        // Aunque no dependan entre sí. El repositorio es el límite real: el motor no las va a
+        // lanzar juntas, así que marcarlas como paralelizables sería mentir.
+        assertTrue(io.acr.ui.impl.paralelasDe(listOf(tarea(1, "be"), tarea(2, "be"))).isEmpty())
+    }
+
+    @Test
+    fun aShortTaskInsideALongOneCountsAsParallel() {
+        // La de cinco minutos entra entera adentro de la de cuarenta: se superponen aunque no
+        // arranquen juntas.
+        val p = io.acr.ui.impl.paralelasDe(
+            listOf(tarea(1, "be", min = 40), tarea(2, "fe", min = 5)),
+        )
+        assertEquals(setOf(1, 2), p)
+    }
+}
+
+/**
+ * El relleno de cada barra del Gantt: cuánto va hecho al momento de mirar.
+ */
+class GanttProgressTest {
+
+    private fun tarea(estado: TaskStatus, estimado: Int = 20, arranco: String? = null, fin: String? = null) =
+        ImplTask(
+            "t1", "i", "be", 1, "t", "", emptyList(), TaskSize.M, estimado, estado,
+            null, null, null, null, arranco, fin,
+        )
+
+    private fun barra(t: ImplTask) = io.acr.ui.impl.layout(listOf(t), mapOf("be" to 0)).single()
+
+    @Test
+    fun whatIsPendingIsEmptyAndWhatIsDoneIsFull() {
+        assertEquals(0f, barra(tarea(TaskStatus.PENDING)).progress)
+        assertEquals(1f, barra(tarea(TaskStatus.DONE, fin = "2026-01-01T00:20:00Z", arranco = "2026-01-01T00:00:00Z")).progress)
+    }
+
+    @Test
+    fun aFailedTaskIsDrawnFullBecauseItConsumedTime() {
+        // Vacía se vería como pendiente, y no es lo mismo: una consumió tiempo y la otra no. Lo que
+        // dice que salió mal es el color, no el relleno.
+        assertEquals(1f, barra(tarea(TaskStatus.FAILED)).progress)
+        assertEquals(1f, barra(tarea(TaskStatus.BLOCKED)).progress)
+    }
+
+    @Test
+    fun aRunningTaskNeverLooksFinished() {
+        // Una barra llena mientras la tarea sigue trabajando diría que terminó, que es justo lo
+        // contrario de lo que pasa cuando se pasa de su estimación.
+        val vieja = java.time.Instant.now().minusSeconds(60 * 60 * 5).toString()
+        val b = barra(tarea(TaskStatus.RUNNING, estimado = 10, arranco = vieja))
+        assertTrue(b.progress < 1f, "topeada: ${b.progress}")
+        assertTrue(b.progress > 0.5f, "pero muy avanzada: ${b.progress}")
+    }
+}

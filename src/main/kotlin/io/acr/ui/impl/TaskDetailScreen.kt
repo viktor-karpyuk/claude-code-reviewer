@@ -95,7 +95,20 @@ fun TaskDetailScreen(
             }
         }
 
-        Spacer(Modifier.height(18.dp))
+        Spacer(Modifier.height(16.dp))
+
+        // Los números a lo ancho, antes de las dos columnas.
+        //
+        // Estaban en un panel de la columna derecha, en renglones etiqueta/valor: eso se lee, no se
+        // barre. Lo que uno busca al abrir una tarea es si tardó lo que debía y cuánto código dejó,
+        // y esas dos preguntas se contestan con cifras grandes o no se contestan.
+        TiraDeCifras(task, yaCorrio)
+        Spacer(Modifier.height(16.dp))
+
+        // La línea de vida: creada, arrancó, terminó. Las fechas sueltas obligan a restarlas
+        // mentalmente para saber cuánto esperó una tarea antes de arrancar, que suele ser más de lo
+        // que tardó en correr.
+        LineaDeVida(task)
 
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(20.dp)) {
             // --- Izquierda: el relato ---
@@ -192,10 +205,6 @@ fun TaskDetailScreen(
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                         Spacer(Modifier.height(6.dp))
-                        (task.estimateMin ?: task.size?.minutes)?.let {
-                            Dato(t("impl.estimate"), "$it min")
-                        }
-                        task.size?.let { Dato(t("impl.size"), it.name) }
                         repo?.let { Dato(t("impl.willRunIn"), it.name) }
                         Dato(
                             t("impl.needsFirst"),
@@ -204,50 +213,6 @@ fun TaskDetailScreen(
                         )
                     }
                     Spacer(Modifier.height(12.dp))
-                }
-
-                if (yaCorrio) Panel {
-                    val real = task.actualMin ?: task.runningMin()
-                    val est = task.estimateMin ?: task.size?.minutes
-                    Dato(
-                        t("impl.thTime"),
-                        (real?.let { "${it.toInt()} min" } ?: "—") + (est?.let { " / $it" }.orEmpty()),
-                        alerta = real != null && est != null && real > est,
-                    )
-                    task.costUsd?.let { Dato(t("impl.mCost"), "$" + "%.2f".format(it)) }
-                    task.diff?.let { d ->
-                        Dato(t("impl.mLines"), "+${d.linesAdded}  −${d.linesDeleted}")
-                        Dato(
-                            t("impl.thFiles"),
-                            listOfNotNull(
-                                d.filesAdded.takeIf { it > 0 }?.let { t("impl.nNew", it) },
-                                d.filesModified.takeIf { it > 0 }?.let { t("impl.nChanged", it) },
-                                d.filesDeleted.takeIf { it > 0 }?.let { t("impl.nDeleted", it) },
-                            ).joinToString("\n").ifBlank { "—" },
-                        )
-                    }
-                }
-
-                // Las cuatro fechas. Creada y modificada contestan si el plan se rehizo; arranque
-                // y fin, cuánto tardó. Son preguntas distintas y por eso van las cuatro: con una
-                // sola no se puede distinguir una tarea replanificada de una que nadie tocó.
-                if (task.createdAt != null || task.startedAt != null) {
-                    Spacer(Modifier.height(12.dp))
-                    Panel {
-                        Text(
-                            t("impl.dates"),
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                        Spacer(Modifier.height(6.dp))
-                        task.createdAt?.let { Dato(t("impl.dCreated"), fecha(it)) }
-                        // Sólo si difiere de la creación: repetir la misma fecha dos veces hace
-                        // creer que pasó algo cuando no pasó nada.
-                        task.updatedAt?.takeIf { it != task.createdAt }
-                            ?.let { Dato(t("impl.dUpdated"), fecha(it)) }
-                        task.startedAt?.let { Dato(t("impl.dStarted"), fecha(it)) }
-                        task.finishedAt?.let { Dato(t("impl.dFinished"), fecha(it)) }
-                    }
                 }
 
                 if (analisis != null) {
@@ -513,13 +478,7 @@ internal fun marcaDe(s: TaskStatus): String = when (s) {
 }
 
 @Composable
-internal fun colorDeEstado(s: TaskStatus) = when (s) {
-    TaskStatus.DONE -> io.acr.ui.stats.ChartColors.added
-    TaskStatus.RUNNING -> MaterialTheme.colorScheme.primary
-    TaskStatus.FAILED -> MaterialTheme.colorScheme.error
-    TaskStatus.BLOCKED -> io.acr.ui.stats.ChartColors.major
-    else -> MaterialTheme.colorScheme.onSurfaceVariant
-}
+internal fun colorDeEstado(s: TaskStatus) = io.acr.ui.impl.StatusColors.of(s)
 
 @Composable
 internal fun estadoTexto(s: TaskStatus): String = when (s) {
@@ -553,9 +512,9 @@ internal fun TaskStatusBadge(s: TaskStatus, conTexto: Boolean = true) {
 private fun PasoFila(paso: io.acr.impl.ImplStep) {
     Row(Modifier.fillMaxWidth().padding(vertical = 3.dp)) {
         val (simbolo, color) = when (paso.status) {
-            TaskStatus.DONE -> "✓" to io.acr.ui.stats.ChartColors.added
-            TaskStatus.FAILED -> "✗" to MaterialTheme.colorScheme.error
-            TaskStatus.RUNNING -> "▸" to MaterialTheme.colorScheme.primary
+            TaskStatus.DONE -> "✓" to StatusColors.DONE
+            TaskStatus.FAILED -> "✗" to StatusColors.FAILED
+            TaskStatus.RUNNING -> "▸" to StatusColors.RUNNING
             else -> "·" to MaterialTheme.colorScheme.onSurfaceVariant
         }
         Text(simbolo, color = color, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.width(20.dp))
@@ -619,3 +578,188 @@ private fun Enumerado(texto: String) {
         }
     }
 }
+
+/**
+ * Las cifras de la tarea, a lo ancho y en grande.
+ *
+ * Antes vivían en un panel de la columna derecha, en renglones etiqueta/valor, y eso se lee: hay que
+ * recorrer cada línea para encontrar el número. Acá se barren. Son cinco y no diez a propósito: si
+ * todo es una cifra destacada, ninguna lo es.
+ *
+ * El tiempo lleva su estimación al lado porque el número solo no dice nada —cuarenta minutos puede
+ * ser rapidísimo o el doble de lo previsto— y se marca en rojo sólo cuando se pasó.
+ */
+@Composable
+private fun TiraDeCifras(task: ImplTask, yaCorrio: Boolean) {
+    val real = task.actualMin ?: task.runningMin()
+    val est = task.estimateMin ?: task.size?.minutes
+    val pasosHechos = task.steps.count { it.status == TaskStatus.DONE }
+
+    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+        Cifra(
+            etiqueta = t("impl.thTime"),
+            valor = when {
+                real != null -> "${real.toInt()}′"
+                est != null -> "~$est′"
+                else -> "—"
+            },
+            nota = est?.takeIf { real != null }?.let { t("impl.ofEstimated", it) },
+            alerta = real != null && est != null && real > est,
+            modifier = Modifier.weight(1f),
+        )
+        Cifra(
+            etiqueta = t("impl.mCost"),
+            valor = task.costUsd?.let { "$" + "%.2f".format(it) } ?: "—",
+            modifier = Modifier.weight(1f),
+        )
+        if (task.steps.isNotEmpty()) {
+            Cifra(
+                etiqueta = t("impl.stepsShort"),
+                valor = "$pasosHechos/${task.steps.size}",
+                // Un paso sin hacer en una tarea terminada es lo que hay que mirar: la tarea dice
+                // que salió bien y algo de lo que se propuso no se hizo.
+                alerta = yaCorrio && pasosHechos < task.steps.size,
+                modifier = Modifier.weight(1f),
+            )
+        }
+        Cifra(
+            etiqueta = t("impl.thFiles"),
+            valor = task.diff?.filesTouched?.toString() ?: "—",
+            nota = task.diff?.let { d ->
+                listOfNotNull(
+                    d.filesAdded.takeIf { it > 0 }?.let { "+$it" },
+                    d.filesModified.takeIf { it > 0 }?.let { "~$it" },
+                    d.filesDeleted.takeIf { it > 0 }?.let { "−$it" },
+                ).joinToString(" ").takeIf { it.isNotBlank() }
+            },
+            modifier = Modifier.weight(1f),
+        )
+        Cifra(
+            etiqueta = t("impl.mLines"),
+            valor = task.diff?.let { "+${it.linesAdded}" } ?: "—",
+            nota = task.diff?.let { "−${it.linesDeleted}" },
+            modifier = Modifier.weight(1f),
+        )
+    }
+}
+
+/** Una cifra con su etiqueta arriba y, si aporta, una nota chica debajo. */
+@Composable
+private fun Cifra(
+    etiqueta: String,
+    valor: String,
+    modifier: Modifier = Modifier,
+    nota: String? = null,
+    alerta: Boolean = false,
+) {
+    Column(
+        modifier
+            .clip(RoundedCornerShape(8.dp))
+            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f))
+            .padding(horizontal = 12.dp, vertical = 10.dp),
+    ) {
+        Text(
+            etiqueta,
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Spacer(Modifier.height(2.dp))
+        Text(
+            valor,
+            style = MaterialTheme.typography.titleMedium,
+            color = if (alerta) StatusColors.FAILED else MaterialTheme.colorScheme.onSurface,
+        )
+        nota?.let {
+            Text(
+                it,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
+}
+
+/**
+ * La vida de la tarea en una línea: creada, arrancó, terminó.
+ *
+ * Las cuatro fechas sueltas obligaban a restarlas mentalmente. Lo que importa no son los instantes
+ * sino los dos tramos: cuánto esperó antes de arrancar —que en una implementación larga suele ser
+ * más de lo que tardó en correr— y cuánto tardó. Puestos como línea, eso se ve sin hacer cuentas.
+ *
+ * Modificada no entra: es la única de las cuatro que no habla del recorrido de la tarea sino de si
+ * el plan se rehízo, y mezclarla acá haría parecer que pasó algo cuando no pasó nada.
+ */
+@Composable
+private fun LineaDeVida(task: ImplTask) {
+    val creada = task.createdAt?.let { instante(it) }
+    val arranco = task.startedAt?.let { instante(it) }
+    val termino = task.finishedAt?.let { instante(it) }
+    if (creada == null && arranco == null) return
+
+    val espera = if (creada != null && arranco != null) {
+        java.time.Duration.between(creada, arranco).toMinutes()
+    } else {
+        null
+    }
+    val corrida = if (arranco != null && termino != null) {
+        java.time.Duration.between(arranco, termino).toMinutes()
+    } else {
+        null
+    }
+
+    Row(Modifier.fillMaxWidth().padding(bottom = 16.dp), verticalAlignment = Alignment.CenterVertically) {
+        Hito(t("impl.dCreated"), task.createdAt)
+        Tramo(espera?.let { t("impl.waited", it) })
+        Hito(t("impl.dStarted"), task.startedAt)
+        Tramo(corrida?.let { t("impl.ran", it) })
+        Hito(t("impl.dFinished"), task.finishedAt)
+        task.updatedAt?.takeIf { it != task.createdAt && it != task.finishedAt }?.let {
+            Spacer(Modifier.width(16.dp))
+            Text(
+                t("impl.dUpdated") + ": " + fecha(it),
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
+}
+
+/** Un punto de la línea de vida. Vacío si todavía no pasó: el hueco dice tanto como la fecha. */
+@Composable
+private fun Hito(etiqueta: String, iso: String?) {
+    Column {
+        Text(
+            etiqueta,
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Text(
+            iso?.let { fecha(it) } ?: "—",
+            style = MaterialTheme.typography.bodySmall,
+            color = if (iso == null) MaterialTheme.colorScheme.onSurfaceVariant
+            else MaterialTheme.colorScheme.onSurface,
+        )
+    }
+}
+
+/** El tramo entre dos hitos, con su duración encima de la línea. */
+@Composable
+private fun Tramo(texto: String?) {
+    Column(
+        Modifier.width(140.dp).padding(horizontal = 10.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        Text(
+            texto.orEmpty(),
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Box(
+            Modifier.fillMaxWidth().height(2.dp)
+                .background(MaterialTheme.colorScheme.surfaceVariant),
+        )
+    }
+}
+
+private fun instante(iso: String): java.time.Instant? =
+    runCatching { java.time.Instant.parse(iso) }.getOrNull()
