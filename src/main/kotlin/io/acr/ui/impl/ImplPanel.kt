@@ -74,6 +74,17 @@ fun ImplPanel(ctx: AppContext, repos: List<io.acr.forge.RepoRecord>) {
         ctx.impls.progressOfAll()
     }
 
+    // El alta es una pantalla y no un modal: son seis decisiones, cada una con su explicación, y
+    // en un modal de 640 el botón de borrar un documento quedaba cortado en una pantalla de 14".
+    if (creando) {
+        ImplForm(
+            ctx = ctx, repos = repos, impl = null,
+            onBack = { creando = false },
+            onSaved = { id -> creando = false; version++; abierta = id },
+        )
+        return
+    }
+
     abierta?.let { id ->
         ImplDetail(ctx, repos, id) { abierta = null; version++ }
         return
@@ -278,9 +289,6 @@ fun ImplPanel(ctx: AppContext, repos: List<io.acr.forge.RepoRecord>) {
             }
         }
 
-        if (creando) {
-            NewImplDialog(ctx, repos, { creando = false }) { creando = false; version++ }
-        }
     }
 }
 

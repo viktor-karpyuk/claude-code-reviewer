@@ -651,6 +651,96 @@ class ImplRepository(private val store: Store) {
         }
     }
 
+    /** Guarda el resultado de una pasada de revisión. */
+    fun saveReview(
+        implId: String,
+        taskId: String?,
+        pass: Int,
+        findings: Int,
+        fixed: Int,
+        summary: String?,
+        detail: String?,
+        commitSha: String?,
+        costUsd: Double?,
+    ) {
+        store.stmt(
+            """INSERT INTO impl_review(id, impl_id, task_id, pass, findings, fixed, summary,
+                     detail, commit_sha, cost_usd, created_at)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
+        ) { ps ->
+            ps.setString(1, UlidCreator.getUlid().toString())
+            ps.setString(2, implId)
+            ps.setString(3, taskId)
+            ps.setInt(4, pass)
+            ps.setInt(5, findings)
+            ps.setInt(6, fixed)
+            ps.setString(7, summary?.take(4_000))
+            ps.setString(8, detail?.take(20_000))
+            ps.setString(9, commitSha)
+            if (costUsd == null) ps.setNull(10, java.sql.Types.REAL) else ps.setDouble(10, costUsd)
+            ps.setString(11, Instant.now().toString())
+            ps.executeUpdate()
+        }
+    }
+
+    fun reviews(implId: String): List<io.acr.impl.ReviewPass> =
+        store.stmt(
+            """SELECT id, impl_id, task_id, pass, findings, fixed, summary, detail, commit_sha,
+                      cost_usd, created_at
+                 FROM impl_review WHERE impl_id = ? ORDER BY created_at, pass""",
+        ) { ps ->
+            ps.setString(1, implId)
+            ps.executeQuery().use { rs ->
+                buildList {
+                    while (rs.next()) {
+                        add(
+                            io.acr.impl.ReviewPass(
+                                id = rs.getString(1),
+                                implId = rs.getString(2),
+                                taskId = rs.getString(3),
+                                pass = rs.getInt(4),
+                                findings = rs.getInt(5),
+                                fixed = rs.getInt(6),
+                                summary = rs.getString(7),
+                                detail = rs.getString(8),
+                                commitSha = rs.getString(9),
+                                costUsd = rs.getObject(10)?.let { rs.getDouble(10) },
+                                createdAt = rs.getString(11).orEmpty(),
+                            ),
+                        )
+                    }
+                }
+            }
+        }
+
+    /**
+     * Fija el nombre de la rama, o lo devuelve a automático con null.
+     *
+     * La marca va aparte del nombre porque después de planificar los dos están llenos, y sin saber
+     * cuál fue una decisión de una persona, replanificar pisaría lo elegido.
+     */
+    fun setBranch(implId: String, branch: String?) {
+        store.stmt("UPDATE implementation SET branch = ?, branch_fixed = ? WHERE id = ?") { ps ->
+            ps.setString(1, branch?.trim()?.trim('/')?.takeIf { it.isNotBlank() })
+            ps.setInt(2, if (branch.isNullOrBlank()) 0 else 1)
+            ps.setString(3, implId)
+            ps.executeUpdate()
+        }
+    }
+
+    /** Cuántas pasadas de revisión hacer, y si además revisar después de cada tarea. */
+    fun setReviewPolicy(implId: String, min: Int, max: Int, each: Boolean) {
+        store.stmt(
+            "UPDATE implementation SET review_min = ?, review_max = ?, review_each = ? WHERE id = ?",
+        ) { ps ->
+            ps.setInt(1, min)
+            ps.setInt(2, max)
+            ps.setInt(3, if (each) 1 else 0)
+            ps.setString(4, implId)
+            ps.executeUpdate()
+        }
+    }
+
     fun delete(id: String) {
         store.stmt("DELETE FROM implementation WHERE id = ?") { ps -> ps.setString(1, id); ps.executeUpdate() }
     }
@@ -659,7 +749,8 @@ class ImplRepository(private val store: Store) {
         store.stmt(
             """SELECT id, repo_id, title, sources, extra_prompt, branch, base_branch, status,
                       plan_summary, plan_model, code_model, error, cost_usd, created_at,
-                      planned_at, finished_at, review_guidance
+                      planned_at, finished_at, review_guidance, review_min, review_max,
+                      review_each, branch_fixed
                  FROM implementation $tail""",
         ) { ps ->
             bind(ps)
@@ -686,6 +777,14 @@ class ImplRepository(private val store: Store) {
                                 plannedAt = rs.getString(15),
                                 finishedAt = rs.getString(16),
                                 reviewGuidance = rs.getString(17),
+                                // Los valores por defecto viven acá y no en el DDL: las
+                                // implementaciones creadas antes de esta migración tienen null, y
+                                // sin esto quedarían con cero pasadas sin que nadie lo haya
+                                // decidido.
+                                reviewMin = rs.getObject(18)?.let { rs.getInt(18) } ?: 2,
+                                reviewMax = rs.getObject(19)?.let { rs.getInt(19) } ?: 5,
+                                reviewEach = (rs.getObject(20)?.let { rs.getInt(20) } ?: 0) == 1,
+                                branchFixed = (rs.getObject(21)?.let { rs.getInt(21) } ?: 0) == 1,
                             ),
                         )
                     }

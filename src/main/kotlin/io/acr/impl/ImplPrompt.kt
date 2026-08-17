@@ -305,6 +305,98 @@ object ImplPrompt {
     """.trimIndent()
 
     /**
+     * Qué devuelve una pasada de revisión.
+     *
+     * `fixed` aparte de `findings` porque no son lo mismo y confundirlos arruina el número: una
+     * pasada que encuentra ocho cosas y arregla dos no hizo el mismo trabajo que una que encuentra
+     * dos y arregla dos, y con un solo contador las dos se ven igual.
+     */
+    val REVIEW_SCHEMA = """
+    {"type":"object","properties":{
+      "summary":{"type":"string"},
+      "findings":{"type":"array","items":{"type":"object","properties":{
+        "kind":{"type":"string","enum":["BUG","PERFORMANCE","DESIGN","ARCHITECTURE","SECURITY","TEST"]},
+        "severity":{"type":"string","enum":["HIGH","MEDIUM","LOW"]},
+        "file":{"type":"string"},
+        "what":{"type":"string"},
+        "fixed":{"type":"boolean"},
+        "why_not":{"type":"string"}
+      },"required":["kind","severity","what","fixed"]}}
+    },"required":["summary","findings"]}
+    """.trimIndent()
+
+    /**
+     * Prompt de una pasada de revisión sobre el código ya implementado.
+     *
+     * Implementar y revisar son trabajos distintos, y el modelo que acaba de escribir algo es el
+     * peor juez de ese algo: ya decidió que estaba bien. Esta pasada mira el diff completo con otra
+     * intención —romperlo, no terminarlo— y por eso encuentra lo que la anterior no podía ver.
+     *
+     * Arregla lo que encuentra en vez de sólo reportarlo. Una lista de problemas que nadie va a
+     * leer es trabajo tirado: el punto de correr esto sin supervisión es que la rama quede mejor,
+     * no que quede documentada.
+     */
+    fun review(
+        pass: Int,
+        total: Int,
+        /** El rango de commits a mirar: la base y la punta de la rama. */
+        range: String,
+        docs: List<SourceDoc>,
+        scope: String?,
+        previous: List<String>,
+        language: String,
+    ): String = """
+        Sos un revisor senior mirando código recién escrito. Podés leer, escribir y correr comandos.
+
+        QUÉ MIRAR
+        ${scope ?: "Todo lo que cambió en esta rama: `git diff $range`."}
+
+        Es la pasada $pass de hasta $total. Buscá, en este orden:
+
+        1. **Bugs.** Casos borde sin cubrir, nulls, off-by-one, condiciones invertidas, errores que
+           se tragan, estado que queda inconsistente si algo falla a la mitad.
+        2. **Performance.** Consultas adentro de un bucle, trabajo repetido en cada recomposición o
+           request, estructuras que se recorren de más, lo que no escala con el tamaño de los datos.
+        3. **Diseño.** Lógica en la capa equivocada, duplicación que va a divergir, nombres que
+           mienten, funciones que hacen dos cosas.
+        4. **Arquitectura.** Lo que contradice cómo está armado el resto del proyecto: una
+           dependencia al revés, un módulo hablándole a otro por atrás, un patrón nuevo donde ya
+           había uno.
+        5. **Tests.** Lo que se agregó y quedó sin probar, y los tests que pasan sin verificar nada.
+
+        ${previous.takeIf { it.isNotEmpty() }?.let {
+        "LO QUE YA ENCONTRARON LAS PASADAS ANTERIORES\nNo lo repitas; si algo de esto no quedó bien " +
+            "arreglado, decilo:\n" + it.joinToString("\n") { p -> "- $p" }
+    }.orEmpty()}
+
+        CONTEXTO DE LO QUE SE ESTÁ CONSTRUYENDO
+        ${docs.joinToString("\n\n") { "--- ${it.name} ---\n${it.content.take(15_000)}" }}
+
+        QUÉ HACER CON LO QUE ENCONTRÁS
+        Arreglalo. Una lista de problemas que nadie va a leer es trabajo tirado: el punto de esto es
+        que la rama quede mejor, no que quede documentada.
+
+        Con dos excepciones, que se reportan con `fixed: false` y el motivo en `why_not`:
+        - Si arreglarlo es una decisión de arquitectura o de negocio que los documentos no cubren.
+        - Si el arreglo es más grande que lo que se está revisando —una refactorización que toca
+          media aplicación no entra en una pasada de revisión—.
+
+        REGLAS
+        - Terminá con el proyecto compilando y los tests en verde. Corré la compilación y los tests
+          vos mismo.
+        - No agregues features ni "mejoras" que nadie pidió: esto es una revisión, no una segunda
+          implementación. Cambiar lo que funciona porque a vos te gusta más de otra forma hace
+          imposible revisar el diff de la revisión.
+        - No hagas commit: de eso se encarga la herramienta.
+        - **Si no encontrás nada, decilo.** `findings` vacío es una respuesta legítima y esperada, y
+          es lo que hace que las pasadas se corten. Inventar un hallazgo menor para justificar la
+          pasada hace que la siguiente corra al pedo y que el número no signifique nada.
+        - Escribí en $language.
+
+        Devolvé el JSON del esquema.
+    """.trimIndent()
+
+    /**
      * Herramientas de escritura.
      *
      * Es la diferencia grande con las reviews, que corren sólo con lectura. Acá hace falta

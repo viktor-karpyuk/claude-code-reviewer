@@ -1078,6 +1078,40 @@ class Store(private val dbPath: Path, val settings: DbSettings = DbSettings()) :
             ALTER TABLE impl_task ADD COLUMN updated_at TEXT;--split--
             ALTER TABLE implementation ADD COLUMN review_guidance TEXT
             """.trimIndent(),
+
+            // v52 — las pasadas de revisión sobre el código ya implementado.
+            //
+            // Implementar y revisar son trabajos distintos. El modelo que acaba de escribir algo es
+            // el peor juez de ese algo: ya decidió que estaba bien. Una pasada aparte, mirando el
+            // diff completo con otra intención, encuentra lo que la primera no podía ver.
+            //
+            // El rango en vez de un número fijo porque no se sabe de antemano cuánto hay para
+            // encontrar: se corre el mínimo siempre, y se sigue mientras la pasada anterior haya
+            // encontrado algo. Cinco pasadas sobre código limpio son cinco corridas pagas para que
+            // digan "no encontré nada".
+            """
+            CREATE TABLE impl_review (
+                id          TEXT PRIMARY KEY,
+                impl_id     TEXT NOT NULL REFERENCES implementation(id) ON DELETE CASCADE,
+                task_id     TEXT,
+                pass        INTEGER NOT NULL,
+                findings    INTEGER NOT NULL DEFAULT 0,
+                fixed       INTEGER NOT NULL DEFAULT 0,
+                summary     TEXT,
+                detail      TEXT,
+                commit_sha  TEXT,
+                cost_usd    REAL,
+                created_at  TEXT NOT NULL
+            );--split--
+            CREATE INDEX ix_impl_review ON impl_review(impl_id, pass);--split--
+            ALTER TABLE implementation ADD COLUMN review_min INTEGER;--split--
+            ALTER TABLE implementation ADD COLUMN review_max INTEGER;--split--
+            ALTER TABLE implementation ADD COLUMN review_each INTEGER;--split--
+            -- La rama la elige el modelo salvo que alguien la haya escrito. Hace falta la marca
+            -- aparte de `branch` porque después de planificar las dos están llenas, y sin saber
+            -- cuál fue una decisión de una persona, replanificar pisaría el nombre elegido.
+            ALTER TABLE implementation ADD COLUMN branch_fixed INTEGER
+            """.trimIndent(),
         )
     }
 }

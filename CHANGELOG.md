@@ -3,6 +3,40 @@
 Reglas de numeración en [CLAUDE.md](CLAUDE.md): un requerimiento **nuevo** incrementa *major*;
 cambiar uno **existente** incrementa *patch*.
 
+## 65.0.0
+
+**Pasadas de revisión sobre el código ya escrito.** Implementar y revisar son trabajos distintos, y
+el modelo que acaba de escribir algo es el peor juez de ese algo: ya decidió que estaba bien. Una
+pasada aparte, mirando el diff con otra intención —romperlo, no terminarlo— encuentra lo que la
+primera no podía ver. Busca bugs, performance, diseño, arquitectura y tests faltantes, y **arregla
+lo que encuentra**: una lista de problemas que nadie va a leer es trabajo tirado.
+
+Cuántas pasadas es un rango y no un número, porque no se sabe de antemano cuánto hay para encontrar.
+Se corre el mínimo siempre y se sigue mientras la anterior haya encontrado algo, hasta el máximo.
+Cinco pasadas sobre código limpio son cinco corridas pagas para que digan "no encontré nada"; dos
+sobre código con problemas se quedan cortas. Que el modelo pueda contestar "nada" es lo que hace que
+el rango funcione, así que el prompt lo pide explícitamente — si no, inventa un hallazgo menor para
+justificar la corrida y la serie nunca se corta.
+
+Opcionalmente también después de cada tarea. Cuesta una pasada por tarea, pero encuentra el problema
+cuando todavía es de una tarea sola: un bug que sobrevive cinco tareas ya tiene código encima que
+depende de él, y arreglarlo pasa de ser un cambio de una línea a ser una discusión.
+
+Cada pasada guarda qué encontró y qué arregló, que son dos números distintos y confundirlos arruina
+los dos.
+
+**El nombre de la rama se puede escribir a mano**, con un `Auto` que se lo deja a la IA. El nombre
+elegido sobrevive a una replanificación: hace falta marcarlo aparte porque después de planificar
+`branch` está lleno en los dos casos, y sin saber cuál fue una decisión de una persona se pisaba.
+
+**El alta y la edición dejaron de ser un modal.** Se le fueron sumando decisiones —repositorios con
+su rol y su rama base, documentos, la rama nueva, las pasadas— hasta que en una pantalla de catorce
+pulgadas el botón de borrar un documento quedaba cortado por la mitad. Un modal sirve para una
+pregunta; esto es un formulario con seis decisiones y cada una necesita explicarse.
+
+Y ahora **los documentos se listan uno por uno**, con su tamaño, en vez de la ruta de la carpeta:
+elegir un directorio y ver sólo su ruta era un acto de fe que se pagaba cuando el plan salía vacío.
+
 ## 64.0.0
 
 **El plan ahora es un grafo, no una fila.** Las tareas que no dependen entre sí arrancan a la vez, y

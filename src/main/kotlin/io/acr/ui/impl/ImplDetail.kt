@@ -106,6 +106,20 @@ fun ImplDetail(
     val repo = misRepos.firstOrNull()
     val corriendo = impl.status == ImplStatus.RUNNING || impl.status == ImplStatus.PLANNING
 
+    // Editar reemplaza la pantalla, igual que la tarea abierta. Era un modal y se le fueron
+    // sumando decisiones hasta no entrar en una pantalla de catorce pulgadas.
+    if (editando) {
+        ImplForm(
+            ctx = ctx,
+            repos = repos,
+            impl = impl,
+            actuales = suyos,
+            onBack = { editando = false },
+            onSaved = { editando = false; version++ },
+        )
+        return
+    }
+
     // La tarea abierta reemplaza a la pantalla: lo que pasó en una tarea es un tema en sí mismo y
     // no un desplegable dentro de una tabla.
     tareaAbierta?.let { id ->
@@ -148,17 +162,6 @@ fun ImplDetail(
             // obligar a empezar de cero.
             TextButton(onClick = { editando = true }) { Text(t("common.edit")) }
             EstadoBadge(impl.status)
-        }
-
-        if (editando) {
-            EditImplDialog(
-                ctx = ctx,
-                repos = repos,
-                impl = impl,
-                actuales = suyos,
-                onDismiss = { editando = false },
-                onSaved = { editando = false; version++ },
-            )
         }
 
         // De dónde parte cada repositorio y en qué rama trabaja. Estaba decidido en silencio por
@@ -300,6 +303,60 @@ fun ImplDetail(
                         running = corriendo,
                         onDone = { version++ },
                     )
+                }
+            }
+        }
+
+        // --- Lo que encontró la revisión ---
+        // Va antes del esfuerzo porque es lo que cambia una decisión: una implementación completa
+        // con cuatro hallazgos sin arreglar no está en el mismo estado que una limpia, y el costo
+        // total no dice nada de eso.
+        val revisiones = io.acr.ui.dbState(implId, version, vivo, tic, initial = emptyList<io.acr.impl.ReviewPass>()) {
+            ctx.impls.reviews(implId)
+        }
+        if (revisiones.isNotEmpty()) {
+            Spacer(Modifier.height(12.dp))
+            io.acr.ui.CollapsibleCard(
+                t("impl.reviews"), ctx.prefs, "implrev-$implId", maxHeight = 300.dp,
+            ) {
+                Column {
+                    revisiones.forEach { rev ->
+                        Row(Modifier.fillMaxWidth().padding(vertical = 3.dp)) {
+                            Text(
+                                if (rev.findings == 0) "✓" else "!",
+                                color = if (rev.findings == 0) io.acr.ui.stats.ChartColors.added
+                                else io.acr.ui.stats.ChartColors.major,
+                                modifier = Modifier.width(20.dp),
+                            )
+                            Column(Modifier.weight(1f)) {
+                                Text(
+                                    t("impl.reviewPass", rev.pass) +
+                                        rev.taskId?.let { id ->
+                                            tareas.firstOrNull { it.id == id }?.let { "  ·  #${it.seq}" }
+                                        }.orEmpty() +
+                                        "  ·  " + (
+                                            if (rev.findings == 0) t("impl.reviewClean")
+                                            else t("impl.reviewFound", rev.findings, rev.fixed)
+                                            ),
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                                rev.summary?.takeIf { it.isNotBlank() }?.let {
+                                    Text(it, style = MaterialTheme.typography.bodySmall)
+                                }
+                                // El detalle son las líneas de cada hallazgo. Se muestra entero:
+                                // resumir un hallazgo lo convierte en un titular que nadie puede
+                                // verificar.
+                                rev.detail?.takeIf { it.isNotBlank() }?.let {
+                                    Text(
+                                        it,
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    )
+                                }
+                            }
+                        }
+                    }
                 }
             }
         }

@@ -177,11 +177,14 @@ class ImplEngine(
             val (resumen, rama, tareas) = parsePlan(res.structured ?: res.text, implId, repos)
             if (tareas.isEmpty()) error("El plan volvió sin tareas.")
 
-            impls.savePlan(implId, resumen, rama, base, modelo, tareas)
+            // Si alguien escribió el nombre de la rama, manda sobre el que propone el modelo. Es
+            // una decisión de una persona sobre algo que después va a buscar a mano en git.
+            val ramaFinal = if (impl.branchFixed) impl.branch ?: rama else rama
+            impls.savePlan(implId, resumen, ramaFinal, base, modelo, tareas)
             guidance?.takeIf { it.isNotBlank() }?.let { impls.saveReviewGuidance(implId, it) }
             log(
                 implId,
-                if (revision == null) "Plan listo: ${tareas.size} tareas, rama «$rama»."
+                if (revision == null) "Plan listo: ${tareas.size} tareas, rama «$ramaFinal»."
                 else "Plan revisado: ${tareas.size} tareas.",
             )
             tareas.size
@@ -244,6 +247,7 @@ class ImplEngine(
         // La misma rama en todos: buscar el trabajo de una implementación en tres repositorios con
         // tres nombres distintos es un problema que no hace falta tener.
         val configurados = impls.reposOf(implId)
+        val baseDe = mutableMapOf<String, String>()
         repos.forEach { r ->
             // De dónde parte cada uno: lo configurado, o la rama en la que esté parado el clon.
             // No todos los repositorios usan el mismo nombre.
@@ -251,6 +255,7 @@ class ImplEngine(
                 ?: impl.baseBranch
                 ?: Git.currentBranch(File(r.localPath))
                 ?: "develop"
+            baseDe[r.id] = base
             log(implId, "${r.name}: «$rama» desde «$base»…")
             Git.checkoutBranch(File(r.localPath), rama, base)
         }
@@ -302,6 +307,19 @@ class ImplEngine(
                             fallidas > 0 -> ImplStatus.FAILED
                             else -> ImplStatus.DONE
                         }
+                        // Las pasadas de revisión, sobre lo que quedó. Sólo si terminó bien: no
+                        // tiene sentido buscar bugs finos en una rama a la que le falta la mitad,
+                        // y sería pagar por hallazgos que la tarea faltante iba a cambiar igual.
+                        if (estado == ImplStatus.DONE && impl.reviewMax > 0 && implId !in cancelled) {
+                            val tocados = todas.mapNotNull { t -> porId[t.repoId] }.distinctBy { it.id }
+                            tocados.forEach { r ->
+                                costo += audit(
+                                    implId, r, docs, binario, modelo, idioma,
+                                    impl.reviewMin.coerceAtLeast(1), impl.reviewMax,
+                                    baseRef = baseDe[r.id] ?: "HEAD",
+                                )
+                            }
+                        }
                         impls.finish(implId, estado, costo)
                         log(
                             implId,
@@ -336,6 +354,18 @@ class ImplEngine(
                             runTask(
                                 implId, tarea, todas, porId, repos, docs, impl.extraPrompt,
                                 idioma, modelo, binario, reintentadas,
+                                revisar = if (!impl.reviewEach) {
+                                    null
+                                } else {
+                                    Triple(
+                                        1,
+                                        // Por tarea alcanza con menos: el alcance es un commit, no
+                                        // una rama entera, y hacer cinco pasadas sobre un cambio
+                                        // chico es pagar de más por buscar donde ya no hay.
+                                        impl.reviewMax.coerceAtMost(2),
+                                        baseDe[porId[tarea.repoId]?.id ?: ""] ?: "HEAD",
+                                    )
+                                },
                             )
                         }
                     }.map { it.await() }
@@ -407,6 +437,8 @@ class ImplEngine(
         modelo: String,
         binario: String,
         reintentadas: MutableSet<String>,
+        /** Si hay que revisar apenas termina esta tarea, y con cuántas pasadas. */
+        revisar: Triple<Int, Int, String>? = null,
     ): Double {
         val repoTarea = porId[tarea.repoId] ?: repos.first()
         val dir = File(repoTarea.localPath)
@@ -537,7 +569,151 @@ class ImplEngine(
             },
         )
         log(implId, "✓ ${tarea.seq}. ${tarea.title}${sha?.let { " · ${it.take(7)}" }.orEmpty()}")
-        return res.costUsd ?: 0.0
+
+        // Revisar acá, apenas terminó, y no sólo al final: un bug que sobrevive cinco tareas ya
+        // tiene código encima que depende de él, y arreglarlo pasa de ser un cambio de una línea a
+        // ser una discusión. Cuesta una pasada más por tarea, y por eso es opcional.
+        var extraCosto = 0.0
+        if (revisar != null && sha != null) {
+            val (min, max, base) = revisar
+            extraCosto = audit(
+                implId, repoTarea, docs, binario, modelo, idioma, min, max,
+                tarea = tarea, baseRef = base,
+            )
+        }
+        return (res.costUsd ?: 0.0) + extraCosto
+    }
+
+    /**
+     * Pasadas de revisión sobre el código ya escrito.
+     *
+     * Implementar y revisar son trabajos distintos, y el modelo que acaba de escribir algo es el
+     * peor juez de ese algo: ya decidió que estaba bien. Una pasada aparte, mirando el diff con
+     * otra intención —romperlo, no terminarlo— encuentra lo que la primera no podía ver.
+     *
+     * Cuántas pasadas no es un número fijo sino un rango: se corre el mínimo siempre y se sigue
+     * mientras la anterior haya encontrado algo, hasta el máximo. Cinco pasadas sobre código limpio
+     * son cinco corridas pagas para que digan "no encontré nada"; dos sobre código con problemas se
+     * quedan cortas. Que el modelo pueda contestar "no encontré nada" es lo que hace que el rango
+     * funcione, y por eso el prompt lo dice explícitamente.
+     *
+     * Devuelve lo que costó.
+     */
+    private suspend fun audit(
+        implId: String,
+        repo: RepoRecord,
+        docs: List<SourceDoc>,
+        binario: String,
+        modelo: String,
+        idioma: String,
+        min: Int,
+        max: Int,
+        /** La tarea que se acaba de hacer, cuando la revisión es por tarea. Null al final. */
+        tarea: ImplTask? = null,
+        baseRef: String,
+    ): Double {
+        var costo = 0.0
+        val previos = mutableListOf<String>()
+        var pasada = 0
+        while (pasada < max) {
+            if (implId in cancelled) break
+            pasada++
+            val alcance = tarea?.let {
+                "Lo que cambió en la última tarea: `git show --stat HEAD` y `git show HEAD`. " +
+                    "La tarea era: ${it.title}"
+            }
+            val etiqueta = tarea?.let { "${it.seq}." }.orEmpty()
+            log(implId, "🔍 $etiqueta revisión, pasada $pasada de hasta $max…")
+
+            val clave = "$implId#rev$pasada"
+            val res = runCatching {
+                ClaudeCli.run(
+                    binary = binario,
+                    workDir = File(repo.localPath),
+                    prompt = ImplPrompt.review(
+                        pasada, max, "$baseRef..HEAD", docs, alcance, previos.toList(), idioma,
+                    ),
+                    model = modelo,
+                    allowedTools = ImplPrompt.WRITE_TOOLS,
+                    disallowedTools = ImplPrompt.DENIED_TOOLS,
+                    jsonSchema = ImplPrompt.REVIEW_SCHEMA,
+                    register = { running[clave] = it },
+                    onEvent = { evt -> resumir(evt)?.let { log(implId, it) } },
+                )
+            }.getOrNull()
+            running.remove(clave)
+            if (res == null || !res.ok) {
+                // Una revisión que no corre no invalida lo implementado: se anota y se sigue. Dar
+                // por fallada la implementación entera porque una pasada de control se cayó sería
+                // tirar el trabajo bueno por el control.
+                log(implId, "  la pasada $pasada no pudo correr; sigo.")
+                break
+            }
+            costo += res.costUsd ?: 0.0
+
+            val salida = parseReview(res.structured ?: res.text)
+            val sha = if (Git.isDirty(File(repo.localPath))) {
+                Git.commitAll(
+                    File(repo.localPath),
+                    "revisión $pasada: ${salida.arreglados} arreglo(s)\n\n${salida.resumen.take(1_500)}",
+                )
+            } else {
+                null
+            }
+            impls.saveReview(
+                implId, tarea?.id, pasada, salida.hallazgos.size, salida.arreglados,
+                salida.resumen, salida.detalle, sha, res.costUsd,
+            )
+            previos += salida.hallazgos.map { it.take(160) }
+            log(
+                implId,
+                if (salida.hallazgos.isEmpty()) "  pasada $pasada: nada."
+                else "  pasada $pasada: ${salida.hallazgos.size} hallazgo(s), ${salida.arreglados} arreglado(s)" +
+                    sha?.let { " · ${it.take(7)}" }.orEmpty(),
+            )
+
+            // El mínimo se corre siempre; a partir de ahí sólo se sigue si la anterior encontró
+            // algo. Una pasada limpia después del mínimo es la señal de que no hay más para
+            // sacar, y seguir buscando invita a inventar hallazgos para justificar la corrida.
+            if (pasada >= min && salida.hallazgos.isEmpty()) break
+        }
+        return costo
+    }
+
+    /** Lo que devolvió una pasada de revisión. */
+    private data class RevisionOut(
+        val resumen: String,
+        val detalle: String,
+        val hallazgos: List<String>,
+        val arreglados: Int,
+    )
+
+    private fun parseReview(raw: String): RevisionOut {
+        val limpio = raw.trim().removePrefix("```json").removePrefix("```").removeSuffix("```").trim()
+        val obj = runCatching {
+            kotlinx.serialization.json.Json { ignoreUnknownKeys = true; isLenient = true }
+                .parseToJsonElement(limpio).jsonObject
+        }.getOrNull() ?: return RevisionOut(raw.take(2_000), raw.take(8_000), emptyList(), 0)
+
+        val items = (obj["findings"] as? JsonArray).orEmpty().mapNotNull { it as? JsonObject }
+        fun texto(o: JsonObject, k: String) = o[k]?.jsonPrimitive?.contentOrNull.orEmpty()
+        val lineas = items.map { o ->
+            val tipo = texto(o, "kind").ifBlank { "?" }
+            val sev = texto(o, "severity").ifBlank { "?" }
+            val arch = texto(o, "file").takeIf { it.isNotBlank() }?.let { " · $it" }.orEmpty()
+            val hecho = o["fixed"]?.jsonPrimitive?.contentOrNull?.toBooleanStrictOrNull() ?: false
+            val porQueNo = texto(o, "why_not").takeIf { !hecho && it.isNotBlank() }
+                ?.let { " — sin arreglar: $it" }.orEmpty()
+            "[$sev/$tipo]$arch ${texto(o, "what")}$porQueNo"
+        }
+        return RevisionOut(
+            resumen = obj["summary"]?.jsonPrimitive?.contentOrNull.orEmpty().ifBlank { raw.take(1_000) },
+            detalle = lineas.joinToString("\n"),
+            hallazgos = lineas,
+            arreglados = items.count {
+                it["fixed"]?.jsonPrimitive?.contentOrNull?.toBooleanStrictOrNull() == true
+            },
+        )
     }
 
     /**

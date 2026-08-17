@@ -1091,3 +1091,116 @@ class ImplSchedulerTest {
         assertEquals(emptyList(), listas(todas, listOf(a, b)))
     }
 }
+
+/**
+ * Las pasadas de revisión: la política, lo que se guarda, y la rama elegida a mano.
+ *
+ * Lo que importa acá es que el rango signifique algo. Un número fijo de pasadas o corre de más
+ * —cinco corridas pagas sobre código limpio para que digan "no encontré nada"— o de menos, y en
+ * ninguno de los dos casos el número dice nada sobre el código.
+ */
+class ImplReviewTest {
+
+    private fun conRepo(block: (AppContext, String) -> Unit) {
+        val dir = java.nio.file.Files.createTempDirectory("acr-rev")
+        val ctx = AppContext.bootstrap(dir)
+        try {
+            val repoId = ctx.repos.create(
+                "tmp-r-${System.nanoTime()}", Provider.BITBUCKET, "acme", "demo",
+                System.getProperty("java.io.tmpdir"), null, null, null, "", false,
+                io.acr.forge.SkipRules(), io.acr.forge.ReplyMode.OFF,
+            )
+            block(ctx, repoId)
+        } finally {
+            ctx.close()
+            dir.toFile().deleteRecursively()
+        }
+    }
+
+    private fun nueva(ctx: AppContext, repoId: String) = ctx.impls.create(
+        listOf(io.acr.impl.ImplRepo(repoId, io.acr.impl.RepoRole.OTHER, null)),
+        "con revisión", listOf("/tmp/x.md"), null,
+    )
+
+    @Test
+    fun anImplementationCreatedBeforeThisStillGetsPasses() = conRepo { ctx, repoId ->
+        // Los valores por defecto se resuelven al leer y no en el DDL: las implementaciones
+        // anteriores a la migración tienen null, y sin esto quedarían en cero pasadas sin que
+        // nadie lo haya decidido.
+        val impl = ctx.impls.get(nueva(ctx, repoId))!!
+        assertEquals(2, impl.reviewMin)
+        assertEquals(5, impl.reviewMax)
+        assertTrue(!impl.reviewEach)
+    }
+
+    @Test
+    fun thePolicyIsRemembered() = conRepo { ctx, repoId ->
+        val id = nueva(ctx, repoId)
+        ctx.impls.setReviewPolicy(id, 3, 4, true)
+        val impl = ctx.impls.get(id)!!
+        assertEquals(3, impl.reviewMin)
+        assertEquals(4, impl.reviewMax)
+        assertTrue(impl.reviewEach)
+    }
+
+    @Test
+    fun eachPassIsSavedWithWhatItFoundAndWhatItFixed() = conRepo { ctx, repoId ->
+        // Hallazgos y arreglos son números distintos y confundirlos arruina los dos: una pasada
+        // que encuentra ocho y arregla dos no hizo el mismo trabajo que una que encuentra dos.
+        val id = nueva(ctx, repoId)
+        ctx.impls.saveReview(id, null, 1, findings = 8, fixed = 2, summary = "varias cosas", detail = "…", commitSha = "abc", costUsd = 0.5)
+        ctx.impls.saveReview(id, null, 2, findings = 0, fixed = 0, summary = "nada", detail = null, commitSha = null, costUsd = 0.2)
+
+        val pasadas = ctx.impls.reviews(id)
+        assertEquals(2, pasadas.size)
+        assertEquals(8, pasadas.first().findings)
+        assertEquals(2, pasadas.first().fixed)
+        assertEquals(0, pasadas.last().findings, "una pasada limpia también se guarda: es la que corta la serie")
+    }
+
+    @Test
+    fun theBranchNameSurvivesAReplan() = conRepo { ctx, repoId ->
+        // Sin la marca no se puede distinguir la rama que eligió una persona de la que propuso el
+        // modelo —después de planificar las dos están llenas— y replanificar pisaría la elegida.
+        val id = nueva(ctx, repoId)
+        assertTrue(!ctx.impls.get(id)!!.branchFixed, "por defecto la elige el modelo")
+
+        ctx.impls.setBranch(id, "feature-mia")
+        val fijada = ctx.impls.get(id)!!
+        assertEquals("feature-mia", fijada.branch)
+        assertTrue(fijada.branchFixed)
+
+        // Y volver a automático la libera.
+        ctx.impls.setBranch(id, null)
+        assertTrue(!ctx.impls.get(id)!!.branchFixed)
+        assertEquals(null, ctx.impls.get(id)!!.branch)
+    }
+
+    @Test
+    fun theReviewPromptLooksForTheFiveThingsAndAcceptsFindingNothing() {
+        val p = io.acr.impl.ImplPrompt.review(
+            1, 3, "develop..HEAD", emptyList(), null, emptyList(), "español",
+        )
+        listOf("Bugs", "Performance", "Diseño", "Arquitectura", "Tests").forEach {
+            assertTrue(p.contains(it, ignoreCase = true), "busca $it")
+        }
+        assertTrue(
+            p.contains("Si no encontrás nada, decilo"),
+            "poder contestar 'nada' es lo que hace que el rango funcione: sin eso, la pasada " +
+                "inventa un hallazgo menor para justificarse y la serie nunca se corta",
+        )
+        assertTrue(p.contains("Arreglalo"), "una lista que nadie va a leer es trabajo tirado")
+    }
+
+    @Test
+    fun aLaterPassKnowsWhatTheEarlierOnesFound() {
+        // Sin esto, la pasada 3 vuelve a reportar lo que la 1 ya arregló y el número de hallazgos
+        // deja de significar algo.
+        val p = io.acr.impl.ImplPrompt.review(
+            3, 5, "develop..HEAD", emptyList(), null,
+            listOf("[HIGH/BUG] null en el parser", "[LOW/DESIGN] nombre confuso"), "español",
+        )
+        assertTrue(p.contains("null en el parser"))
+        assertTrue(p.contains("No lo repitas"))
+    }
+}

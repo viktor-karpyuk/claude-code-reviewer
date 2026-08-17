@@ -140,6 +140,30 @@ data class Implementation(
      * revisa dos veces seguidas por lo mismo, y volver a escribirlo entero invita a escribir menos.
      */
     val reviewGuidance: String? = null,
+    /**
+     * Cuántas pasadas de revisión hacer sobre el código ya implementado.
+     *
+     * Un rango y no un número: no se sabe de antemano cuánto hay para encontrar. Se corre el mínimo
+     * siempre y se sigue mientras la pasada anterior haya encontrado algo. Cinco pasadas sobre
+     * código limpio son cinco corridas pagas para que digan "no encontré nada"; dos sobre código
+     * con problemas se quedan cortas.
+     */
+    val reviewMin: Int = 2,
+    val reviewMax: Int = 5,
+    /**
+     * Revisar también después de cada tarea, no sólo al final.
+     *
+     * Cuesta más —una pasada por tarea— pero encuentra el problema cuando todavía es de una tarea
+     * sola. Un bug que sobrevive cinco tareas ya tiene código encima que depende de él.
+     */
+    val reviewEach: Boolean = false,
+    /**
+     * La rama la eligió una persona, no el modelo.
+     *
+     * Con esto el nombre sobrevive a una replanificación. Sin la marca no se puede distinguir —una
+     * vez planificado, `branch` está lleno en los dos casos— y replanificar pisaría lo elegido.
+     */
+    val branchFixed: Boolean = false,
     val planModel: String?,
     val codeModel: String?,
     val error: String?,
@@ -147,6 +171,26 @@ data class Implementation(
     val createdAt: String,
     val plannedAt: String?,
     val finishedAt: String?,
+)
+
+/**
+ * Una pasada de revisión sobre lo implementado.
+ *
+ * `taskId` en null es una pasada final, sobre la rama entera. Con tarea, es la revisión que corre
+ * justo después de esa tarea.
+ */
+data class ReviewPass(
+    val id: String,
+    val implId: String,
+    val taskId: String?,
+    val pass: Int,
+    val findings: Int,
+    val fixed: Int,
+    val summary: String?,
+    val detail: String?,
+    val commitSha: String?,
+    val costUsd: Double?,
+    val createdAt: String,
 )
 
 /**
