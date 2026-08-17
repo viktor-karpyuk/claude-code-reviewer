@@ -1912,3 +1912,35 @@ class LocalFolderTest {
         assertEquals(listOf(repoId), ctx.impls.reposOf(implId).map { it.repoId })
     }
 }
+
+/**
+ * Que la carpeta elegida se vea.
+ *
+ * La lista de repositorios que recibe el formulario se cargó antes de abrirlo, así que una carpeta
+ * registrada después no existe para la pantalla. Se guardaba bien y no se veía — que desde el otro
+ * lado es indistinguible de que no hubiera pasado nada.
+ */
+class FolderVisibilityTest {
+
+    @Test
+    fun aFolderRegisteredAfterTheListWasLoadedIsStillFound() {
+        val dir = java.nio.file.Files.createTempDirectory("acr-vis")
+        val ctx = AppContext.bootstrap(dir)
+        try {
+            // La foto que tendría el formulario al abrirse: vacía.
+            val alAbrir = ctx.repos.list()
+            assertTrue(alAbrir.isEmpty())
+
+            val carpeta = dir.resolve("elegida").toFile().apply { mkdirs() }
+            val id = ctx.repos.createLocal(carpeta.absolutePath)
+
+            // Releer es lo que hace que aparezca. Con la foto vieja no está.
+            assertTrue(alAbrir.none { it.id == id }, "con la lista vieja no aparece: ese era el bug")
+            assertTrue(ctx.repos.list().any { it.id == id })
+            assertEquals(carpeta.absolutePath, ctx.repos.get(id)?.localPath, "y se puede buscar por id")
+        } finally {
+            ctx.close()
+            dir.toFile().deleteRecursively()
+        }
+    }
+}

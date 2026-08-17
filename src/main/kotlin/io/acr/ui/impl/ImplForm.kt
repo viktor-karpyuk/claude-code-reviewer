@@ -68,6 +68,20 @@ fun ImplForm(
     var revMax by remember(impl?.id) { mutableStateOf(impl?.reviewMax ?: 5) }
     var revCada by remember(impl?.id) { mutableStateOf(impl?.reviewEach ?: false) }
     var replanificar by remember(impl?.id) { mutableStateOf(false) }
+    // La lista se vuelve a leer al agregar una carpeta. La que llega por parámetro se cargó antes
+    // de abrir el formulario, así que sin esto la carpeta recién registrada no existe para la
+    // pantalla: se guardaba bien y no se veía, que es indistinguible de que no hubiera pasado nada.
+    var disponibles by remember(impl?.id) { mutableStateOf(repos) }
+
+    // Y si algo elegido no está en la lista, se lo busca por id.
+    //
+    // Es una red y no la vía principal: el picker sólo dibuja lo que hay en `repos`, así que una
+    // selección sin fila que la represente no se ve en ningún lado — y una carpeta elegida que no
+    // aparece es indistinguible de una que no se guardó.
+    val visibles = remember(disponibles, elegidos) {
+        val falta = elegidos.map { it.repoId }.filter { id -> disponibles.none { it.id == id } }
+        disponibles + falta.mapNotNull { ctx.repos.get(it) }
+    }
 
     // Los documentos de verdad, no las rutas. Es la diferencia entre "elegí una carpeta" y "estos
     // son los nueve archivos que se van a leer".
@@ -98,7 +112,7 @@ fun ImplForm(
         Spacer(Modifier.height(18.dp))
         Seccion(t("impl.fRepos"), t("impl.fReposNote"))
         RepoPicker(
-            repos = repos,
+            repos = visibles,
             elegidos = elegidos,
             onChange = { elegidos = it },
             // Sólo al dar de alta: en una edición los roles ya los decidió alguien, y volver a
@@ -112,7 +126,7 @@ fun ImplForm(
                     // lleva puesto el trabajo de las seis anteriores. Inicializar no toca nada de
                     // lo que ya hay adentro.
                     kotlinx.coroutines.runBlocking { io.acr.claude.Git.init(dir) }
-                    ctx.repos.createLocal(ruta)
+                    ctx.repos.createLocal(ruta).also { disponibles = ctx.repos.list() }
                 }
             },
         )

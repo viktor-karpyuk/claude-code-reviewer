@@ -3,6 +3,17 @@
 Reglas de numeración en [CLAUDE.md](CLAUDE.md): un requerimiento **nuevo** incrementa *major*;
 cambiar uno **existente** incrementa *patch*.
 
+## 70.0.1
+
+**La carpeta elegida ahora se ve.** Se registraba bien, pero la lista de repositorios que dibuja el
+formulario se había cargado al abrirlo, así que la carpeta recién agregada no existía para la
+pantalla: no aparecía por ningún lado, que desde el otro lado es indistinguible de que no hubiera
+pasado nada.
+
+Ahora la lista se relee al agregar una carpeta, y además cualquier cosa seleccionada que no esté en
+la lista se busca por id. Lo segundo es una red y no la vía principal: el picker sólo dibuja lo que
+hay en la lista, y una selección sin fila que la represente no se ve en ningún lado.
+
 ## 70.0.0
 
 **Se puede implementar sobre una carpeta, sin conectar ningún repositorio.** Hasta ahora había que
