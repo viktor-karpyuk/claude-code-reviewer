@@ -3,6 +3,41 @@
 Reglas de numeración en [CLAUDE.md](CLAUDE.md): un requerimiento **nuevo** incrementa *major*;
 cambiar uno **existente** incrementa *patch*.
 
+## 70.1.0
+
+Barrido de bugs sobre lo que se agregó en las últimas versiones, buscados releyendo el código con la
+pregunta "¿qué pasa si la app se muere justo acá?".
+
+**Retomar después de un corte era imposible.** El árbol de trabajo queda sucio *porque* la tarea no
+llegó a commitear, y la comprobación de "hay cambios sin commitear" se negaba a arrancar — o sea que
+el mecanismo entero de contexto y reanudación nunca se podía usar. Ahora, si estamos parados en la
+rama de esa implementación, esos cambios son nuestros y se sigue desde ahí; si no, se sigue
+avisando, porque entonces sí son de otro.
+
+**Una implementación cortada quedaba diciendo "corriendo" para siempre.** El estado del motor es en
+memoria: los procesos murieron con la app y nadie las cerraba. Peor, el botón ofrecía frenarlas en
+vez de retomarlas. Ahora quedan en "frenada" —nadie las intentó y perdió, se cortaron— y desde ahí
+el botón dice lo correcto.
+
+**Planificar no tenía job.** Una app que se cerraba mientras planificaba dejaba la implementación en
+"planificando" sin nada que lo delatara: no hay tarea que mirar, porque el plan es justo lo que
+todavía no existe.
+
+**El job de la implementación no latía.** Una implementación de dos horas aparecía "sin latido" a
+los dos minutos: la única señal que sirve para distinguir vivos de cadáveres estaba mintiendo justo
+en el caso normal. Y cerraba siempre como "listo", así que una implementación fallida o esperando
+una decisión dejaba un job diciendo que salió todo bien.
+
+**Una tarea terminada podía volver a la cola.** Ventana angosta —la app muere entre que la tarea se
+marca terminada y que su job se cierra— pero el efecto era rehacer trabajo que ya tenía commit.
+
+**Dos revisiones simultáneas compartían la clave de su proceso**, así que cancelar mataba una sola y
+la otra seguía escribiendo.
+
+Además: `exec` era la única puerta que esquivaba el monitor de la conexión —con SQLite eso no da un
+error claro sino resultados raros—, la pantalla de trabajos pedía una consulta por implementación
+cada cinco segundos, y el contexto de una tarea en curso no se actualizaba solo.
+
 ## 70.0.1
 
 **La carpeta elegida ahora se ve.** Se registraba bien, pero la lista de repositorios que dibuja el

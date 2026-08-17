@@ -64,6 +64,17 @@ fun TaskDetailScreen(
     // es qué se propone hacer.
     val yaCorrio = task.status != TaskStatus.PENDING || task.commitSha != null || task.result != null
 
+    // Un latido mientras la tarea corre. El contexto se llena mientras trabaja y su `updated_at` no
+    // cambia con cada entrada, así que sin esto la pantalla muestra la foto del momento en que se
+    // abrió — justo cuando lo interesante es verla crecer.
+    var tic by remember(task.id) { mutableStateOf(0) }
+    androidx.compose.runtime.LaunchedEffect(task.id, task.status) {
+        while (task.status == TaskStatus.RUNNING) {
+            kotlinx.coroutines.delay(3_000)
+            tic++
+        }
+    }
+
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(20.dp)) {
         io.acr.ui.Breadcrumbs(
             listOf(
@@ -160,7 +171,7 @@ fun TaskDetailScreen(
                 // Es distinto de "qué hizo", que es lo que el modelo cuenta al final. Esto se
                 // escribe mientras corre, así que existe incluso cuando la tarea se cortó y no
                 // llegó a contar nada — que es justamente cuando hace falta.
-                val contexto = io.acr.ui.dbState(task.id, task.updatedAt, initial = emptyList<io.acr.impl.ContextEntry>()) {
+                val contexto = io.acr.ui.dbState(task.id, task.updatedAt, tic, initial = emptyList<io.acr.impl.ContextEntry>()) {
                     ctx.jobs2.contextOf(task.id)
                 }
                 if (contexto.isNotEmpty()) {

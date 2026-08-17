@@ -164,7 +164,16 @@ class AppContext private constructor(
             // cierran como interrumpidos —no como fallidos— y su contexto queda intacto para que
             // el próximo intento siga desde ahí en vez de empezar de nuevo.
             val interrumpidos = runCatching { jobsRepo.sweepInterrupted() }.getOrDefault(emptyList())
-            interrumpidos.mapNotNull { it.taskId }.distinct().forEach { impls.resetTask(it) }
+            // Sólo lo que no llegó a terminar. Una tarea que alcanzó a completarse y cuyo job quedó
+            // abierto porque la app murió en el medio ya tiene su commit hecho: devolverla a
+            // pendiente la haría rehacer trabajo que está bien.
+            val hechas = interrumpidos.mapNotNull { it.taskId }.distinct().filter { id ->
+                impls.taskStatus(id) != io.acr.impl.TaskStatus.DONE
+            }
+            hechas.forEach { impls.resetTask(it) }
+            // Y las implementaciones que quedaron diciendo que corrían. Sin esto la pantalla ofrece
+            // frenarlas en vez de retomarlas, y el avance se queda congelado para siempre.
+            runCatching { impls.stopOrphanedRunning() }
             // Ninguna review de una corrida anterior puede seguir viva: el estado del motor es
             // en memoria. Sin esto quedan como "corriendo" para siempre en el panel.
             //

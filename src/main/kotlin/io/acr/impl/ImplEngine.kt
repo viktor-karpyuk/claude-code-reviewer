@@ -186,6 +186,10 @@ class ImplEngine(
             texto to guia
         }
 
+        // Planificar también es un job. Sin él, una app que se cierra mientras planifica deja la
+        // implementación en PLANNING para siempre, sin nada corriendo y sin nada que lo delate: no
+        // hay tarea que mirar, porque el plan es justo lo que todavía no existe.
+        val jobPlan = jobs.start(JobKind.PLAN, implId, workDir = principal.localPath)
         impls.setStatus(implId, ImplStatus.PLANNING)
         log(
             implId,
@@ -198,7 +202,7 @@ class ImplEngine(
         val idioma = prefs.get(io.acr.AppContext.PREF_LANGUAGE) ?: "español"
 
         return runCatching {
-            val res = ClaudeCli.run(
+            val res = latiendo(jobPlan) { ClaudeCli.run(
                 binary = binario,
                 workDir = dir,
                 prompt = ImplPrompt.plan(
@@ -218,8 +222,13 @@ class ImplEngine(
                 disallowedTools = ImplPrompt.DENIED_TOOLS,
                 jsonSchema = ImplPrompt.PLAN_SCHEMA,
                 register = { running["$implId#plan"] = it },
-                onEvent = { evt -> resumir(evt)?.let { log(implId, it) } },
-            )
+                onEvent = { evt ->
+                    resumir(evt)?.let { log(implId, it) }
+                    (evt as? io.acr.claude.ClaudeEvent.Started)?.let {
+                        jobs.attachSession(jobPlan, it.sessionId, null)
+                    }
+                },
+            ) }
             running.remove("$implId#plan")
             if (!res.ok) error(res.stderr.ifBlank { "El planificador no devolvió un plan." })
 
@@ -236,9 +245,11 @@ class ImplEngine(
                 if (revision == null) "Plan listo: ${tareas.size} tareas, rama «$ramaFinal»."
                 else "Plan revisado: ${tareas.size} tareas.",
             )
+            jobs.finish(jobPlan, JobState.DONE)
             tareas.size
         }.onFailure {
             running.remove("$implId#plan")
+            jobs.finish(jobPlan, JobState.FAILED, it.message)
             impls.setStatus(implId, ImplStatus.FAILED, it.message)
         }
     }
@@ -282,12 +293,23 @@ class ImplEngine(
                 return Result.failure(IllegalStateException(msg))
             }
             if (Git.isDirty(d)) {
-                // Se nombra el repositorio y se dice la salida concreta. Antes decía "guardalos o
-                // descartalos" sin decir cuál de los repositorios era el del problema.
-                val msg = "${r.name} tiene cambios sin commitear. Desde la pantalla podés " +
-                    "guardarlos en el stash y seguir; se recuperan con `git stash pop`."
-                impls.setStatus(implId, ImplStatus.FAILED, msg)
-                return Result.failure(IllegalStateException(msg))
+                // Salvo que la suciedad sea nuestra.
+                //
+                // Estar parado en la rama de esta implementación significa que esos cambios los
+                // dejó una corrida anterior de esto mismo: la rama la creamos nosotros. Negarse ahí
+                // haría imposible retomar después de un corte, que es exactamente el caso para el
+                // que existe todo el mecanismo de contexto — el árbol queda sucio *porque* la tarea
+                // no llegó a commitear.
+                val nuestra = Git.currentBranch(d) == rama
+                if (!nuestra) {
+                    // Se nombra el repositorio y se dice la salida concreta. Antes decía "guardalos
+                    // o descartalos" sin decir cuál de los repositorios era el del problema.
+                    val msg = "${r.name} tiene cambios sin commitear. Desde la pantalla podés " +
+                        "guardarlos en el stash y seguir; se recuperan con `git stash pop`."
+                    impls.setStatus(implId, ImplStatus.FAILED, msg)
+                    return Result.failure(IllegalStateException(msg))
+                }
+                log(implId, "${r.name}: retomando sobre los cambios que quedaron de la corrida anterior.")
             }
         }
 
@@ -330,15 +352,25 @@ class ImplEngine(
         // Concurrente porque varias tareas pueden fallar a la vez y cada una consulta y marca su
         // reintento desde su propia corrutina.
         val reintentadas = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
+        // Con qué terminó de verdad. El job cerraba siempre en DONE, así que una implementación
+        // que terminó fallida o esperando una decisión dejaba un job diciendo que salió todo bien
+        // — y la pantalla de trabajos, que es donde uno mira cuando algo no cierra, mentía.
+        var estadoFinal: ImplStatus? = null
 
         return runCatching {
             kotlinx.coroutines.coroutineScope {
                 while (true) {
                     if (implId in cancelled) {
                         impls.finish(implId, ImplStatus.STOPPED, costo)
+                        estadoFinal = ImplStatus.STOPPED
                         log(implId, "Frenada. Lo hecho quedó commiteado en «$rama».")
                         break
                     }
+                    // El job de la implementación también tiene que latir. Sin esto, una
+                    // implementación que corre dos horas aparece "sin latido" a los dos minutos y
+                    // la pantalla de trabajos la muestra como muerta mientras está trabajando: la
+                    // única señal que sirve para distinguir vivos de cadáveres pasa a mentir.
+                    runCatching { jobs.beat(jobImpl) }
                     val todas = impls.tasks(implId)
 
                     // Una tarea cuya dependencia falló no se intenta: construir sobre algo que no
@@ -382,6 +414,7 @@ class ImplEngine(
                             }
                         }
                         impls.finish(implId, estado, costo)
+                        estadoFinal = estado
                         log(
                             implId,
                             when (estado) {
@@ -440,7 +473,15 @@ class ImplEngine(
         }.onSuccess {
             jobs.finish(
                 jobImpl,
-                if (implId in cancelled) JobState.PAUSED else JobState.DONE,
+                when (estadoFinal) {
+                    ImplStatus.DONE -> JobState.DONE
+                    ImplStatus.FAILED -> JobState.FAILED
+                    ImplStatus.STOPPED -> JobState.PAUSED
+                    // Esperando una decisión no es ni terminado ni roto: es pausado, y es
+                    // exactamente lo que hace falta ver para saber que algo está trabado.
+                    ImplStatus.AWAITING -> JobState.PAUSED
+                    else -> JobState.DONE
+                },
             )
         }.map { }
             .also { clear(implId) }
@@ -990,7 +1031,10 @@ class ImplEngine(
             val etiqueta = tarea?.let { "${it.seq}." }.orEmpty()
             log(implId, "🔍 $etiqueta revisión, pasada $pasada de hasta $max…")
 
-            val clave = "$implId#rev$pasada"
+            // Con el número de tarea adentro: dos tareas que terminan a la vez lanzan su revisión
+            // a la vez, y con una clave compartida la segunda pisaba a la primera — cancelar
+            // mataba un solo proceso y el otro seguía escribiendo.
+            val clave = "$implId#rev${tarea?.id.orEmpty()}$pasada"
             val res = runCatching {
                 ClaudeCli.run(
                     binary = binario,

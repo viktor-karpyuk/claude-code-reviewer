@@ -93,7 +93,10 @@ class Store(private val dbPath: Path, val settings: DbSettings = DbSettings()) :
      * `Statement.execute(sql)` no pasa por el proxy de la conexión —el `Statement` ya es del driver
      * real— así que las migraciones y cualquier DDL van por acá.
      */
-    fun exec(s: String) {
+    fun exec(s: String) = synchronized(lock) {
+        // Bajo el mismo monitor que todo lo demás: `java.sql.Connection` no es thread-safe, y esta
+        // era la única puerta que lo esquivaba. Con SQLite y una sola conexión, dos sentencias a la
+        // vez no dan un error claro sino resultados raros.
         raw.createStatement().use { it.execute(sql(s)) }
     }
 

@@ -57,9 +57,7 @@ fun JobsPanel(ctx: AppContext) {
         ctx.impls.list()
     }
     val titulos = remember(impls) { impls.associate { it.id to it.title } }
-    val jobs = io.acr.ui.dbState(version, tic, initial = emptyList<Job>()) {
-        impls.flatMap { ctx.jobs2.jobsOf(it.id) }
-    }
+    val jobs = io.acr.ui.dbState(version, tic, initial = emptyList<Job>()) { ctx.jobs2.all() }
 
     val ahora = java.time.Instant.now()
     val vivos = jobs.filter { it.state == JobState.RUNNING && !it.stale(ahora) }

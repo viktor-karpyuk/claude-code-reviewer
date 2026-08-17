@@ -101,6 +101,16 @@ class JobRepository(private val store: Store) {
     fun lastOf(taskId: String): Job? =
         query("WHERE task_id = ? ORDER BY created_at DESC") { it.setString(1, taskId) }.firstOrNull()
 
+    /**
+     * Todos los jobs, en una sola consulta.
+     *
+     * La pantalla los pedía por implementación dentro de un bucle, y se relee cada cinco segundos:
+     * con veinte implementaciones eran veinte consultas por refresco para mostrar una lista que
+     * cabe en una.
+     */
+    fun all(limit: Int = 400): List<Job> =
+        query("ORDER BY created_at DESC LIMIT ?") { it.setInt(1, limit) }
+
     /** Todo lo que quedó marcado como corriendo, de cualquier implementación. */
     fun running(): List<Job> = query("WHERE state = ?") { it.setString(1, JobState.RUNNING.name) }
 

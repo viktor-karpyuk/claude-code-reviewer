@@ -1944,3 +1944,82 @@ class FolderVisibilityTest {
         }
     }
 }
+
+/**
+ * Los agujeros de la recuperación, encontrados releyendo el código con la pregunta "¿qué pasa si la
+ * app se muere justo acá?".
+ */
+class RecoveryHolesTest {
+
+    private fun conCtx(block: (AppContext) -> Unit) {
+        val dir = java.nio.file.Files.createTempDirectory("acr-rec")
+        val ctx = AppContext.bootstrap(dir)
+        try {
+            block(ctx)
+        } finally {
+            ctx.close()
+            dir.toFile().deleteRecursively()
+        }
+    }
+
+    private fun implCon(ctx: AppContext, estado: io.acr.impl.ImplStatus): String {
+        val unico = System.nanoTime().toString()
+        val repoId = ctx.repos.create(
+            "tmp-rec-$unico", Provider.BITBUCKET, "acme", "demo-$unico",
+            System.getProperty("java.io.tmpdir"), null, null, null, "", false,
+            io.acr.forge.SkipRules(), io.acr.forge.ReplyMode.OFF,
+        )
+        val id = ctx.impls.create(
+            listOf(io.acr.impl.ImplRepo(repoId, io.acr.impl.RepoRole.OTHER, null)),
+            "colgada", listOf("/tmp/x.md"), null,
+        )
+        ctx.impls.setStatus(id, estado)
+        return id
+    }
+
+    @Test
+    fun anImplementationLeftRunningIsStoppedAndNotLeftHanging() = conCtx { ctx ->
+        // El estado del motor es en memoria: esos procesos murieron con la app y nadie los va a
+        // cerrar. Sin esto quedan diciendo "corriendo" para siempre, sin nada corriendo, y el
+        // botón ofrece frenarlas en vez de retomarlas.
+        val corriendo = implCon(ctx, io.acr.impl.ImplStatus.RUNNING)
+        val planificando = implCon(ctx, io.acr.impl.ImplStatus.PLANNING)
+        val terminada = implCon(ctx, io.acr.impl.ImplStatus.DONE)
+
+        assertEquals(2, ctx.impls.stopOrphanedRunning())
+
+        assertEquals(io.acr.impl.ImplStatus.STOPPED, ctx.impls.get(corriendo)!!.status)
+        assertEquals(io.acr.impl.ImplStatus.STOPPED, ctx.impls.get(planificando)!!.status)
+        assertEquals(
+            io.acr.impl.ImplStatus.DONE, ctx.impls.get(terminada)!!.status,
+            "lo que ya había terminado no se toca",
+        )
+    }
+
+    @Test
+    fun stoppedAndNotFailedBecauseNobodyTriedAndLost() = conCtx { ctx ->
+        // Fallida haría buscar un error que no existe. Frenada es lo que fue: se cortó. Y desde
+        // ahí el botón dice "retomar", que es lo que corresponde.
+        val id = implCon(ctx, io.acr.impl.ImplStatus.RUNNING)
+        ctx.impls.stopOrphanedRunning()
+        assertEquals(null, ctx.impls.get(id)!!.error, "y sin un error inventado colgado")
+    }
+
+    @Test
+    fun aTaskThatDidFinishIsNotSentBackToTheQueue() = conCtx { ctx ->
+        // Ventana angosta pero real: la app se muere entre que la tarea se marca terminada y que
+        // su job se cierra. Devolverla a pendiente le haría rehacer trabajo que ya tiene commit.
+        val id = implCon(ctx, io.acr.impl.ImplStatus.RUNNING)
+        ctx.impls.savePlan(
+            id, "r", "rama", "develop", "fable",
+            listOf(
+                ImplTask("", "", null, 1, "hecha", "", emptyList(), TaskSize.M, 10,
+                    TaskStatus.PENDING, null, null, null, null, null, null),
+            ),
+        )
+        val t = ctx.impls.tasks(id).single()
+        ctx.impls.finishTask(t.id, "abc123", "listo", 0.1)
+
+        assertEquals(TaskStatus.DONE, ctx.impls.taskStatus(t.id))
+    }
+}

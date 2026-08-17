@@ -129,6 +129,26 @@ class ImplRepository(private val store: Store) {
             }
         }
 
+    /**
+     * Cierra las implementaciones que quedaron marcadas como corriendo de una sesión anterior.
+     *
+     * El estado del motor es en memoria: los procesos murieron con la app y nadie va a cerrarlas.
+     * Sin esto quedan diciendo "corriendo" o "planificando" para siempre, sin nada corriendo y sin
+     * nada que lo delate — y peor, el botón ofrece frenarlas en vez de retomarlas.
+     *
+     * Quedan en STOPPED y no en FAILED: nadie las intentó y falló, se cortaron. Desde ahí el botón
+     * dice "retomar", que es lo que corresponde.
+     */
+    fun stopOrphanedRunning(): Int =
+        store.stmt(
+            "UPDATE implementation SET status = ? WHERE status IN (?, ?)",
+        ) { ps ->
+            ps.setString(1, ImplStatus.STOPPED.name)
+            ps.setString(2, ImplStatus.RUNNING.name)
+            ps.setString(3, ImplStatus.PLANNING.name)
+            ps.executeUpdate()
+        }
+
     fun list(repoId: String? = null): List<Implementation> =
         query(
             if (repoId == null) "ORDER BY created_at DESC" else "WHERE repo_id = ? ORDER BY created_at DESC",
@@ -371,6 +391,15 @@ class ImplRepository(private val store: Store) {
                         )
                     }
                 }
+            }
+        }
+
+    /** El estado de una tarea, sin traer el resto. Para decidir si hay que reintentarla. */
+    fun taskStatus(taskId: String): TaskStatus? =
+        store.stmt("SELECT status FROM impl_task WHERE id = ?") { ps ->
+            ps.setString(1, taskId)
+            ps.executeQuery().use { rs ->
+                if (rs.next()) runCatching { TaskStatus.valueOf(rs.getString(1)) }.getOrNull() else null
             }
         }
 
