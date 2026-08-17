@@ -172,6 +172,21 @@ object Git {
      * diferencia entre seguir y volver a empezar: sin eso, el modelo reescribe desde cero archivos
      * que ya estaban a mitad de camino, y lo que había quedado bien se pierde.
      */
+    /**
+     * Convierte una carpeta en un repositorio de git.
+     *
+     * Hace falta porque el commit por tarea es la red de seguridad de todo el módulo: sin él, que
+     * la séptima tarea falle se lleva puesto el trabajo de las seis anteriores. Se puede implementar
+     * sobre una carpeta cualquiera, pero no sin historial — así que si no lo tiene, se le da uno.
+     *
+     * No toca nada si ya es un repositorio.
+     */
+    suspend fun init(dir: File): Boolean {
+        if (isRepo(dir)) return true
+        if (!dir.isDirectory && !dir.mkdirs()) return false
+        return runRaw(dir, listOf("git", "init")).ok
+    }
+
     suspend fun dirtyFiles(dir: File): List<String> = runCatching {
         runRaw(dir, listOf("git", "status", "--porcelain")).output
             .lines()

@@ -12,7 +12,7 @@ class RepoRepository(private val store: Store, private val secrets: Secrets) {
         store.stmt(
             """SELECT id, name, provider, owner, slug, local_path, token_cipher, project_kind,
                       default_depth, default_model, auto_review, skip_drafts, skip_titles,
-                      skip_authors, only_targets, reply_mode
+                      skip_authors, only_targets, reply_mode, local_only
                FROM repo ORDER BY name""",
         ) { ps ->
             ps.executeQuery().use { rs ->
@@ -20,16 +20,65 @@ class RepoRepository(private val store: Store, private val secrets: Secrets) {
                     while (rs.next()) add(map(rs.getString(1), rs.getString(2), rs.getString(3),
                         rs.getString(4), rs.getString(5), rs.getString(6), rs.getBytes(7),
                         rs.getString(8), rs.getString(9), rs.getString(10), rs.getInt(11) == 1,
-                        rs.getInt(12) == 1, rs.getString(13), rs.getString(14), rs.getString(15), rs.getString(16)))
+                        rs.getInt(12) == 1, rs.getString(13), rs.getString(14), rs.getString(15), rs.getString(16), rs.getInt(17) == 1))
                 }
             }
         }
+
+    /**
+     * Registra una carpeta como destino de implementaciones, o devuelve la que ya estaba.
+     *
+     * Se guarda como un repositorio más porque *es* lo mismo: una base de código que la app conoce.
+     * Duplicar el concepto habría obligado a que cada tarea, cada job y cada diff supieran de dos
+     * clases de destino, y a cambio de nada — lo único que le falta a una carpeta es el proveedor,
+     * y eso sólo hace falta para revisar PRs.
+     *
+     * Idempotente por ruta: apuntar dos veces a la misma carpeta tiene que dar el mismo destino, o
+     * la segunda implementación escribiría en "otro" repositorio que en realidad es el mismo, con
+     * dos historiales de tareas sobre los mismos archivos.
+     */
+    fun createLocal(path: String): String {
+        val ruta = java.io.File(path).absolutePath.trimEnd('/')
+        list().firstOrNull { it.localOnly && it.localPath.trimEnd('/') == ruta }?.let { return it.id }
+
+        val nombre = java.io.File(ruta).name.ifBlank { ruta }
+        val id = UlidCreator.getUlid().toString()
+        store.stmt(
+            """INSERT INTO repo(id, name, provider, owner, slug, local_path, created_at,
+                     project_kind, default_depth, default_model, auto_review, skip_drafts,
+                     reply_mode, local_only)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+        ) { ps ->
+            ps.setString(1, id)
+            ps.setString(2, nombre)
+            // El proveedor no significa nada acá, pero la columna no admite null y el enum no tiene
+            // un valor vacío. Lo que dice que esto no tiene proveedor es `local_only`, no esto.
+            ps.setString(3, Provider.BITBUCKET.name)
+            // Owner y slug se derivan de la ruta para que la unicidad (proveedor, owner, slug) no
+            // choque entre dos carpetas distintas.
+            ps.setString(4, "local")
+            ps.setString(5, ruta.replace('/', '-').trim('-').takeLast(120))
+            ps.setString(6, ruta)
+            ps.setString(7, Instant.now().toString())
+            ps.setString(8, AUTO)
+            ps.setString(9, AUTO)
+            ps.setString(10, AUTO)
+            // Nunca en revisión automática: no hay PRs de dónde sacar nada, y encenderlo sólo
+            // produciría errores de conexión en un bucle.
+            ps.setInt(11, 0)
+            ps.setInt(12, 0)
+            ps.setString(13, io.acr.forge.ReplyMode.OFF.name)
+            ps.setInt(14, 1)
+            ps.executeUpdate()
+        }
+        return id
+    }
 
     fun get(id: String): RepoRecord? =
         store.stmt(
             """SELECT id, name, provider, owner, slug, local_path, token_cipher, project_kind,
                       default_depth, default_model, auto_review, skip_drafts, skip_titles,
-                      skip_authors, only_targets, reply_mode
+                      skip_authors, only_targets, reply_mode, local_only
                FROM repo WHERE id = ?""",
         ) { ps ->
             ps.setString(1, id)
@@ -37,7 +86,7 @@ class RepoRepository(private val store: Store, private val secrets: Secrets) {
                 if (rs.next()) map(rs.getString(1), rs.getString(2), rs.getString(3),
                     rs.getString(4), rs.getString(5), rs.getString(6), rs.getBytes(7),
                     rs.getString(8), rs.getString(9), rs.getString(10), rs.getInt(11) == 1,
-                    rs.getInt(12) == 1, rs.getString(13), rs.getString(14), rs.getString(15), rs.getString(16)) else null
+                    rs.getInt(12) == 1, rs.getString(13), rs.getString(14), rs.getString(15), rs.getString(16), rs.getInt(17) == 1) else null
             }
         }
 
@@ -137,6 +186,7 @@ class RepoRepository(private val store: Store, private val secrets: Secrets) {
         projectKind: String?, defaultDepth: String?, defaultModel: String?, autoReview: Boolean,
         skipDrafts: Boolean, skipTitles: String?, skipAuthors: String?, onlyTargets: String?,
         replyMode: String?,
+        localOnly: Boolean = false,
     ) = RepoRecord(
         id = id,
         name = name,
@@ -159,6 +209,7 @@ class RepoRepository(private val store: Store, private val secrets: Secrets) {
             onlyTargets = onlyTargets ?: "",
         ),
         replyMode = io.acr.forge.ReplyMode.fromName(replyMode),
+        localOnly = localOnly,
     )
 
     private companion object { const val AUTO = "AUTO" }

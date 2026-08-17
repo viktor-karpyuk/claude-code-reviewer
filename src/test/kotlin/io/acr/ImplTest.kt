@@ -1821,3 +1821,94 @@ class JobsAndContextTest {
         assertTrue(!p.contains("ESTA TAREA YA SE EMPEZÓ"))
     }
 }
+
+/**
+ * Implementar sobre una carpeta suelta, sin repositorio conectado.
+ *
+ * Conectar un repositorio pide proveedor, owner, slug y token, y todo eso existe para poder revisar
+ * PRs. Para escribir código no hace falta ninguno: alcanza con saber dónde.
+ */
+class LocalFolderTest {
+
+    private fun conCtx(block: (AppContext, java.nio.file.Path) -> Unit) {
+        val dir = java.nio.file.Files.createTempDirectory("acr-local")
+        val ctx = AppContext.bootstrap(dir)
+        try {
+            block(ctx, dir)
+        } finally {
+            ctx.close()
+            dir.toFile().deleteRecursively()
+        }
+    }
+
+    @Test
+    fun aFolderBecomesACodebaseTheAppKnows() = conCtx { ctx, dir ->
+        val carpeta = dir.resolve("mi-proyecto").toFile().apply { mkdirs() }
+        val id = ctx.repos.createLocal(carpeta.absolutePath)
+
+        val r = ctx.repos.get(id)!!
+        assertTrue(r.localOnly, "queda marcada: atrás no hay proveedor")
+        assertEquals("mi-proyecto", r.name, "el nombre sale de la carpeta")
+        assertEquals(carpeta.absolutePath, r.localPath)
+        assertTrue(!r.autoReview, "nunca en revisión automática: no hay PRs de dónde sacar nada")
+    }
+
+    @Test
+    fun pointingTwiceAtTheSameFolderGivesTheSameCodebase() = conCtx { ctx, dir ->
+        // Sin esto, la segunda implementación escribiría en "otro" repositorio que en realidad es
+        // el mismo, con dos historiales de tareas sobre los mismos archivos.
+        val carpeta = dir.resolve("repetida").toFile().apply { mkdirs() }
+        val a = ctx.repos.createLocal(carpeta.absolutePath)
+        val b = ctx.repos.createLocal(carpeta.absolutePath + "/")
+        assertEquals(a, b)
+        assertEquals(1, ctx.repos.list().count { it.localOnly })
+    }
+
+    @Test
+    fun twoDifferentFoldersDoNotCollide() = conCtx { ctx, dir ->
+        // La unicidad de la tabla es (proveedor, owner, slug), y las tres las inventa la app para
+        // una carpeta. Si el slug no saliera de la ruta, la segunda carpeta chocaría con la primera.
+        val a = ctx.repos.createLocal(dir.resolve("uno").toFile().apply { mkdirs() }.absolutePath)
+        val b = ctx.repos.createLocal(dir.resolve("dos").toFile().apply { mkdirs() }.absolutePath)
+        assertTrue(a != b)
+        assertEquals(2, ctx.repos.list().count { it.localOnly })
+    }
+
+    @Test
+    fun aFolderWithoutGitGetsAHistory() = conCtx { _, dir ->
+        // El commit por tarea es la red de seguridad del módulo entero: sin historial, que la
+        // séptima tarea falle se lleva puesto el trabajo de las seis anteriores.
+        val carpeta = dir.resolve("sin-git").toFile().apply { mkdirs() }
+        java.io.File(carpeta, "algo.txt").writeText("contenido que ya estaba")
+        assertTrue(!io.acr.claude.Git.isRepo(carpeta))
+
+        val ok = kotlinx.coroutines.runBlocking { io.acr.claude.Git.init(carpeta) }
+        assertTrue(ok)
+        assertTrue(io.acr.claude.Git.isRepo(carpeta))
+        assertEquals(
+            "contenido que ya estaba",
+            java.io.File(carpeta, "algo.txt").readText(),
+            "inicializar no toca lo que ya había adentro",
+        )
+    }
+
+    @Test
+    fun initOnAnExistingRepoChangesNothing() = conCtx { _, dir ->
+        val carpeta = dir.resolve("con-git").toFile().apply { mkdirs() }
+        kotlinx.coroutines.runBlocking { io.acr.claude.Git.init(carpeta) }
+        val antes = java.io.File(carpeta, ".git").lastModified()
+        assertTrue(kotlinx.coroutines.runBlocking { io.acr.claude.Git.init(carpeta) })
+        assertEquals(antes, java.io.File(carpeta, ".git").lastModified())
+    }
+
+    @Test
+    fun anImplementationCanTargetOnlyAFolder() = conCtx { ctx, dir ->
+        val carpeta = dir.resolve("destino").toFile().apply { mkdirs() }
+        val repoId = ctx.repos.createLocal(carpeta.absolutePath)
+        val implId = ctx.impls.create(
+            listOf(io.acr.impl.ImplRepo(repoId, io.acr.impl.RepoRole.OTHER, null)),
+            "sobre una carpeta", listOf("/tmp/x.md"), null,
+        )
+        assertEquals(listOf(repoId), ctx.impls.reposOf(implId).map { it.repoId })
+    }
+}

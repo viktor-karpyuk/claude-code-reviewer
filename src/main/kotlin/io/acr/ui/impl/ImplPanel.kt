@@ -114,7 +114,10 @@ fun ImplPanel(ctx: AppContext, repos: List<io.acr.forge.RepoRecord>) {
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
-            Button(enabled = repos.isNotEmpty(), onClick = { creando = true }) { Text(t("impl.new")) }
+            // Sin condición: adentro del formulario se puede elegir una carpeta suelta, así que no
+            // tener ningún repositorio conectado ya no impide implementar. Deshabilitar acá dejaba
+            // sin salida justo al que todavía no conectó nada.
+            Button(onClick = { creando = true }) { Text(t("impl.new")) }
         }
 
         // El buscador aparece recién cuando hay suficientes como para necesitarlo: con tres

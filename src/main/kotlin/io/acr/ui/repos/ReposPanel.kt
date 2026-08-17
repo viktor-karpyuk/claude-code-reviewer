@@ -162,7 +162,10 @@ private fun RepoCard(
             }
         }
         Text(
-            "${repo.owner}/${repo.slug}",
+            // Una carpeta local no tiene owner ni slug: los suyos existen sólo porque la tabla los
+            // pedía, y mostrarlos haría parecer que hay un repositorio remoto detrás.
+            if (repo.localOnly) io.acr.i18n.t("impl.localRepo") + " · " + repo.localPath
+            else "${repo.owner}/${repo.slug}",
             style = MaterialTheme.typography.labelSmall.copy(fontFamily = FontFamily.Monospace),
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )

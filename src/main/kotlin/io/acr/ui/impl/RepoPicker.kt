@@ -53,6 +53,13 @@ fun RepoPicker(
     elegidos: List<ImplRepo>,
     onChange: (List<ImplRepo>) -> Unit,
     sugerirRol: (String) -> RepoRole = { RepoRole.OTHER },
+    /**
+     * Registra una carpeta suelta y devuelve su id, o null si no se pudo.
+     *
+     * Va como parámetro y no resuelto acá adentro porque escribir en la base no es trabajo de un
+     * componente de dibujo, y porque así el picker sigue siendo probable sin una base.
+     */
+    onAddFolder: (() -> String?)? = null,
 ) {
     Column(Modifier.fillMaxWidth()) {
         Text(t("impl.pickRepos"), style = MaterialTheme.typography.labelLarge)
@@ -83,9 +90,13 @@ fun RepoPicker(
                 Text(r.name, style = MaterialTheme.typography.bodySmall)
                 Spacer(Modifier.width(8.dp))
                 Text(
-                    "${r.owner}/${r.slug}",
+                    // Una carpeta no tiene owner ni slug: mostrar "local/-users-viktor-..." sería
+                    // exhibir un dato que sólo existe porque la tabla lo pedía. Va la ruta, que es
+                    // lo único que la identifica de verdad.
+                    if (r.localOnly) r.localPath else "${r.owner}/${r.slug}",
                     style = MaterialTheme.typography.labelSmall.copy(fontFamily = FontFamily.Monospace),
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
                 )
             }
 
@@ -93,6 +104,29 @@ fun RepoPicker(
                 TarjetaRepo(r, puesto) { nuevo ->
                     onChange(elegidos.map { if (it.repoId == r.id) nuevo else it })
                 }
+            }
+        }
+
+        // Una carpeta cualquiera, sin conectar nada.
+        //
+        // Conectar un repositorio pide proveedor, owner, slug y token, y todo eso existe para poder
+        // revisar PRs. Para escribir código no hace falta ninguno: alcanza con saber dónde. Pedirlo
+        // igual convertía "implementá esto en esta carpeta" en un trámite de cinco campos.
+        onAddFolder?.let { agregar ->
+            Spacer(Modifier.height(8.dp))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                TextButton(onClick = {
+                    agregar()?.let { id ->
+                        if (elegidos.none { it.repoId == id }) {
+                            onChange(elegidos + ImplRepo(id, RepoRole.OTHER))
+                        }
+                    }
+                }) { Text(t("impl.useFolder")) }
+                Text(
+                    t("impl.useFolderNote"),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
             }
         }
     }

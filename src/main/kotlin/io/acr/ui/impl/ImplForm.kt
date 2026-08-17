@@ -104,6 +104,17 @@ fun ImplForm(
             // Sólo al dar de alta: en una edición los roles ya los decidió alguien, y volver a
             // sugerir pisaría esa decisión con una adivinanza.
             sugerirRol = if (impl == null) ::adivinarRol else ({ io.acr.impl.RepoRole.OTHER }),
+            onAddFolder = {
+                elegirCarpeta()?.let { ruta ->
+                    val dir = java.io.File(ruta)
+                    // Si no es un repositorio de git se le da uno. El commit por tarea es la red de
+                    // seguridad del módulo entero: sin historial, que la séptima tarea falle se
+                    // lleva puesto el trabajo de las seis anteriores. Inicializar no toca nada de
+                    // lo que ya hay adentro.
+                    kotlinx.coroutines.runBlocking { io.acr.claude.Git.init(dir) }
+                    ctx.repos.createLocal(ruta)
+                }
+            },
         )
 
         // --- La rama nueva ---
@@ -339,6 +350,9 @@ internal fun adivinarRol(nombre: String): io.acr.impl.RepoRole {
         else -> io.acr.impl.RepoRole.OTHER
     }
 }
+
+/** Elegir una carpeta donde escribir el código. */
+internal fun elegirCarpeta(): String? = elegirDocs(carpeta = true)?.firstOrNull()
 
 /**
  * Selector nativo de archivos o carpetas.

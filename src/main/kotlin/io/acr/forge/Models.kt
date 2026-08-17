@@ -23,6 +23,14 @@ data class RepoRecord(
     val autoReview: Boolean = false,
     val skipRules: SkipRules = SkipRules(),
     val replyMode: ReplyMode = ReplyMode.DRAFT,
+    /**
+     * Es una carpeta local y no un repositorio conectado a un proveedor.
+     *
+     * Se puede implementar sobre ella —para escribir código no hace falta ni proveedor ni owner ni
+     * slug, alcanza con saber dónde— pero no hay PRs que revisar, así que las pantallas que hablan
+     * de PRs no la ofrecen.
+     */
+    val localOnly: Boolean = false,
 )
 
 /**

@@ -1177,6 +1177,21 @@ class Store(private val dbPath: Path, val settings: DbSettings = DbSettings()) :
             );--split--
             CREATE INDEX ix_task_context ON task_context(task_id, at)
             """.trimIndent(),
+
+            // v55 — una carpeta también es un lugar donde escribir código.
+            //
+            // Hasta acá, para implementar algo había que conectar el repositorio con su proveedor,
+            // su owner y su slug. Eso tiene sentido para revisar PRs —sin el proveedor no hay PR
+            // que revisar— pero para escribir código no hace falta ninguno de los tres: alcanza con
+            // saber en qué carpeta.
+            //
+            // Se guarda como un repositorio más y no como otra cosa porque *es* lo mismo: una base
+            // de código que la app conoce. Duplicar el concepto habría obligado a que cada tarea,
+            // cada job y cada diff supieran de dos clases de destino. La marca dice que atrás no
+            // hay un proveedor, y con eso alcanza para que las pantallas de PRs no lo ofrezcan.
+            """
+            ALTER TABLE repo ADD COLUMN local_only INTEGER
+            """.trimIndent(),
         )
     }
 }

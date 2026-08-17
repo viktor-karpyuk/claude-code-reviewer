@@ -3,6 +3,27 @@
 Reglas de numeración en [CLAUDE.md](CLAUDE.md): un requerimiento **nuevo** incrementa *major*;
 cambiar uno **existente** incrementa *patch*.
 
+## 70.0.0
+
+**Se puede implementar sobre una carpeta, sin conectar ningún repositorio.** Hasta ahora había que
+dar de alta el repositorio con su proveedor, su owner, su slug y su token — y todo eso existe para
+poder revisar PRs. Para escribir código no hace falta ninguno de los cuatro: alcanza con saber en
+qué carpeta. Pedirlo igual convertía "implementá esto acá" en un trámite de cinco campos, y dejaba
+sin salida a quien todavía no conectó nada: el botón de nueva implementación estaba deshabilitado.
+
+La carpeta se guarda como un repositorio más, porque *es* lo mismo: una base de código que la app
+conoce. Duplicar el concepto habría obligado a que cada tarea, cada job y cada diff supieran de dos
+clases de destino, a cambio de nada. Queda marcada como local, y con eso alcanza para que las
+pantallas que hablan de PRs no la ofrezcan y para que nunca entre en revisión automática.
+
+**Si la carpeta no es un repositorio de git, se le da uno.** El commit por tarea es la red de
+seguridad del módulo entero: sin historial, que la séptima tarea falle se lleva puesto el trabajo de
+las seis anteriores. Inicializar no toca nada de lo que ya había adentro.
+
+Apuntar dos veces a la misma carpeta da el mismo destino. Sin eso, la segunda implementación
+escribiría en "otro" repositorio que en realidad es el mismo, con dos historiales de tareas sobre
+los mismos archivos.
+
 ## 69.0.0
 
 **Un corte ya no es empezar de nuevo.** Hasta ahora, si la app se cerraba con una tarea a mitad de
