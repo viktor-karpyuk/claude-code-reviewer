@@ -972,3 +972,122 @@ class DialectTest {
         )
     }
 }
+
+/**
+ * El plan como grafo y no como fila.
+ *
+ * `depends_on` existía sólo para saber a quién arrastraba una falla; ahora decide qué puede
+ * arrancar. Lo que se prueba acá es el criterio, que es donde están las decisiones: qué se puede
+ * lanzar junto, qué tiene que esperar, y qué pasa con una dependencia que el plan escribió mal.
+ */
+class ImplSchedulerTest {
+
+    private fun repo(id: String) = io.acr.forge.RepoRecord(
+        id = id, name = id, provider = Provider.BITBUCKET, owner = "acme", slug = id,
+        localPath = "/tmp/$id", token = null,
+    )
+
+    private fun tarea(
+        seq: Int,
+        repoId: String,
+        dep: List<Int> = emptyList(),
+        estado: TaskStatus = TaskStatus.PENDING,
+    ) = ImplTask(
+        "t$seq", "i", repoId, seq, "tarea $seq", "", dep, TaskSize.M, 10, estado,
+        null, null, null, null, null, null,
+    )
+
+    private val motor = io.acr.impl.ImplEngine(
+        io.acr.data.ImplRepository(io.acr.data.Store(java.nio.file.Files.createTempDirectory("acr-sch").resolve("x.db"))),
+        io.acr.data.PrefsRepo(io.acr.data.Store(java.nio.file.Files.createTempDirectory("acr-sch2").resolve("y.db"))),
+    )
+
+    private fun listas(todas: List<ImplTask>, repos: List<io.acr.forge.RepoRecord>) =
+        motor.ready(todas, repos.associateBy { it.id }, repos).map { it.seq }
+
+    @Test
+    fun independentTasksInDifferentReposStartTogether() {
+        // Es el caso que hace valer todo esto: el backend y el frontend avanzando a la vez en vez
+        // de uno esperando al otro sin necesitarlo.
+        val be = repo("be")
+        val fe = repo("fe")
+        val todas = listOf(tarea(1, be.id), tarea(2, fe.id))
+        assertEquals(listOf(1, 2), listas(todas, listOf(be, fe)))
+    }
+
+    @Test
+    fun twoTasksInTheSameRepoNeverRunAtOnce() {
+        // Dos modelos escribiendo en el mismo árbol se pisan los archivos, y el commit de una se
+        // llevaría puesto lo que la otra dejó a medias.
+        val be = repo("be")
+        val todas = listOf(tarea(1, be.id), tarea(2, be.id))
+        assertEquals(listOf(1), listas(todas, listOf(be)), "sólo la primera")
+    }
+
+    @Test
+    fun aTaskWaitsForWhatItDependsOn() {
+        val be = repo("be")
+        val fe = repo("fe")
+        // La 2 necesita la 1: aunque esté en otro repositorio, no arranca.
+        val todas = listOf(tarea(1, be.id), tarea(2, fe.id, dep = listOf(1)))
+        assertEquals(listOf(1), listas(todas, listOf(be, fe)))
+
+        // Y en cuanto la 1 está, la 2 se destraba sola.
+        val despues = listOf(tarea(1, be.id, estado = TaskStatus.DONE), tarea(2, fe.id, dep = listOf(1)))
+        assertEquals(listOf(2), listas(despues, listOf(be, fe)))
+    }
+
+    @Test
+    fun oneFinishedTaskCanUnlockAChain() {
+        // X habilita Y, que habilita Z. Cada vuelta destraba la siguiente sin que nadie la empuje.
+        val a = repo("a")
+        val b = repo("b")
+        val c = repo("c")
+        val plan = listOf(tarea(1, a.id), tarea(2, b.id, dep = listOf(1)), tarea(3, c.id, dep = listOf(2)))
+        val repos = listOf(a, b, c)
+        assertEquals(listOf(1), listas(plan, repos))
+
+        val conUna = listOf(plan[0].copy(status = TaskStatus.DONE), plan[1], plan[2])
+        assertEquals(listOf(2), listas(conUna, repos))
+
+        val conDos = listOf(conUna[0], conUna[1].copy(status = TaskStatus.DONE), plan[2])
+        assertEquals(listOf(3), listas(conDos, repos))
+    }
+
+    @Test
+    fun anImpossibleDependencyDoesNotFreezeEverything() {
+        // Una dependencia hacia adelante, o hacia una tarea que no existe, es un error del plan.
+        // Honrarla dejaría la tarea esperando para siempre a algo que nunca va a llegar: una
+        // implementación trabada, sin nada roto y sin nada que decir.
+        val a = repo("a")
+        val haciaAdelante = listOf(tarea(1, a.id, dep = listOf(2)), tarea(2, a.id))
+        assertEquals(listOf(1), listas(haciaAdelante, listOf(a)))
+
+        val inexistente = listOf(tarea(1, a.id, dep = listOf(99)))
+        assertEquals(listOf(1), listas(inexistente, listOf(a)))
+    }
+
+    @Test
+    fun whatIsAlreadyRunningOrDoneIsNotPickedAgain() {
+        val a = repo("a")
+        val b = repo("b")
+        val todas = listOf(
+            tarea(1, a.id, estado = TaskStatus.RUNNING),
+            tarea(2, b.id, estado = TaskStatus.DONE),
+        )
+        assertEquals(emptyList(), listas(todas, listOf(a, b)))
+    }
+
+    @Test
+    fun aBlockedDependencyHoldsItsDependentsWithoutFailingThem() {
+        // Esperar una decisión no es haber fallado. Lo que quedó detrás sigue pendiente, y por eso
+        // la implementación termina en "esperando" y no en "falló".
+        val a = repo("a")
+        val b = repo("b")
+        val todas = listOf(
+            tarea(1, a.id, estado = TaskStatus.BLOCKED),
+            tarea(2, b.id, dep = listOf(1)),
+        )
+        assertEquals(emptyList(), listas(todas, listOf(a, b)))
+    }
+}

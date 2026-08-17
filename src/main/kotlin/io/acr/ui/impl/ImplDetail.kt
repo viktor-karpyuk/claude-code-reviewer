@@ -362,6 +362,22 @@ fun ImplDetail(
                 }
                 Column(Modifier.weight(1f)) {
                     Text(tar.title, style = MaterialTheme.typography.bodySmall)
+                    // Qué la está frenando. Sin esto, una tarea pendiente en medio de otras que
+                    // avanzan parece salteada, y no hay forma de saber que está esperando su turno
+                    // ni a quién.
+                    if (tar.status == io.acr.impl.TaskStatus.PENDING) {
+                        val faltan = tar.dependsOn.filter { d ->
+                            tareas.firstOrNull { it.seq == d }
+                                ?.let { it.status != io.acr.impl.TaskStatus.DONE } == true
+                        }
+                        if (faltan.isNotEmpty()) {
+                            Text(
+                                t("impl.waitingFor", faltan.joinToString(", ") { "#$it" }),
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                    }
                     tar.runningMin()?.let { va ->
                         val est = tar.estimateMin ?: tar.size?.minutes
                         Text(

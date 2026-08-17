@@ -3,6 +3,26 @@
 Reglas de numeración en [CLAUDE.md](CLAUDE.md): un requerimiento **nuevo** incrementa *major*;
 cambiar uno **existente** incrementa *patch*.
 
+## 64.0.0
+
+**El plan ahora es un grafo, no una fila.** Las tareas que no dependen entre sí arrancan a la vez, y
+terminar una destraba en cascada a las que la estaban esperando. `depends_on` ya existía, pero
+servía sólo para saber a quién arrastraba una falla: el orden real era el número de tarea, así que
+la 5 esperaba a la 4 aunque no necesitara nada de ella.
+
+**Una sola tarea por repositorio a la vez.** Dos modelos escribiendo en el mismo árbol de trabajo se
+pisan los archivos, y el commit que la herramienta hace al terminar una se llevaría puesto lo que la
+otra dejó a medias. El paralelismo real aparece cuando la implementación toca varios repositorios
+—el backend y el frontend avanzando juntos— que es justo el caso donde más se nota.
+
+Las dependencias imposibles se ignoran en vez de honrarse: una que apunta a una tarea que no existe,
+o hacia adelante en el plan. Las dos son errores de planificación, y respetarlas dejaría la tarea
+esperando para siempre a algo que nunca va a llegar — una implementación trabada, sin nada roto y
+sin nada que decir.
+
+En la lista, cada tarea pendiente dice qué la está frenando. Sin eso, una tarea quieta en medio de
+otras que avanzan parece salteada.
+
 ## 63.0.0
 
 **Se puede elegir la base de datos: SQLite, PostgreSQL o MySQL.** SQLite sigue siendo la de fábrica
