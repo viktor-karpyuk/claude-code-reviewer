@@ -997,9 +997,13 @@ class ImplSchedulerTest {
         null, null, null, null, null, null,
     )
 
+    private val base = io.acr.data.Store(
+        java.nio.file.Files.createTempDirectory("acr-sch").resolve("x.db"),
+    )
     private val motor = io.acr.impl.ImplEngine(
-        io.acr.data.ImplRepository(io.acr.data.Store(java.nio.file.Files.createTempDirectory("acr-sch").resolve("x.db"))),
-        io.acr.data.PrefsRepo(io.acr.data.Store(java.nio.file.Files.createTempDirectory("acr-sch2").resolve("y.db"))),
+        io.acr.data.ImplRepository(base),
+        io.acr.data.PrefsRepo(base),
+        io.acr.data.JobRepository(base),
     )
 
     private fun listas(todas: List<ImplTask>, repos: List<io.acr.forge.RepoRecord>) =
@@ -1631,5 +1635,189 @@ class GanttProgressTest {
         val b = barra(tarea(TaskStatus.RUNNING, estimado = 10, arranco = vieja))
         assertTrue(b.progress < 1f, "topeada: ${b.progress}")
         assertTrue(b.progress > 0.5f, "pero muy avanzada: ${b.progress}")
+    }
+}
+
+/**
+ * Jobs y contexto: que un corte no sea empezar de nuevo.
+ *
+ * Todo esto existe para contestar dos preguntas después de que la app se muere: **qué había en
+ * marcha** y **desde dónde se puede seguir**. Lo que se prueba acá es que las dos se puedan
+ * contestar sin adivinar.
+ */
+class JobsAndContextTest {
+
+    private fun conImpl(block: (AppContext, String, String) -> Unit) {
+        val dir = java.nio.file.Files.createTempDirectory("acr-jobs")
+        val ctx = AppContext.bootstrap(dir)
+        try {
+            val repoId = ctx.repos.create(
+                "tmp-j-${System.nanoTime()}", Provider.BITBUCKET, "acme", "demo",
+                System.getProperty("java.io.tmpdir"), null, null, null, "", false,
+                io.acr.forge.SkipRules(), io.acr.forge.ReplyMode.OFF,
+            )
+            val implId = ctx.impls.create(
+                listOf(io.acr.impl.ImplRepo(repoId, io.acr.impl.RepoRole.OTHER, null)),
+                "con jobs", listOf("/tmp/x.md"), null,
+            )
+            ctx.impls.savePlan(
+                implId, "r", "rama", "develop", "fable",
+                listOf(
+                    ImplTask(
+                        "", "", repoId, 1, "tarea", "detalle", emptyList(), TaskSize.M, 10,
+                        TaskStatus.PENDING, null, null, null, null, null, null,
+                    ),
+                ),
+            )
+            block(ctx, implId, ctx.impls.tasks(implId).single().id)
+        } finally {
+            ctx.close()
+            dir.toFile().deleteRecursively()
+        }
+    }
+
+    @Test
+    fun aJobWithoutARecentHeartbeatIsDead() = conImpl { ctx, implId, taskId ->
+        // Es la única afirmación que se puede hacer con certeza después de un corte. El estado de
+        // la tarea no sirve: quedó en RUNNING tanto si el proceso vive como si murió.
+        val id = ctx.jobs2.start(io.acr.impl.JobKind.TASK, implId, taskId)
+        val vivo = ctx.jobs2.jobsOf(implId).single { it.id == id }
+        assertTrue(!vivo.stale(), "recién arrancado no está muerto")
+
+        val futuro = java.time.Instant.now().plusSeconds(600)
+        assertTrue(vivo.stale(futuro), "diez minutos sin latir sí lo está")
+    }
+
+    @Test
+    fun theSweepClosesTheCorpsesAsInterruptedAndNotAsFailed() = conImpl { ctx, implId, taskId ->
+        // Fallar es que se intentó y salió mal —hay algo para leer y decidir—; interrumpirse es
+        // que nadie lo terminó. Mezclarlos haría buscar un error que no existe y, peor, haría
+        // descartar trabajo que estaba bien encaminado.
+        val id = ctx.jobs2.start(io.acr.impl.JobKind.TASK, implId, taskId)
+        // Se envejece el latido a mano: esperar dos minutos en un test no prueba nada más.
+        ctx.store.stmt("UPDATE job SET heartbeat_at = ? WHERE id = ?") { ps ->
+            ps.setString(1, java.time.Instant.now().minusSeconds(600).toString())
+            ps.setString(2, id)
+            ps.executeUpdate()
+        }
+
+        val cerrados = ctx.jobs2.sweepInterrupted()
+        assertEquals(1, cerrados.size)
+        assertEquals(
+            io.acr.impl.JobState.INTERRUPTED,
+            ctx.jobs2.jobsOf(implId).single { it.id == id }.state,
+        )
+        assertTrue(
+            ctx.jobs2.contextOf(taskId).any { it.kind == io.acr.impl.ContextKind.INTERRUPT },
+            "y queda anotado en el contexto: el próximo intento tiene que saber que hubo un corte",
+        )
+    }
+
+    @Test
+    fun theSessionIsSavedAsSoonAsItIsAnnounced() = conImpl { ctx, implId, taskId ->
+        // Guardarla al final significaría no tenerla nunca en el único caso donde importa: cuando
+        // el proceso no llegó al final.
+        val id = ctx.jobs2.start(io.acr.impl.JobKind.TASK, implId, taskId)
+        ctx.jobs2.attachSession(id, "sess-abc", 1234L)
+        val j = ctx.jobs2.jobsOf(implId).single { it.id == id }
+        assertEquals("sess-abc", j.sessionId)
+        assertEquals(1234L, j.pid)
+
+        // Y no se pisa con null cuando después sólo se anota el pid.
+        ctx.jobs2.attachSession(id, null, 5678L)
+        assertEquals("sess-abc", ctx.jobs2.jobsOf(implId).single { it.id == id }.sessionId)
+    }
+
+    @Test
+    fun theContextRecordsFactsAndDoesNotRepeatFiles() = conImpl { ctx, _, taskId ->
+        // Una tarea que edita el mismo archivo veinte veces tiene que aparecer una vez, o la lista
+        // deja de ser legible justo cuando más hace falta.
+        ctx.jobs2.add(taskId, null, io.acr.impl.ContextKind.FILE, "src/A.kt")
+        ctx.jobs2.add(taskId, null, io.acr.impl.ContextKind.FILE, "src/A.kt")
+        ctx.jobs2.add(taskId, null, io.acr.impl.ContextKind.FILE, "src/B.kt")
+        // Los comandos sí se repiten: correr los tests tres veces es información, no ruido.
+        ctx.jobs2.add(taskId, null, io.acr.impl.ContextKind.CMD, "./gradlew test")
+        ctx.jobs2.add(taskId, null, io.acr.impl.ContextKind.CMD, "./gradlew test")
+
+        val c = ctx.jobs2.contextOf(taskId)
+        assertEquals(2, c.count { it.kind == io.acr.impl.ContextKind.FILE })
+        assertEquals(2, c.count { it.kind == io.acr.impl.ContextKind.CMD })
+    }
+
+    @Test
+    fun theRenderedContextLeadsWithTheFilesAlreadyTouched() {
+        // Es la pregunta más importante para el que retoma: "¿qué hay ya modificado?". Si eso no
+        // está arriba, el modelo reescribe desde cero lo que estaba a mitad de camino.
+        val e = { k: io.acr.impl.ContextKind, t: String ->
+            io.acr.impl.ContextEntry("i", "t", null, k, t, "2026-01-01T00:00:00Z")
+        }
+        val texto = io.acr.impl.renderContext(
+            listOf(
+                e(io.acr.impl.ContextKind.CMD, "./gradlew build"),
+                e(io.acr.impl.ContextKind.FILE, "src/A.kt"),
+                e(io.acr.impl.ContextKind.INTERRUPT, "se cortó"),
+            ),
+        )!!
+        assertTrue(texto.indexOf("src/A.kt") < texto.indexOf("./gradlew build"), texto)
+        assertTrue(texto.contains("se cortó"))
+    }
+
+    @Test
+    fun anEmptyContextRendersToNothingAtAll() {
+        // Un bloque vacío en el prompt ocupa lugar y le sugiere al modelo que hubo un intento
+        // previo que no dejó nada, que es distinto de no haber habido ninguno.
+        assertEquals(null, io.acr.impl.renderContext(emptyList()))
+    }
+
+    @Test
+    fun replanningThrowsAwayTheContextOfTheOldTasks() = conImpl { ctx, implId, taskId ->
+        // El contexto describe un trabajo que el plan nuevo ya no pide. Arrastrarlo haría que el
+        // próximo intento crea que hay avance sobre algo distinto.
+        ctx.jobs2.add(taskId, null, io.acr.impl.ContextKind.FILE, "src/Viejo.kt")
+        assertTrue(ctx.jobs2.contextOf(taskId).isNotEmpty())
+
+        ctx.impls.savePlan(
+            implId, "otro", "rama", "develop", "fable",
+            listOf(
+                ImplTask(
+                    "", "", null, 1, "tarea nueva", "", emptyList(), TaskSize.M, 10,
+                    TaskStatus.PENDING, null, null, null, null, null, null,
+                ),
+            ),
+        )
+        assertTrue(ctx.jobs2.contextOf(taskId).isEmpty(), "no queda colgado del plan viejo")
+    }
+
+    @Test
+    fun thePromptSaysThisWasAlreadyStartedInsteadOfActingLikeItIsNew() {
+        // Sin decirlo, el modelo reescribe desde cero archivos que ya estaban a mitad de camino y
+        // pisa lo que había quedado bien.
+        val t = ImplTask(
+            "t", "i", null, 1, "tarea", "detalle", emptyList(), TaskSize.M, 10,
+            TaskStatus.PENDING, null, null, null, null, null, null,
+        )
+        val p = io.acr.impl.ImplPrompt.task(
+            t, listOf(t), emptyList(), null, "español",
+            context = "Archivos que ya tocaste:\n  - src/A.kt",
+            dirty = listOf("src/A.kt"),
+        )
+        assertTrue(p.contains("ESTA TAREA YA SE EMPEZÓ"))
+        assertTrue(p.contains("No arranques de cero"))
+        assertTrue(p.contains("src/A.kt"))
+        assertTrue(
+            p.contains("tu propio trabajo a medio hacer"),
+            "los cambios sin commitear son suyos, no de otro: sin decirlo, el modelo los trata " +
+                "como cambios ajenos que hay que respetar o revertir",
+        )
+    }
+
+    @Test
+    fun aFreshTaskGetsNoResumeBlock() {
+        val t = ImplTask(
+            "t", "i", null, 1, "tarea", "detalle", emptyList(), TaskSize.M, 10,
+            TaskStatus.PENDING, null, null, null, null, null, null,
+        )
+        val p = io.acr.impl.ImplPrompt.task(t, listOf(t), emptyList(), null, "español")
+        assertTrue(!p.contains("ESTA TAREA YA SE EMPEZÓ"))
     }
 }

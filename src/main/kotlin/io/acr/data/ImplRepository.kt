@@ -161,6 +161,14 @@ class ImplRepository(private val store: Store) {
         tasks: List<ImplTask>,
     ) {
         store.transaction { conn ->
+            // El contexto de las tareas que se van también se va: describe un trabajo que el plan
+            // nuevo ya no pide, y dejarlo colgado haría que un intento futuro crea que hay avance
+            // sobre algo distinto. Va primero, mientras las tareas todavía existen para poder
+            // encontrarlo.
+            conn.prepareStatement(
+                """DELETE FROM task_context WHERE task_id IN
+                     (SELECT id FROM impl_task WHERE impl_id = ?)""",
+            ).use { ps -> ps.setString(1, implId); ps.executeUpdate() }
             conn.prepareStatement("DELETE FROM impl_task WHERE impl_id = ?").use { ps ->
                 ps.setString(1, implId); ps.executeUpdate()
             }

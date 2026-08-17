@@ -219,6 +219,16 @@ object ImplPrompt {
         language: String,
         /** Preguntas ya contestadas: pregunta y respuesta. No se vuelven a preguntar. */
         decided: List<Pair<String, String>> = emptyList(),
+        /**
+         * Lo que quedó de un intento anterior de esta misma tarea.
+         *
+         * Null la primera vez. Con valor, esto no es una tarea nueva: es una que se cortó y hay que
+         * seguirla. La diferencia importa más de lo que parece — sin decirlo, el modelo reescribe
+         * desde cero archivos que ya estaban a mitad de camino y pisa lo que había quedado bien.
+         */
+        context: String? = null,
+        /** Los archivos que el intento anterior dejó modificados en el árbol. */
+        dirty: List<String>? = null,
     ): String = """
         Sos un desarrollador senior implementando UNA tarea de un plan. Trabajás sobre el
         repositorio en el que estás parado y podés leer, escribir archivos y correr comandos.
@@ -253,6 +263,25 @@ object ImplPrompt {
         ${decided.takeIf { it.isNotEmpty() }?.let { d ->
         "DECISIONES YA TOMADAS\nSe preguntaron y se contestaron. Mandan sobre todo lo demás y no se " +
             "vuelven a preguntar:\n" + d.joinToString("\n") { "- ${it.first}\n  → ${it.second}" }
+    }.orEmpty()}
+
+        ${context?.takeIf { it.isNotBlank() }?.let { c ->
+        """
+        ESTA TAREA YA SE EMPEZÓ
+        Un intento anterior se cortó antes de terminar. **No arranques de cero**: lo de abajo ya
+        está hecho, y rehacerlo pisa trabajo que estaba bien.
+
+        $c
+
+        ${dirty?.takeIf { it.isNotEmpty() }?.let { d ->
+            "En el árbol de trabajo hay cambios sin commitear, de ese intento:\n" +
+                d.joinToString("\n") { "  - $it" } +
+                "\nMiralos antes de escribir: son tu propio trabajo a medio hacer, no de otro."
+        }.orEmpty()}
+
+        Empezá por verificar en qué estado quedó de verdad —leé los archivos, corré la compilación—
+        y seguí desde ahí. Lo que ya esté bien, dejalo.
+        """
     }.orEmpty()}
 
         CUÁNDO PARAR A PREGUNTAR

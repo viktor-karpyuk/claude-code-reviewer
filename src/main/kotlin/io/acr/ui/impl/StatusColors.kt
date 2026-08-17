@@ -24,8 +24,8 @@ object StatusColors {
     /** Salió bien. */
     val DONE = Color(0xFF2E9E63)
 
-    /** Está pasando ahora. */
-    val RUNNING = Color(0xFF2F80ED)
+    /** Está pasando ahora. Celeste y no azul oscuro: tiene que separarse del verde de un vistazo. */
+    val RUNNING = Color(0xFF3FA9F5)
 
     /** Se rompió. */
     val FAILED = Color(0xFFD64545)

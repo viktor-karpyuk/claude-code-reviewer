@@ -155,6 +155,26 @@ fun TaskDetailScreen(
                     Spacer(Modifier.height(18.dp))
                 }
 
+                // El contexto acumulado: lo que de verdad pasó, observado mientras pasaba.
+                //
+                // Es distinto de "qué hizo", que es lo que el modelo cuenta al final. Esto se
+                // escribe mientras corre, así que existe incluso cuando la tarea se cortó y no
+                // llegó a contar nada — que es justamente cuando hace falta.
+                val contexto = io.acr.ui.dbState(task.id, task.updatedAt, initial = emptyList<io.acr.impl.ContextEntry>()) {
+                    ctx.jobs2.contextOf(task.id)
+                }
+                if (contexto.isNotEmpty()) {
+                    Seccion(t("impl.context"))
+                    Text(
+                        t("impl.contextNote"),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Spacer(Modifier.height(6.dp))
+                    contexto.forEach { e -> ContextoFila(e) }
+                    Spacer(Modifier.height(18.dp))
+                }
+
                 task.result?.takeIf { it.isNotBlank() }?.let {
                     Seccion(t("impl.whatItDid"))
                     Text(it, style = MaterialTheme.typography.bodyMedium)
@@ -763,3 +783,38 @@ private fun Tramo(texto: String?) {
 
 private fun instante(iso: String): java.time.Instant? =
     runCatching { java.time.Instant.parse(iso) }.getOrNull()
+
+/**
+ * Una entrada del contexto, con su marca según de qué habla.
+ *
+ * Las marcas separan lo que se lee distinto: un archivo tocado se barre, un corte se lee. Sin
+ * distinguirlas, treinta renglones iguales esconden el único que explica por qué la tarea está
+ * donde está.
+ */
+@Composable
+private fun ContextoFila(e: io.acr.impl.ContextEntry) {
+    val (marca, color) = when (e.kind) {
+        io.acr.impl.ContextKind.FILE -> "✎" to MaterialTheme.colorScheme.onSurfaceVariant
+        io.acr.impl.ContextKind.CMD -> "$" to MaterialTheme.colorScheme.onSurfaceVariant
+        io.acr.impl.ContextKind.STEP -> "✓" to StatusColors.DONE
+        io.acr.impl.ContextKind.DECISION -> "◆" to StatusColors.NEEDS_HUMAN
+        io.acr.impl.ContextKind.INTERRUPT -> "⏸" to StatusColors.NEEDS_HUMAN
+        io.acr.impl.ContextKind.RESUME -> "↻" to StatusColors.RUNNING
+        io.acr.impl.ContextKind.NOTE -> "·" to MaterialTheme.colorScheme.onSurfaceVariant
+    }
+    Row(Modifier.fillMaxWidth().padding(vertical = 1.dp)) {
+        Text(marca, color = color, style = MaterialTheme.typography.labelSmall, modifier = Modifier.width(18.dp))
+        Text(
+            e.text,
+            style = MaterialTheme.typography.labelSmall.copy(
+                fontFamily = if (e.kind == io.acr.impl.ContextKind.FILE || e.kind == io.acr.impl.ContextKind.CMD) {
+                    androidx.compose.ui.text.font.FontFamily.Monospace
+                } else {
+                    androidx.compose.ui.text.font.FontFamily.Default
+                },
+            ),
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.weight(1f),
+        )
+    }
+}

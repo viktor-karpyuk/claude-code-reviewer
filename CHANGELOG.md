@@ -3,6 +3,46 @@
 Reglas de numeración en [CLAUDE.md](CLAUDE.md): un requerimiento **nuevo** incrementa *major*;
 cambiar uno **existente** incrementa *patch*.
 
+## 69.0.0
+
+**Un corte ya no es empezar de nuevo.** Hasta ahora, si la app se cerraba con una tarea a mitad de
+camino, ese trabajo se perdía: el proceso moría con la app, la tarea quedaba marcada como corriendo
+para siempre, y el próximo intento arrancaba desde cero sobre un árbol con archivos a medio
+escribir.
+
+Hay tres piezas, y cada una existe por una razón distinta.
+
+**Los jobs.** Una tarea es una unidad del plan; un job es una unidad de ejecución. Hacen falta las
+dos porque con el estado de la tarea sola no se puede contestar la única pregunta que importa
+después de un corte: *lo que figura corriendo, ¿está vivo o es un cadáver?* La tarea quedó en
+"corriendo" en los dos casos. **El job late** cada veinte segundos, y un job que dice correr sin
+latido reciente está muerto — eso sí se puede afirmar sin adivinar. Al abrir la app, los cadáveres
+se cierran como **interrumpidos**, que no es lo mismo que fallidos: fallar es que se intentó y salió
+mal, interrumpirse es que nadie lo terminó. Mezclarlos haría buscar un error que no existe y, peor,
+haría descartar trabajo que estaba bien encaminado.
+
+**El contexto de cada tarea.** Hechos observados mientras la tarea corre —qué archivo tocó, qué
+comando ejecutó, qué paso cerró—, una fila por hecho, sólo se agrega. Se guardan hechos y no un
+resumen porque el resumen sólo llega al final, y en el único caso que importa no llega nunca. Y sólo
+se agrega porque un blob mutable puede quedar escrito a medias cuando el proceso muere, sin forma de
+distinguir uno truncado de uno real; una fila se escribe entera o no se escribe.
+
+**La sesión del CLI.** Se anota apenas el CLI la anuncia, en el primer evento. Las sesiones de
+Claude Code viven en disco, así que una que se cortó se puede **reanudar de verdad** con `--resume`:
+el modelo recupera todo lo que ya había razonado, no un resumen de lo que hizo. Si la sesión no
+está, el intento nuevo arranca con el contexto acumulado y con la lista de archivos que quedaron sin
+commitear, avisándole que **son su propio trabajo a medio hacer**, no cambios ajenos que haya que
+respetar o revertir.
+
+**Una sección nueva, Trabajos**, para ver qué hay corriendo en toda la app: primero lo vivo, después
+lo que se quedó sin latir —que es lo único que pide una decisión—, después lo cerrado. Con la edad
+del latido en vez de la hora, porque lo que se decide mirando esto es si hay que hacer algo ahora.
+
+Y en el detalle de una tarea, el contexto acumulado se ve entero. Es distinto de "qué hizo": eso lo
+cuenta el modelo al final, y esto se escribe mientras pasa.
+
+El azul de "corriendo" pasó a celeste, para separarse del verde de un vistazo.
+
 ## 68.0.0
 
 **El Gantt es ahora un gráfico de verdad, y vive arriba de la tabla de tareas.** Sale de las mismas

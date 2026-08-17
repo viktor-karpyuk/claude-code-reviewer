@@ -18,6 +18,15 @@ sealed interface Selection {
 
     /** Implementaciones: de las specs al código. */
     data object Impls : Selection
+
+    /**
+     * Los trabajos en curso, de toda la app.
+     *
+     * Aparte de las implementaciones porque la pregunta que contesta es transversal: "¿qué hay
+     * corriendo?" no se hace parado adentro de una implementación, se hace justamente cuando no se
+     * sabe cuál mirar.
+     */
+    data object Jobs : Selection
     data class Repo(val repoId: String) : Selection
     data class Review(val repoId: String, val prId: Long) : Selection
 

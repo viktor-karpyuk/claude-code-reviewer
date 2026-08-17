@@ -165,6 +165,21 @@ object Git {
     }
 
     /** ¿Hay cambios sin commitear? Escribir encima de trabajo ajeno se los llevaría en el commit. */
+    /**
+     * Los archivos con cambios sin commitear.
+     *
+     * Es lo que un intento interrumpido dejó en el árbol. Decirle al que retoma cuáles son es la
+     * diferencia entre seguir y volver a empezar: sin eso, el modelo reescribe desde cero archivos
+     * que ya estaban a mitad de camino, y lo que había quedado bien se pierde.
+     */
+    suspend fun dirtyFiles(dir: File): List<String> = runCatching {
+        runRaw(dir, listOf("git", "status", "--porcelain")).output
+            .lines()
+            .mapNotNull { l -> l.takeIf { it.length > 3 }?.substring(3)?.trim() }
+            .filter { it.isNotBlank() }
+            .take(60)
+    }.getOrDefault(emptyList())
+
     suspend fun isDirty(dir: File): Boolean = withContext(Dispatchers.IO) {
         run(dir, listOf("git", "status", "--porcelain")).output.isNotBlank()
     }

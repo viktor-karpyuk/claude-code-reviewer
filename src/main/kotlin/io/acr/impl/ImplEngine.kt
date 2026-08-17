@@ -6,6 +6,8 @@ import io.acr.data.ImplRepository
 import io.acr.data.PrefsRepo
 import io.acr.forge.RepoRecord
 import kotlinx.coroutines.async
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.update
@@ -47,6 +49,13 @@ data class ImplProgress(
 class ImplEngine(
     private val impls: ImplRepository,
     private val prefs: PrefsRepo,
+    /**
+     * Los jobs y el contexto: lo que sobrevive a que la app se muera.
+     *
+     * El motor guarda su estado en memoria —qué corre, qué se canceló— y eso desaparece con el
+     * proceso. Todo lo que hace falta para retomar pasa por acá.
+     */
+    private val jobs: io.acr.data.JobRepository,
 ) {
 
     private val _progress = MutableStateFlow<Map<String, ImplProgress>>(emptyMap())
@@ -70,6 +79,46 @@ class ImplEngine(
         const val PLAN_MODEL = "fable"
         const val CODE_MODEL = "opus"
     }
+
+    /**
+     * Late mientras el bloque corre.
+     *
+     * Es lo único que distingue después un job vivo de un cadáver. Cada veinte segundos: más
+     * seguido serían escrituras por nada —una tarea dura minutos— y más espaciado alargaría el
+     * tiempo que un job muerto sigue pareciendo vivo, que es justo la ventana en la que alguien
+     * puede lanzar un segundo intento sobre trabajo que todavía está en marcha.
+     */
+    private suspend fun <T> latiendo(jobId: String, block: suspend () -> T): T =
+        kotlinx.coroutines.coroutineScope {
+            val pulso = launch {
+                while (true) {
+                    delay(20_000)
+                    runCatching { jobs.beat(jobId) }
+                }
+            }
+            try {
+                block()
+            } finally {
+                pulso.cancel()
+            }
+        }
+
+    /**
+     * Traduce un evento del CLI a un hecho del contexto, o null si no aporta.
+     *
+     * Se guardan hechos observados y no el resumen del modelo porque el resumen sólo llega al
+     * final, y en el único caso que importa —el proceso se murió a la mitad— no llega nunca. Qué
+     * archivo tocó y qué comando corrió sí se sabe mientras pasa.
+     */
+    private fun aContexto(evt: io.acr.claude.ClaudeEvent): Pair<ContextKind, String>? =
+        (evt as? io.acr.claude.ClaudeEvent.ToolUse)?.let { u ->
+            val detalle = u.detail.trim().takeIf { it.isNotBlank() } ?: return null
+            when (u.tool) {
+                "Write", "Edit", "NotebookEdit" -> ContextKind.FILE to detalle.take(200)
+                "Bash" -> ContextKind.CMD to detalle.take(200)
+                else -> null
+            }
+        }
 
     private fun log(implId: String, linea: String) {
         _progress.update { m ->
@@ -243,6 +292,10 @@ class ImplEngine(
         }
 
         cancelled.remove(implId)
+        // El job de la implementación: el padre del que cuelgan los de cada tarea. Es lo que se
+        // arranca y se pausa cuando se arranca y se pausa la implementación, y lo que después
+        // permite preguntar "¿qué había en marcha?" sin recorrer tarea por tarea.
+        val jobImpl = jobs.start(JobKind.IMPL, implId, workDir = repos.firstOrNull()?.localPath)
         // Retomar tiene que reintentar lo que falló. El motor sólo toma tareas pendientes, así que
         // sin esto una implementación fallida se retomaba, no hacía nada, y volvía a terminar
         // mostrando el mismo error —que además ya no describía nada actual—.
@@ -361,7 +414,7 @@ class ImplEngine(
                         async {
                             runTask(
                                 implId, tarea, todas, porId, repos, docs, impl.extraPrompt,
-                                idioma, modelo, binario, reintentadas,
+                                idioma, modelo, binario, reintentadas, jobImpl,
                                 revisar = if (!impl.reviewEach) {
                                     null
                                 } else {
@@ -382,7 +435,13 @@ class ImplEngine(
             }
         }.onFailure {
             running.keys.filter { it.startsWith("$implId#") }.forEach { running.remove(it) }
+            jobs.finish(jobImpl, JobState.FAILED, it.message)
             impls.setStatus(implId, ImplStatus.FAILED, it.message)
+        }.onSuccess {
+            jobs.finish(
+                jobImpl,
+                if (implId in cancelled) JobState.PAUSED else JobState.DONE,
+            )
         }.map { }
             .also { clear(implId) }
     }
@@ -445,6 +504,8 @@ class ImplEngine(
         modelo: String,
         binario: String,
         reintentadas: MutableSet<String>,
+        /** El job de la implementación, del que este cuelga. */
+        jobPadre: String?,
         /** Si hay que revisar apenas termina esta tarea, y con cuántas pasadas. */
         revisar: Triple<Int, Int, String>? = null,
     ): Double {
@@ -452,8 +513,34 @@ class ImplEngine(
         val dir = File(repoTarea.localPath)
         val clave = "$implId#${tarea.id}"
 
+        // Lo que quedó de intentos anteriores. Un intento que se cortó dejó archivos modificados y
+        // decisiones tomadas: arrancar de cero sobre eso produce trabajo duplicado y, peor, código
+        // que pisa lo que ya estaba bien.
+        val previos = jobs.contextOf(tarea.id)
+        val anterior = jobs.lastOf(tarea.id)
+        // Sólo se reanuda una sesión que se cortó, no una que terminó: la que llegó al final ya
+        // dijo lo suyo, y reanudarla la haría continuar un trabajo que para ella está hecho.
+        val sesion = anterior?.takeIf { it.state == JobState.INTERRUPTED }?.sessionId
+        val intentoNro = (anterior?.attempt ?: 0) + 1
+
+        val jobId = jobs.start(
+            JobKind.TASK, implId, tarea.id, parentId = jobPadre, workDir = repoTarea.localPath,
+            attempt = intentoNro,
+        )
+        if (intentoNro > 1) {
+            jobs.add(
+                tarea.id, jobId, ContextKind.RESUME,
+                if (sesion != null) "Intento $intentoNro, reanudando la sesión anterior."
+                else "Intento $intentoNro, desde el contexto acumulado.",
+            )
+        }
+
         impls.startTask(tarea.id)
-        log(implId, "▶ ${tarea.seq}/${todas.size} [${repoTarea.name}] ${tarea.title}")
+        log(
+            implId,
+            "▶ ${tarea.seq}/${todas.size} [${repoTarea.name}] ${tarea.title}" +
+                if (sesion != null) "  (retomando)" else "",
+        )
 
         val prompt = ImplPrompt.task(
             tarea, todas, docs, extra, idioma,
@@ -462,28 +549,62 @@ class ImplEngine(
             decided = impls.questions(implId)
                 .filter { !it.answer.isNullOrBlank() }
                 .map { it.question to it.answer!! },
+            // Y lo que quedó del intento anterior, cuando lo hubo. Con la sesión reanudada esto es
+            // redundante pero inofensivo; sin ella es lo único que evita empezar de cero.
+            context = renderContext(previos),
+            dirty = if (previos.isEmpty()) null else runCatching { Git.dirtyFiles(dir) }.getOrNull(),
         )
         // Se guarda antes de correr: si la tarea revienta a mitad de camino, el prompt es justo lo
         // que hace falta para entender por qué.
         impls.savePrompt(tarea.id, prompt)
 
         val intento = runCatching {
-            ClaudeCli.run(
-                binary = binario,
-                workDir = dir,
-                prompt = prompt,
-                model = modelo,
-                allowedTools = ImplPrompt.WRITE_TOOLS,
-                disallowedTools = ImplPrompt.DENIED_TOOLS,
-                jsonSchema = ImplPrompt.TASK_SCHEMA,
-                register = { running[clave] = it },
-                onEvent = { evt -> resumir(evt)?.let { log(implId, it) } },
-            )
+            latiendo(jobId) {
+                ClaudeCli.run(
+                    binary = binario,
+                    workDir = dir,
+                    prompt = prompt,
+                    model = modelo,
+                    allowedTools = ImplPrompt.WRITE_TOOLS,
+                    disallowedTools = ImplPrompt.DENIED_TOOLS,
+                    jsonSchema = ImplPrompt.TASK_SCHEMA,
+                    resumeSession = sesion,
+                    register = { p ->
+                        running[clave] = p
+                        // El pid se anota apenas existe: si la app muere, es lo que permite saber
+                        // después si aquel proceso sigue vivo en el sistema.
+                        jobs.attachSession(jobId, null, runCatching { p.pid() }.getOrNull())
+                    },
+                    onEvent = { evt ->
+                        resumir(evt)?.let { log(implId, it) }
+                        // La sesión se anota en cuanto el CLI la anuncia, que es en el primer
+                        // evento. Guardarla al final significaría no tenerla nunca justo cuando
+                        // hace falta: cuando el proceso no llegó al final.
+                        (evt as? io.acr.claude.ClaudeEvent.Started)?.let {
+                            jobs.attachSession(jobId, it.sessionId, null)
+                        }
+                        aContexto(evt)?.let { (k, texto) -> jobs.add(tarea.id, jobId, k, texto) }
+                    },
+                )
+            }
         }
         running.remove(clave)
         val res = intento.getOrNull()
         if (res == null) {
             val e = intento.exceptionOrNull()
+            // Cancelada por una persona no es lo mismo que rota: la sesión sigue siendo válida y
+            // el próximo arranque la reanuda. Marcarla fallida tiraría esa posibilidad.
+            val cancelada = implId in cancelled
+            jobs.finish(
+                jobId,
+                if (cancelada) JobState.INTERRUPTED else JobState.FAILED,
+                e?.message,
+            )
+            if (cancelada) {
+                jobs.add(tarea.id, jobId, ContextKind.INTERRUPT, "Frenada a mano durante el intento $intentoNro.")
+                impls.resetTask(tarea.id)
+                return 0.0
+            }
             if (tarea.id !in reintentadas) {
                 reintentadas += tarea.id
                 impls.resetTask(tarea.id)
@@ -496,6 +617,7 @@ class ImplEngine(
         }
 
         if (!res.ok) {
+            jobs.finish(jobId, JobState.FAILED, res.stderr.take(500))
             // Un reintento antes de darla por perdida. Corriendo sin nadie mirando, una caída
             // pasajera —el proceso muere, el modelo devuelve vacío— frenaría la implementación
             // entera hasta que alguien la mire, que es justo lo que no puede pasar. Uno solo: si
@@ -524,6 +646,10 @@ class ImplEngine(
                 p?.options.orEmpty(),
             )
             impls.blockTask(tarea.id, p?.question ?: salida.summary)
+            // Bloqueada es un final legítimo del job, no un fallo. Y la sesión se conserva: cuando
+            // alguien conteste, el próximo intento la reanuda y el modelo no vuelve a leer todo.
+            jobs.finish(jobId, JobState.PAUSED)
+            jobs.add(tarea.id, jobId, ContextKind.NOTE, "Frenó a preguntar: ${(p?.question ?: "").take(300)}")
             log(implId, "⏸ ${tarea.seq}. espera una decisión: ${(p?.question ?: "").take(140)}")
             // Lo que haya quedado a medias no se commitea: la tarea no terminó.
             return res.costUsd ?: 0.0
@@ -552,6 +678,7 @@ class ImplEngine(
                 // Un paso del que no dijo nada queda sin hacer, no hecho: dar por bueno lo que
                 // nadie confirmó es exactamente lo que hace inútil una lista de pasos.
                 impls.finishStep(paso.id, done = r?.second ?: false, note = r?.third)
+                if (r?.second == true) jobs.add(tarea.id, jobId, ContextKind.STEP, paso.title)
             }
             val hechos = tarea.steps.count { p -> reportados[p.seq]?.second == true }
             if (hechos < tarea.steps.size) {
@@ -576,6 +703,9 @@ class ImplEngine(
                 )
             },
         )
+        jobs.finish(jobId, JobState.DONE)
+        jobs.add(tarea.id, jobId, ContextKind.NOTE, salida.summary.take(400))
+        sha?.let { jobs.add(tarea.id, jobId, ContextKind.NOTE, "Commiteado en ${it.take(7)}.") }
         log(implId, "✓ ${tarea.seq}. ${tarea.title}${sha?.let { " · ${it.take(7)}" }.orEmpty()}")
 
         // Revisar acá, apenas terminó, y no sólo al final: un bug que sobrevive cinco tareas ya

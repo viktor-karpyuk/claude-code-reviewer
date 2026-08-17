@@ -88,6 +88,14 @@ object ClaudeCli {
         disallowedTools: List<String>,
         jsonSchema: String? = null,
         timeoutMinutes: Long = 20,
+        /**
+         * Reanudar una sesión anterior en vez de empezar una nueva.
+         *
+         * Las sesiones de Claude Code viven en disco, así que una que quedó a medias por un corte
+         * se puede retomar: el modelo recupera todo lo que ya había razonado, no un resumen de lo
+         * que hizo. Es la diferencia entre seguir y volver a empezar con más información.
+         */
+        resumeSession: String? = null,
         register: (Process) -> Unit = {},
         onEvent: (ClaudeEvent) -> Unit = {},
     ): ClaudeResult = withContext(Dispatchers.IO) {
@@ -106,6 +114,7 @@ object ClaudeCli {
             if (allowedTools.isNotEmpty()) { add("--allowedTools"); addAll(allowedTools) }
             if (disallowedTools.isNotEmpty()) { add("--disallowedTools"); addAll(disallowedTools) }
             if (!model.isNullOrBlank()) { add("--model"); add(model) }
+            if (!resumeSession.isNullOrBlank()) { add("--resume"); add(resumeSession) }
             // El CLI valida contra el esquema y reintenta solo si el modelo se desvía.
             if (!jsonSchema.isNullOrBlank()) { add("--json-schema"); add(jsonSchema) }
         }

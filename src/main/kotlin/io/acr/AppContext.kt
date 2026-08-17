@@ -53,6 +53,7 @@ class AppContext private constructor(
     val jira: io.acr.data.JiraRepository,
     val jiraSites: io.acr.data.JiraSiteRepository,
     val impls: io.acr.data.ImplRepository,
+    val jobs2: io.acr.data.JobRepository,
     val implEngine: io.acr.impl.ImplEngine,
     /** Dónde viven la base y la clave. La pantalla de la base lo necesita para poder mudarse. */
     val dataDir: Path,
@@ -150,13 +151,20 @@ class AppContext private constructor(
             val jira = io.acr.data.JiraRepository(store)
             val jiraSites = io.acr.data.JiraSiteRepository(store, secrets)
             val impls = io.acr.data.ImplRepository(store)
+            val jobsRepo = io.acr.data.JobRepository(store)
             val statsCollector = io.acr.stats.StatsCollector(persons, commitStats)
             val replies = ReplyRepository(store)
             val seenPrs = io.acr.data.SeenPrRepository(store)
             val prCache = io.acr.data.PrCacheRepository(store)
             val prLoader = io.acr.forge.PrLoader(prCache)
             val prefs = PrefsRepo(store)
-            val implEngine = io.acr.impl.ImplEngine(impls, prefs)
+            val implEngine = io.acr.impl.ImplEngine(impls, prefs, jobsRepo)
+            // Lo que quedó marcado como corriendo de una sesión anterior no puede seguir figurando
+            // vivo: el estado del motor es en memoria y esos procesos murieron con la app. Se
+            // cierran como interrumpidos —no como fallidos— y su contexto queda intacto para que
+            // el próximo intento siga desde ahí en vez de empezar de nuevo.
+            val interrumpidos = runCatching { jobsRepo.sweepInterrupted() }.getOrDefault(emptyList())
+            interrumpidos.mapNotNull { it.taskId }.distinct().forEach { impls.resetTask(it) }
             // Ninguna review de una corrida anterior puede seguir viva: el estado del motor es
             // en memoria. Sin esto quedan como "corriendo" para siempre en el panel.
             //
@@ -175,7 +183,7 @@ class AppContext private constructor(
                 jiraIssues = { repoId, prId -> jira.issuesOf(repoId, prId) },
             )
             val auto = AutoReviewer(repos, reviews, prefs, engine, notifier, replies, seenPrs, prLoader, findings, approvals, jobs)
-            return AppContext(store, repos, reviews, publications, comments, notes, findings, approvals, jobs, guidelines, replies, seenPrs, prCache, prLoader, prefs, engine, auto, notifier, persons, commitStats, statsCollector, reviewStats, prStats, prHistory, rework, health, jira, jiraSites, impls, implEngine, dir, secrets, fallo)
+            return AppContext(store, repos, reviews, publications, comments, notes, findings, approvals, jobs, guidelines, replies, seenPrs, prCache, prLoader, prefs, engine, auto, notifier, persons, commitStats, statsCollector, reviewStats, prStats, prHistory, rework, health, jira, jiraSites, impls, jobsRepo, implEngine, dir, secrets, fallo)
         }
 
         /** La propiedad `acr.dataDir` gana sobre la ubicación estándar; la usan los tests. */

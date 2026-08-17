@@ -1123,6 +1123,60 @@ class Store(private val dbPath: Path, val settings: DbSettings = DbSettings()) :
             """
             ALTER TABLE impl_review ADD COLUMN kind TEXT
             """.trimIndent(),
+
+            // v54 — jobs y contexto: que un corte no sea empezar de nuevo.
+            //
+            // Una tarea es una unidad del plan; un job es una unidad de ejecución. Hacen falta las
+            // dos porque contestan preguntas distintas, y con una sola no se puede contestar la que
+            // importa después de un corte: "¿esto que figura corriendo está vivo o es un cadáver?".
+            // El estado de la tarea no lo sabe —quedó en RUNNING igual en los dos casos— y por eso
+            // el job late: un job RUNNING sin latido reciente está muerto, y eso sí se puede
+            // afirmar sin adivinar.
+            //
+            // El job también guarda la sesión del CLI. Es lo que permite retomar de verdad y no
+            // sólo volver a empezar con más información: las sesiones viven en disco, así que
+            // reanudar una devuelve al modelo todo lo que ya había razonado.
+            """
+            CREATE TABLE job (
+                id           TEXT PRIMARY KEY,
+                kind         TEXT NOT NULL,
+                impl_id      TEXT NOT NULL REFERENCES implementation(id) ON DELETE CASCADE,
+                task_id      TEXT,
+                parent_id    TEXT,
+                state        TEXT NOT NULL,
+                attempt      INTEGER NOT NULL DEFAULT 1,
+                session_id   TEXT,
+                pid          INTEGER,
+                work_dir     TEXT,
+                created_at   TEXT NOT NULL,
+                started_at   TEXT,
+                heartbeat_at TEXT,
+                finished_at  TEXT,
+                error        TEXT
+            );--split--
+            CREATE INDEX ix_job_impl ON job(impl_id, state);--split--
+            CREATE INDEX ix_job_task ON job(task_id, created_at);--split--
+
+            -- El contexto de una tarea: hechos observados, uno por fila, sólo se agrega.
+            --
+            -- Se guardan los hechos y no un resumen porque el resumen sólo llega al final, y en el
+            -- único caso que importa —el proceso se murió a la mitad— no llega nunca. Lo que sí se
+            -- tiene mientras corre es qué archivo tocó y qué comando ejecutó, y eso alcanza para
+            -- que el próximo intento no arranque de cero.
+            --
+            -- Sólo agregar, nunca reescribir: un blob mutable puede quedar escrito a medias cuando
+            -- el proceso muere, y no hay forma de distinguir un blob truncado de uno real. Una fila
+            -- se escribe entera o no se escribe, y lo peor que se pierde es la última.
+            CREATE TABLE task_context (
+                id      TEXT PRIMARY KEY,
+                task_id TEXT NOT NULL,
+                job_id  TEXT,
+                kind    TEXT NOT NULL,
+                text    TEXT NOT NULL,
+                at      TEXT NOT NULL
+            );--split--
+            CREATE INDEX ix_task_context ON task_context(task_id, at)
+            """.trimIndent(),
         )
     }
 }

@@ -19,6 +19,7 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Dashboard
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.BarChart
+import androidx.compose.material.icons.filled.Bolt
 import androidx.compose.material.icons.filled.Build
 import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.Settings
@@ -105,6 +106,10 @@ fun App(ctx: AppContext) {
                             selection.current is Selection.Impls,
                         ) { selection.go(Selection.Impls) },
                         io.acr.ui.ActivityItem(
+                            Icons.Default.Bolt, io.acr.i18n.t("nav.jobs"),
+                            selection.current is Selection.Jobs,
+                        ) { selection.go(Selection.Jobs) },
+                        io.acr.ui.ActivityItem(
                             Icons.Default.BarChart, io.acr.i18n.t("nav.stats"),
                             selection.current is Selection.Stats,
                         ) { selection.go(Selection.Stats) },
@@ -151,6 +156,7 @@ fun App(ctx: AppContext) {
                         is Selection.About -> io.acr.ui.about.AboutPanel(ctx)
                         is Selection.Stats -> io.acr.ui.stats.StatsSection(ctx)
                         is Selection.Impls -> io.acr.ui.impl.ImplPanel(ctx, repos)
+                        is Selection.Jobs -> io.acr.ui.impl.JobsPanel(ctx)
                         is Selection.Repos -> io.acr.ui.repos.ReposPanel(
                             ctx = ctx,
                             repos = repos,
