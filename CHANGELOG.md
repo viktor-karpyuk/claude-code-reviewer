@@ -3,6 +3,12 @@
 Reglas de numeración en [CLAUDE.md](CLAUDE.md): un requerimiento **nuevo** incrementa *major*;
 cambiar uno **existente** incrementa *patch*.
 
+## 83.0.1
+
+En el tablero, "Buscar PRs nuevos" pasa a llamarse **"Refrescar"**. El botón hace más que buscar
+nuevos —vuelve a traer el estado de todo, y desde la versión anterior también es lo que detecta los
+PRs que se cerraron— así que el nombre viejo describía una parte y escondía el resto.
+
 ## 83.0.0
 
 **Un PR mergeado sale de todas las secciones del tablero.** Hasta ahora la app no tenía forma de

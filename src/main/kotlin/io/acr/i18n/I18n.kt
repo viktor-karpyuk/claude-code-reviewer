@@ -881,7 +881,7 @@ object I18n {
         // Panel
         "dash.title" to "Panel",
         "dash.subtitle" to "Qué se está revisando y qué quedó listo para publicar.",
-        "dash.findNew" to "Buscar PRs nuevos",
+        "dash.findNew" to "Refrescar",
         "dash.searching" to "Buscando…",
         "dash.inProgress" to "En curso",
         "dash.readyToPublish" to "Listas para publicar",
@@ -1877,7 +1877,7 @@ object I18n {
 
         "dash.title" to "Dashboard",
         "dash.subtitle" to "What's being reviewed and what's ready to publish.",
-        "dash.findNew" to "Find new PRs",
+        "dash.findNew" to "Refresh",
         "dash.searching" to "Searching…",
         "dash.inProgress" to "In progress",
         "dash.readyToPublish" to "Ready to publish",
