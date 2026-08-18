@@ -116,10 +116,31 @@ fun CodePanel(
         ctx.findings.forLatestReview(repo.id, prId)
     }
 
+    // Por qué la lista está vacía, cuando lo está. Un panel en blanco no distingue "este PR no
+    // cambió nada" de "no puedo ver la rama", y son dos cosas muy distintas: la primera no tiene
+    // nada que hacer y la segunda tiene arreglo.
+    var motivoVacio by remember(repo.id, prId) { mutableStateOf<String?>(null) }
+
     LaunchedEffect(repo.id, prId, range) {
         if (range == null) return@LaunchedEffect
         loading = true
+        motivoVacio = null
+        // Traer las ramas antes de mirar. Sin esto, un clon que nunca vio esta rama muestra cero
+        // archivos y no dice nada: el diff pedía un ref que no existe y `numstat` devolvía vacío.
+        val traida = pr?.let { Git.fetch(workDir, it.targetBranch, it.sourceBranch) }
         files = Git.numstat(workDir, range)
+        if (files.isEmpty()) {
+            val faltaRama = pr?.sourceBranch?.let { !Git.exists(workDir, "origin/$it") } ?: false
+            motivoVacio = when {
+                // El caso más común y el más confuso: la rama se borró al mergear el PR. El clon
+                // puede tener todavía un ref viejo, o ninguno, y en los dos casos el panel quedaba
+                // mudo.
+                faltaRama && traida?.ok == false ->
+                    io.acr.i18n.t2("code.branchGone", pr.sourceBranch)
+                traida?.ok == false -> io.acr.i18n.t2("code.fetchFailed", traida.output.take(200))
+                else -> io.acr.i18n.t2("code.noChanges")
+            }
+        }
         selected = files.firstOrNull()?.path
         loading = false
     }
@@ -205,6 +226,16 @@ fun CodePanel(
             }
             Spacer(Modifier.height(6.dp))
             if (loading) LinearProgressIndicator(Modifier.fillMaxWidth())
+            // El motivo, donde iría la lista. Un panel en blanco se lee como "todavía cargando" y
+            // uno se queda esperando algo que no va a llegar.
+            motivoVacio?.takeIf { !loading && files.isEmpty() }?.let { motivo ->
+                Text(
+                    motivo,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(12.dp),
+                )
+            }
             if (sidebar == Sidebar.ARCHIVOS) {
                 LazyColumn(Modifier.fillMaxSize()) {
                     items(files, key = { it.path }) { f ->

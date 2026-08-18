@@ -228,7 +228,7 @@ class AppContext private constructor(
                 // Si Jira no está configurado esto devuelve vacío y la review corre igual que antes.
                 jiraIssues = { repoId, prId -> jira.issuesOf(repoId, prId) },
             )
-            val auto = AutoReviewer(repos, reviews, prefs, engine, notifier, replies, seenPrs, prLoader, findings, approvals, jobs)
+            val auto = AutoReviewer(repos, reviews, prefs, engine, notifier, replies, seenPrs, prLoader, findings, approvals, jobs, comments)
             return AppContext(store, repos, reviews, publications, comments, notes, findings, approvals, jobs, guidelines, replies, seenPrs, prCache, prLoader, prefs, engine, auto, notifier, persons, commitStats, statsCollector, reviewStats, prStats, prHistory, rework, health, jira, jiraSites, impls, jobsRepo, usageRepo, workspaces, implEngine, dir, secrets, fallo)
         }
 

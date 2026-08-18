@@ -138,7 +138,7 @@ fun buildConversation(
             f.publishedId == null -> ThreadState.UNPUBLISHED
             hayRespuestaSinContestar && draft?.body.isNullOrBlank() -> ThreadState.NEEDS_ANSWER
             hayRespuestaSinContestar -> ThreadState.DRAFT_READY
-            f.resolution == Resolution.PARTIAL || f.resolution == Resolution.UNRESOLVED ->
+            f.resolution?.closed == false ->
                 ThreadState.NOT_FIXED
             f.resolution == null -> ThreadState.UNVERIFIED
             else -> ThreadState.OK

@@ -68,7 +68,9 @@ fun mergeReadiness(
         items += ReadinessItem(
             key = "ready.finding",
             weight = 3,
-            done = f.resolution == io.acr.data.Resolution.RESOLVED,
+            // Descartado con motivo también cierra: no va a cambiar nunca en este diff, y tenerlo
+            // como pendiente para siempre hace que la lista no signifique nada.
+            done = f.resolution?.closed == true,
             detail = f.filePath.substringAfterLast('/') + (f.lineNo?.let { ":$it" } ?: ""),
         )
     }

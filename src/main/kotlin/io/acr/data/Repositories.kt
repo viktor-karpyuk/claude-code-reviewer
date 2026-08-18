@@ -993,6 +993,27 @@ class PrCommentRepository(private val store: Store) {
             ps.executeQuery().use { if (it.next()) it.getString(1) else null }
         }
 
+    /**
+     * Cuántos de nuestros comentarios tienen respuesta de otra persona.
+     *
+     * Se cuenta por hilo y no por respuesta: dos personas contestando el mismo hallazgo siguen
+     * siendo un hallazgo contestado, y contar dos haría creer que hay más para juzgar de lo que hay.
+     */
+    fun repliesToOurs(repoId: String, prId: Long, nuestros: Set<String>): Int {
+        if (nuestros.isEmpty()) return 0
+        val marcas = nuestros.joinToString(",") { "?" }
+        return store.stmt(
+            """SELECT COUNT(DISTINCT parent_id) FROM pr_comment
+                WHERE repo_id = ? AND pr_id = ? AND is_deleted = 0 AND is_ours = 0
+                  AND parent_id IN ($marcas)""",
+        ) { ps ->
+            ps.setString(1, repoId)
+            ps.setLong(2, prId)
+            nuestros.forEachIndexed { i, id -> ps.setString(3 + i, id) }
+            ps.executeQuery().use { if (it.next()) it.getInt(1) else 0 }
+        }
+    }
+
     fun forPr(repoId: String, prId: Long, includeDeleted: Boolean = false): List<StoredComment> {
         val filter = if (includeDeleted) "" else " AND is_deleted = 0"
         return store.stmt(
@@ -1152,7 +1173,35 @@ data class Finding(
 }
 
 /** Qué pasó con un hallazgo después de publicarlo. */
-enum class Resolution { RESOLVED, PARTIAL, UNRESOLVED }
+/**
+ * En qué quedó un hallazgo publicado.
+ *
+ * `WONT_FIX` existe porque "no se va a hacer" no es ni resuelto ni pendiente, y meterlo en
+ * cualquiera de los dos hace que el estado mienta. Un hallazgo que alguien contestó con "es a
+ * propósito" o "se hace en otro PR" nunca se va a arreglar en este diff: dejarlo como pendiente lo
+ * mantiene en la lista para siempre, y una lista que nunca se vacía deja de mirarse.
+ */
+enum class Resolution {
+    RESOLVED,
+    PARTIAL,
+    UNRESOLVED,
+    WONT_FIX,
+    ;
+
+    /** ¿Deja de pedir algo? Resuelto y descartado cierran; parcial y pendiente no. */
+    val closed: Boolean get() = this == RESOLVED || this == WONT_FIX
+
+    companion object {
+        /**
+         * Un valor desconocido se lee como pendiente y no explota.
+         *
+         * El modelo puede inventar una etiqueta, y una fila vieja puede tener un valor de una
+         * versión anterior: caer a pendiente es el error seguro —hace mirar de más, no de menos—.
+         */
+        fun fromApi(s: String?): Resolution =
+            entries.firstOrNull { it.name.equals(s?.trim(), ignoreCase = true) } ?: UNRESOLVED
+    }
+}
 
 /** Hallazgos de una review, cada uno anclado a su archivo y, cuando aplica, a su línea. */
 class FindingRepository(private val store: Store) {

@@ -60,7 +60,7 @@ object ReviewPrompt {
       "mergeable":{"type":"boolean"},
       "items":{"type":"array","items":{"type":"object","properties":{
         "id":{"type":"string"},
-        "resolution":{"type":"string","enum":["RESOLVED","PARTIAL","UNRESOLVED"]},
+        "resolution":{"type":"string","enum":["RESOLVED","PARTIAL","UNRESOLVED","WONT_FIX"]},
         "evidence":{"type":"string"}
       },"required":["id","resolution","evidence"]}}
     },"required":["summary","mergeable","items"]}
@@ -99,12 +99,23 @@ object ReviewPrompt {
         REGLAS
         - Juzgá por el código, no por lo que alguien haya dicho. Que el autor conteste "ya está
           arreglado" no es evidencia; el diff sí lo es.
+        - **Pero una respuesta directa a un comentario hay que contestarla.** Cuando debajo de un
+          hallazgo aparece una `↳ RESPUESTA`, alguien se tomó el trabajo de explicar qué pasa con
+          eso, y hay que juzgar lo que dice:
+          · "ya lo arreglé" → comprobalo en el código. Si el código no lo muestra, UNRESOLVED, y en
+            `evidence` decí que la respuesta dice una cosa y el diff otra.
+          · "no aplica porque X", "es a propósito", "se hace en otro PR" → si el motivo se sostiene
+            con lo que ves, es WONT_FIX con el motivo en `evidence`. Estas no se arreglan nunca en
+            este diff, y dejarlas como UNRESOLVED para siempre hace que el estado no signifique
+            nada: nadie vuelve a mirar una lista que nunca se vacía.
+          · Si la respuesta no alcanza para decidir, UNRESOLVED y pedí lo que falta.
         - RESOLVED sólo si el cambio arregla lo señalado de verdad. Si atiende una parte, o lo
           mueve de lugar sin resolverlo, es PARTIAL.
-        - UNRESOLVED si el código sigue igual o el cambio no tiene que ver.
+        - UNRESOLVED si el código sigue igual o el cambio no tiene que ver **y nadie explicó por
+          qué**.
         - En `evidence` citá lo concreto: archivo y línea, o el commit. Una frase, no un ensayo.
           Si es UNRESOLVED, decí qué falta hacer.
-        - `mergeable` es true sólo si TODAS son RESOLVED y no encontrás nada nuevo que frene el
+        - `mergeable` es true sólo si TODAS son RESOLVED o WONT_FIX y no encontrás nada nuevo que frene el
           merge. Ante la duda, false: mergear de más no se puede deshacer.
         - Escribí en $language.
     """.trimIndent()

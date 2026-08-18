@@ -3,6 +3,34 @@
 Reglas de numeración en [CLAUDE.md](CLAUDE.md): un requerimiento **nuevo** incrementa *major*;
 cambiar uno **existente** incrementa *patch*.
 
+## 82.0.0
+
+**Una respuesta a un comentario ahora dispara la verificación.** Es el bug que reportaste del PR 128:
+los cuatro hallazgos estaban contestados uno por uno en Bitbucket y la app los mostraba "sin
+verificar" — para siempre. La regla sólo se disparaba con **commits nuevos**, y una respuesta no es
+un commit.
+
+Esa cautela tenía sentido: sin código nuevo, re-juzgar el mismo código da lo mismo y cuesta una
+corrida. Pero dejaba afuera la señal más fuerte que hay — una persona explicando qué pasa con el
+hallazgo. Un commit hay que interpretarlo; la respuesta lo dice.
+
+Y las respuestas ahora van **pegadas al hallazgo que contestan**, no todas juntas al final: antes el
+modelo ni siquiera sabía cuál contestaba a cuál. La regla de juicio también cambió — "ya lo arreglé"
+se sigue comprobando en el código, pero "no aplica porque X" o "se hace en otro PR" ahora se pueden
+cerrar como **no se va a hacer**, un estado nuevo. Sin él, esos hallazgos quedaban pendientes para
+siempre, y una lista que nunca se vacía deja de mirarse.
+
+**Un PR cuya rama ya no existe explica por qué no muestra archivos.** El PR 155 de `kubrik-erp-be`
+tiene un archivo en Bitbucket y acá no se veía nada: la rama se borró al mergear, el clon no la puede
+traer, y el panel quedaba en blanco. Un panel vacío se lee como "todavía cargando" y uno espera algo
+que no va a llegar. Ahora dice cuál de las tres cosas pasó: la rama ya no está, el fetch falló, o el
+PR de verdad no cambia nada. Además se traen las ramas antes de listar — sin eso, un clon que nunca
+vio esa rama mostraba cero archivos sin decir nada.
+
+**Los PRs aprobados no aparecen por defecto.** Un PR aprobado ya no espera nada: el barrido no lo
+toca y no hay nada que decidir. Mezclado con los demás sólo hace más larga la lista donde uno busca
+lo que sí pide algo.
+
 ## 81.1.0
 
 **La lista de implementaciones dice dónde escribe cada una**: en su taller o directo en tus clones.

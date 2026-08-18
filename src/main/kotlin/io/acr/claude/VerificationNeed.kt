@@ -14,8 +14,17 @@ import io.acr.forge.PullRequest
  * vuelta quemando plata sobre un PR que no cambió, o no se repetiría nunca.
  */
 sealed interface VerificationNeed {
-    /** Hay commits nuevos y comentarios que todavía no se juzgaron contra ellos. */
-    data class Needed(val sinceSha: String, val pending: Int) : VerificationNeed
+    /**
+     * Hay algo nuevo que juzgar: código, o una respuesta.
+     *
+     * `becauseOfReplies` distingue por qué. Una respuesta no cambia el código, así que la
+     * verificación tiene que mirar lo que dice la persona y no un diff que no existe.
+     */
+    data class Needed(
+        val sinceSha: String,
+        val pending: Int,
+        val becauseOfReplies: Boolean = false,
+    ) : VerificationNeed
 
     /** No hace falta, y el motivo es explícito para poder mostrarlo o registrarlo. */
     data class NotNeeded(val reasonKey: String) : VerificationNeed
@@ -28,6 +37,15 @@ fun verificationNeed(
     pr: PullRequest,
     review: ReviewRecord?,
     findings: List<Finding>,
+    /**
+     * Cuántos de nuestros comentarios publicados tienen una respuesta que todavía no se juzgó.
+     *
+     * Es la señal que faltaba. Una respuesta es una persona diciendo qué pasó con el hallazgo —"ya
+     * está", "no aplica", "lo hago en otro PR"— y es información más fuerte que un commit: el commit
+     * hay que interpretarlo, la respuesta lo dice. Sin mirarla, un PR contestado entero se quedaba
+     * en "sin verificar" para siempre, porque la regla sólo esperaba código nuevo.
+     */
+    repliesPending: Int = 0,
 ): VerificationNeed {
     // Un PR cerrado o mergeado ya no se está revisando.
     if (pr.state != PrState.OPEN) return VerificationNeed.NotNeeded("verify.skip.notOpen")
@@ -42,13 +60,26 @@ fun verificationNeed(
     }
     if (pendientes == 0) return VerificationNeed.NotNeeded("verify.skip.nothingPending")
 
+    val sinCodigoNuevo = pr.headSha.isBlank() || pr.headSha == review.headSha
+    val yaVerificadoAca = review.resolutionHead == pr.headSha
+
+    // Una respuesta manda sobre las dos reglas de código. Alguien se tomó el trabajo de contestar:
+    // eso es exactamente lo que hay que leer, y no depende de que además haya commiteado.
+    if (repliesPending > 0 && (sinCodigoNuevo || yaVerificadoAca)) {
+        return VerificationNeed.Needed(
+            sinceSha = review.headSha,
+            pending = pendientes,
+            becauseOfReplies = true,
+        )
+    }
+
     // Sin commits nuevos no hay nada que juzgar: es el mismo código que ya se revisó.
-    if (pr.headSha.isBlank() || pr.headSha == review.headSha) {
-        return VerificationNeed.NotNeeded("verify.skip.noNewCommits")
-    }
+    if (sinCodigoNuevo) return VerificationNeed.NotNeeded("verify.skip.noNewCommits")
     // Ya se verificó contra ESTE commit exacto: repetirlo daría lo mismo y cuesta otra corrida.
-    if (review.resolutionHead == pr.headSha) {
-        return VerificationNeed.NotNeeded("verify.skip.alreadyVerified")
-    }
-    return VerificationNeed.Needed(sinceSha = review.headSha, pending = pendientes)
+    if (yaVerificadoAca) return VerificationNeed.NotNeeded("verify.skip.alreadyVerified")
+    return VerificationNeed.Needed(
+        sinceSha = review.headSha,
+        pending = pendientes,
+        becauseOfReplies = repliesPending > 0,
+    )
 }

@@ -85,6 +85,7 @@ fun PrsPanel(
         mutableStateOf<Map<Long, io.acr.data.ReviewRepository.ResolutionCounts>>(emptyMap())
     }
     var aprobaciones by remember(repo.id) { mutableStateOf<Map<Long, List<io.acr.data.PrApproval>>>(emptyMap()) }
+    var verAprobados by remember(repo.id) { mutableStateOf(false) }
     // El PR que se está por mergear, cuando hay una confirmación abierta.
     var aMergear by remember(repo.id) { mutableStateOf<PullRequest?>(null) }
     // La estrategia elegida se recuerda: en un equipo se usa casi siempre la misma.
@@ -203,6 +204,13 @@ fun PrsPanel(
                     modifier = Modifier.padding(end = 6.dp),
                 )
             }
+            // Los aprobados, apagado por defecto: es lo que ya no pide nada.
+            androidx.compose.material3.FilterChip(
+                selected = verAprobados,
+                onClick = { verAprobados = !verAprobados },
+                label = { Text(io.acr.i18n.t("prs.showApproved")) },
+                modifier = Modifier.padding(end = 6.dp),
+            )
             val soloAbiertos = estados == setOf(io.acr.forge.PrState.OPEN)
             if (!soloAbiertos) {
                 OutlinedButton(
@@ -336,6 +344,16 @@ fun PrsPanel(
                     (if (io.acr.forge.PrState.OPEN in estados) prs else emptyList()) +
                         historicos.filter { it.state in estados }
                     ).distinctBy { it.id }
+                    // Los aprobados quedan afuera salvo que se pidan.
+                    //
+                    // Un PR aprobado ya no espera nada: el barrido no lo toca y no hay nada que
+                    // decidir sobre él. Mezclado con los demás sólo hace más larga la lista donde
+                    // uno busca lo que sí pide algo — y en un repositorio con veinte PRs abiertos,
+                    // la mitad aprobados, eso es la diferencia entre ver el problema y no verlo.
+                    .filter { pr ->
+                        verAprobados || aprobaciones[pr.id].orEmpty()
+                            .none { it.stance == io.acr.data.ReviewStance.APPROVED }
+                    }
                 items(visibles.sortedBy(sort), key = { it.id }) { pr ->
                     val last = lastReviews[pr.id]
                     PrRow(

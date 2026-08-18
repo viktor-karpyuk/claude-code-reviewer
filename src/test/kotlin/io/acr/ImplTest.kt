@@ -3240,3 +3240,98 @@ class WorkspaceLifecycleTest {
         }
     }
 }
+
+/**
+ * Cuándo hace falta volver a verificar un PR.
+ *
+ * Salió de un caso real: los cuatro hallazgos del PR 128 estaban contestados uno por uno en
+ * Bitbucket y la app los mostraba "sin verificar" — para siempre. La regla sólo esperaba commits
+ * nuevos, y una respuesta no es un commit.
+ */
+class VerificationTriggerTest {
+
+    private fun pr(head: String = "sha-nuevo") = io.acr.forge.PullRequest(
+        id = 1, title = "un PR", author = "alguien", sourceBranch = "f", targetBranch = "develop",
+        headSha = head, state = io.acr.forge.PrState.OPEN, commentCount = 0,
+        updatedOn = "", url = "", isDraft = false, createdOn = "",
+    )
+
+    private fun review(head: String = "sha-viejo", verificado: String? = null) = io.acr.data.ReviewRecord(
+        id = "r", repoId = "repo", prId = 1, prTitle = "un PR", headSha = head,
+        status = io.acr.data.ReviewStatus.DONE, body = null, error = null, sessionId = null,
+        costUsd = null, publishedUrl = null, createdAt = "",
+        depth = io.acr.claude.ReviewDepth.INTERMEDIATE,
+        projectKind = io.acr.claude.ProjectKind.GENERIC, model = "", auto = false,
+        deniedTools = null, resolutionHead = verificado,
+    )
+
+    private fun hallazgo(id: String = "f1") = io.acr.data.Finding(
+        id = id, reviewId = "r", prId = 1, filePath = "a.kt", lineNo = 1,
+        severity = "major", title = "algo", body = "cuerpo",
+        publishedId = "c-$id", publishedUrl = null,
+    )
+
+    @Test
+    fun aReplyIsEnoughEvenWithoutNewCommits() {
+        // Es el bug: cuatro hallazgos contestados, cero commits nuevos, y la verificación no se
+        // disparaba nunca.
+        val need = io.acr.claude.verificationNeed(pr("mismo"), review("mismo"), listOf(hallazgo()), repliesPending = 1)
+        assertTrue(need is io.acr.claude.VerificationNeed.Needed, "una respuesta pide una mirada")
+        assertTrue((need as io.acr.claude.VerificationNeed.Needed).becauseOfReplies)
+    }
+
+    @Test
+    fun aReplyReopensEvenSomethingAlreadyVerified() {
+        // Alguien contestó DESPUÉS de que se verificó: eso es información nueva sobre el mismo
+        // código, y es exactamente lo que hay que leer.
+        val need = io.acr.claude.verificationNeed(
+            pr("h1"), review("viejo", verificado = "h1"), listOf(hallazgo()), repliesPending = 2,
+        )
+        assertTrue(need is io.acr.claude.VerificationNeed.Needed)
+    }
+
+    @Test
+    fun withoutRepliesTheOldRulesStillHold() {
+        // La cautela original sigue: sin nada nuevo, re-juzgar el mismo código cuesta una corrida y
+        // da lo mismo.
+        assertTrue(
+            io.acr.claude.verificationNeed(pr("mismo"), review("mismo"), listOf(hallazgo())) is
+                io.acr.claude.VerificationNeed.NotNeeded,
+        )
+        assertTrue(
+            io.acr.claude.verificationNeed(pr("h1"), review("viejo", verificado = "h1"), listOf(hallazgo())) is
+                io.acr.claude.VerificationNeed.NotNeeded,
+        )
+    }
+
+    @Test
+    fun nothingPendingBeatsEverything() {
+        // Un hallazgo ya cerrado no se re-juzga por más respuestas que tenga.
+        val cerrado = hallazgo().copy(resolution = io.acr.data.Resolution.RESOLVED)
+        assertTrue(
+            io.acr.claude.verificationNeed(pr(), review(), listOf(cerrado), repliesPending = 3) is
+                io.acr.claude.VerificationNeed.NotNeeded,
+        )
+    }
+}
+
+/** "No se va a hacer" es un final, no un pendiente eterno. */
+class WontFixTest {
+
+    @Test
+    fun closedMeansResolvedOrWontFix() {
+        assertTrue(io.acr.data.Resolution.RESOLVED.closed)
+        assertTrue(io.acr.data.Resolution.WONT_FIX.closed)
+        assertTrue(!io.acr.data.Resolution.PARTIAL.closed)
+        assertTrue(!io.acr.data.Resolution.UNRESOLVED.closed)
+    }
+
+    @Test
+    fun anUnknownVerdictFallsBackToPending() {
+        // El modelo puede inventar una etiqueta y una fila vieja puede traer un valor de otra
+        // versión: caer en pendiente hace mirar de más, que es el error seguro.
+        assertEquals(io.acr.data.Resolution.UNRESOLVED, io.acr.data.Resolution.fromApi("INVENTADO"))
+        assertEquals(io.acr.data.Resolution.UNRESOLVED, io.acr.data.Resolution.fromApi(null))
+        assertEquals(io.acr.data.Resolution.WONT_FIX, io.acr.data.Resolution.fromApi("wont_fix"))
+    }
+}

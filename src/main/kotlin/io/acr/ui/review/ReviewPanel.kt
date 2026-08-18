@@ -43,6 +43,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Block
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Info
@@ -2037,7 +2038,7 @@ internal fun mergeBlocker(
     },
     noResueltos = findings.count {
         it.publishedId != null && it.dismissedAt == null && it.closedAt == null &&
-            it.resolution != null && it.resolution != io.acr.data.Resolution.RESOLVED
+            it.resolution?.closed == false
     },
 )
 
@@ -2149,6 +2150,13 @@ private fun VerificationMark(resolution: io.acr.data.Resolution?) {
             icono = Icons.Default.Close
             color = MaterialTheme.colorScheme.error
             clave = "verify.UNRESOLVED"
+        }
+        // Cerrado sin arreglarse, con motivo. Gris y no verde: nadie tocó el código, y pintarlo de
+        // éxito haría creer que sí.
+        io.acr.data.Resolution.WONT_FIX -> {
+            icono = Icons.Default.Block
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+            clave = "verify.WONT_FIX"
         }
         // Sin veredicto: nadie lo miró. El ícono es neutro a propósito, ni éxito ni fracaso.
         null -> {

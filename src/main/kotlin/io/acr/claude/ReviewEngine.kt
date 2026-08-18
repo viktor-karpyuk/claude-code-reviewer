@@ -201,13 +201,30 @@ class ReviewEngine(
             "origin/${pr.targetBranch}...origin/${pr.sourceBranch}"
         }
 
+        // Las respuestas, pegadas al hallazgo que contestan.
+        //
+        // Antes iban todas juntas al final y etiquetadas como "contexto, no evidencia". Esa cautela
+        // tiene sentido para un "ya lo arreglé" —eso se comprueba en el código— pero deja sin
+        // contestar el caso en que la respuesta ES la única evidencia que va a haber: "no aplica
+        // porque X", "se hace en otro PR". Sin ligarlas a su hallazgo, el modelo ni siquiera sabe
+        // cuál contesta a cuál.
+        val todos = comments.forPr(repo.id, pr.id)
+        val respuestasDe = todos.filter { !it.ours && it.parentId != null }
+            .groupBy { it.parentId!! }
+
         val items = pendientes.joinToString("\n") { f ->
+            val contestaciones = f.publishedId?.let { respuestasDe[it] }.orEmpty()
+                .joinToString("") { r ->
+                    "\n    ↳ RESPUESTA de ${r.author}: ${r.body.replace('\n', ' ').take(400)}"
+                }
             "- id=${f.id} [${f.filePath}${f.lineNo?.let { ":$it" } ?: ""}] (${f.severity}) " +
-                "${f.title}: ${f.body.replace('\n', ' ').take(400)}"
+                "${f.title}: ${f.body.replace('\n', ' ').take(400)}$contestaciones"
         }
-        val hilo = comments.forPr(repo.id, pr.id).filter { !it.ours }.takeIf { it.isNotEmpty() }
+        // Lo suelto del hilo —comentarios que no cuelgan de ningún hallazgo— sigue yendo como
+        // contexto: ahí sí puede hablar de cualquier cosa.
+        val hilo = todos.filter { !it.ours && it.parentId == null }.takeIf { it.isNotEmpty() }
             ?.joinToString("\n") { "- ${it.author}: ${it.body.replace('\n', ' ').take(300)}" }
-            ?.let { "LO QUE RESPONDIERON EN EL HILO (contexto, no evidencia)\n$it" }
+            ?.let { "OTROS COMENTARIOS DEL HILO (contexto, no evidencia)\n$it" }
             .orEmpty()
 
         val prompt = ReviewPrompt.resolutionPrompt(
@@ -255,7 +272,7 @@ class ReviewEngine(
             val id = o["id"]?.jsonPrimitive?.contentOrNull ?: return@forEach
             val f = validos[id] ?: return@forEach
             val veredicto = runCatching {
-                io.acr.data.Resolution.valueOf(
+                io.acr.data.Resolution.fromApi(
                     o["resolution"]?.jsonPrimitive?.contentOrNull.orEmpty().uppercase(),
                 )
             }.getOrNull() ?: return@forEach

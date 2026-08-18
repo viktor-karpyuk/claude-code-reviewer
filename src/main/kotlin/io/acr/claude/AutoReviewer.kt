@@ -32,6 +32,8 @@ class AutoReviewer(
     private val findings: io.acr.data.FindingRepository,
     private val approvals: io.acr.data.ApprovalRepository,
     private val jobs: io.acr.data.PendingJobRepository,
+    /** Los comentarios del PR: de acá sale si alguien contestó un hallazgo. */
+    private val comments: io.acr.data.PrCommentRepository,
 ) {
 
     /**
@@ -104,18 +106,25 @@ class AutoReviewer(
         for (pr in prs) {
             if (usados >= budget) break
             val review = reviews.latestUsableFor(repo.id, pr.id) ?: continue
-            val need = verificationNeed(pr, review, findings.forReview(review.id))
+            val hallazgos = findings.forReview(review.id)
+            // Cuántos de nuestros comentarios ya tienen respuesta. Es la señal que faltaba: una
+            // persona contestando dice qué pasó con el hallazgo mejor que cualquier commit.
+            val contestados = runCatching {
+                comments.repliesToOurs(
+                    repo.id, pr.id,
+                    hallazgos.mapNotNull { it.publishedId }.toSet(),
+                )
+            }.getOrDefault(0)
+            val need = verificationNeed(pr, review, hallazgos, contestados)
             if (need !is VerificationNeed.Needed) continue
             usados++
             engine.verifyResolution(repo, pr, review)
                 .onSuccess { resumen ->
                     val despues = findings.forReview(review.id)
                         .filter { it.publishedId != null && it.dismissedAt == null }
-                    val sinCorregir = despues.count {
-                        it.resolution != null && it.resolution != io.acr.data.Resolution.RESOLVED
-                    }
+                    val sinCorregir = despues.count { it.resolution?.closed == false }
                     val todo = despues.isNotEmpty() && despues.all {
-                        it.resolution == io.acr.data.Resolution.RESOLVED
+                        it.resolution?.closed == true
                     }
                     notas += "${repo.name} #${pr.id}: verificado (${need.pending} pendiente(s))"
                     notifier.notify(
