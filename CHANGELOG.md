@@ -3,6 +3,26 @@
 Reglas de numeración en [CLAUDE.md](CLAUDE.md): un requerimiento **nuevo** incrementa *major*;
 cambiar uno **existente** incrementa *patch*.
 
+## 71.3.0
+
+**Se acabó el recargar todo.** El detalle de una implementación tenía un solo latido leído arriba de
+todo, así que cada tic recomponía la pantalla entera —encabezado, repositorios, botones, plan,
+tabla— para mostrar que una barra se movió un punto. Y el feed de actividad, que cambia con cada
+línea que emite el motor —decenas por segundo—, se leía en el mismo lugar: esa frecuencia se
+contagiaba a todo.
+
+Ahora cada parte se refresca sola, al ritmo que necesita:
+
+- **Las tareas** —avance, revisiones, esfuerzo, diagrama, tabla y commits— viven en una sección que
+  late cada tres segundos y lee sólo lo suyo.
+- **El feed** es su propio componente: es lo único que tiene que redibujarse a la velocidad del log.
+- **El padre** late cada cinco segundos y sólo para que el estado y los botones se enteren de que la
+  implementación arrancó o terminó. Cuando una sección se actualiza, el resto ni se entera: sus
+  datos no cambiaron, así que Compose lo saltea.
+
+Hay tests que fijan la estructura —quién lee el estado que cambia rápido— porque es una decisión que
+se pierde sola en la próxima edición y el síntoma no aparece hasta que algo corre.
+
 ## 71.2.0
 
 **La tabla de tareas se vaciaba y se volvía a llenar todo el tiempo.** Eran dos cosas sumadas.

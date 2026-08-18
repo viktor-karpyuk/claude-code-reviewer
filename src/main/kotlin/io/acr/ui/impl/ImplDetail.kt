@@ -69,43 +69,30 @@ fun ImplDetail(
     var tareaAbierta by remember(implId) { mutableStateOf<String?>(null) }
     // Si esto viviera dentro del encabezado, la tarjeta de actividad no podría leerlo.
     var analizando by remember(implId) { mutableStateOf(false) }
-    // Un tic por segundo mientras algo corre. Es la clave que hace que las lecturas de la base se
-    // repitan: sin él, la pantalla depende de que el motor emita una línea de log para enterarse
-    // de que una tarea cambió de estado.
-    var tic by remember(implId) { mutableStateOf(0) }
-    val progreso by ctx.implEngine.progress.collectAsState()
-    val vivo = progreso[implId]
-
-    // Sin `vivo` entre las claves: ese objeto cambia con cada línea de log —decenas por segundo
-    // mientras una tarea trabaja— y como clave de una consulta la relanzaba con esa frecuencia. El
-    // latido de tres segundos ya trae lo que haya cambiado en la base.
-    val impl = io.acr.ui.dbState(implId, version, tic, initial = null as io.acr.impl.Implementation?) {
+    // El padre late lento y a propósito.
+    //
+    // Lo suyo es el encabezado, los repositorios y los botones: cosas que cambian cuando alguien
+    // hace algo, no cuando una tarea avanza. Cada sección se refresca sola al ritmo que necesita.
+    // Con un solo latido rápido acá arriba, cada tic recomponía la pantalla entera para mostrar que
+    // una barra se movió un punto — y eso es lo que se siente como que todo se recarga solo.
+    var latido by remember(implId) { mutableStateOf(0) }
+    val impl = io.acr.ui.dbState(implId, version, latido, initial = null as io.acr.impl.Implementation?) {
         ctx.impls.get(implId)
     } ?: return
-    val tareas = io.acr.ui.dbState(implId, version, tic, initial = emptyList<io.acr.impl.ImplTask>()) {
-        ctx.impls.tasks(implId)
-    }
-    val preguntas = io.acr.ui.dbState(implId, version, tic, initial = emptyList<io.acr.impl.ImplQuestion>()) {
+    val preguntas = io.acr.ui.dbState(implId, version, latido, initial = emptyList<io.acr.impl.ImplQuestion>()) {
         ctx.impls.questions(implId)
     }
-    // Late mientras haya algo corriendo, esté abierta la lista o el detalle de una tarea: es lo
-    // que hace que el estado persistido llegue a la pantalla sin tener que salir y volver.
-    // Cada tres segundos y no cada uno. El latido dispara la relectura de todo lo que la pantalla
-    // muestra —tareas, pasos, revisiones, contexto—, y una tarea dura minutos: refrescar tres veces
-    // más seguido no adelanta ninguna noticia y sí hace que la pantalla trabaje todo el tiempo.
-    androidx.compose.runtime.LaunchedEffect(corriendoAlgo(tareas)) {
-        while (corriendoAlgo(tareas)) {
-            kotlinx.coroutines.delay(3_000)
-            tic++
+    // Cinco segundos: sólo hace falta para que el estado y los botones se enteren de que la
+    // implementación arrancó o terminó.
+    androidx.compose.runtime.LaunchedEffect(impl.status) {
+        while (impl.status == ImplStatus.RUNNING || impl.status == ImplStatus.PLANNING) {
+            kotlinx.coroutines.delay(5_000)
+            latido++
         }
     }
-    val avance = remember(tareas, tic) { progressOf(tareas) }
-    // Animado: el salto de una tarea a la siguiente se lee como movimiento y no como un parpadeo.
-    val fraccion by androidx.compose.animation.core.animateFloatAsState(
-        targetValue = remember(tareas, tic) { avance.fraction(tareas) },
-        animationSpec = androidx.compose.animation.core.tween(600),
-        label = "avance",
-    )
+    val tareas = io.acr.ui.dbState(implId, version, latido, initial = emptyList<io.acr.impl.ImplTask>()) {
+        ctx.impls.tasks(implId)
+    }
     val suyos = io.acr.ui.dbState(implId, version, initial = emptyList<io.acr.impl.ImplRepo>()) {
         ctx.impls.reposOf(implId)
     }
@@ -211,11 +198,7 @@ fun ImplDetail(
                 // Qué está haciendo ahora mismo, acá arriba y no sólo en el feed del pie: el botón
                 // está en el encabezado y el feed queda a una pantalla de scroll, así que quien
                 // aprieta no ve nada y cree que no pasó nada.
-                Text(
-                    vivo?.lines?.lastOrNull()?.trim()?.take(90) ?: t("impl.analyzing"),
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
+                TextoActividad(ctx, implId)
             }
             EstadoBadge(impl.status)
         }
@@ -225,43 +208,7 @@ fun ImplDetail(
         // El feed completo está al pie, a una pantalla de scroll de los botones que lanzan cosas:
         // quien aprieta "analizar" no ve nada y concluye que no pasó nada. Esto muestra las últimas
         // líneas donde se aprieta, y desaparece cuando no hay nada corriendo.
-        val activo = analizando || corriendo
-        if (activo) {
-            vivo?.lines?.takeIf { it.isNotEmpty() }?.let { lineas ->
-                Spacer(Modifier.height(10.dp))
-                Column(
-                    Modifier.fillMaxWidth()
-                        .clip(RoundedCornerShape(6.dp))
-                        .background(MaterialTheme.colorScheme.surfaceVariant)
-                        .padding(10.dp),
-                ) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        CircularProgressIndicator(
-                            Modifier.height(14.dp).width(14.dp),
-                            strokeWidth = 2.dp,
-                        )
-                        Spacer(Modifier.width(8.dp))
-                        Text(
-                            lineas.last().trim(),
-                            style = MaterialTheme.typography.bodySmall,
-                            maxLines = 1,
-                        )
-                    }
-                    // Las anteriores, atenuadas: lo último dice qué pasa ahora, las de atrás dicen
-                    // que viene avanzando y no que se colgó en el primer paso.
-                    lineas.dropLast(1).takeLast(5).reversed().forEach { l ->
-                        Text(
-                            l.trim(),
-                            style = MaterialTheme.typography.labelSmall
-                                .copy(fontFamily = FontFamily.Monospace),
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            maxLines = 1,
-                        )
-                    }
-                }
-            }
-        }
-
+        if (analizando || corriendo) TarjetaActividad(ctx, implId)
         // De dónde parte cada repositorio y en qué rama trabaja. Estaba decidido en silencio por
         // la rama que el clon tuviera abierta, así que no había forma de saberlo sin ir a git.
         Spacer(Modifier.height(8.dp))
@@ -383,6 +330,75 @@ fun ImplDetail(
             abiertas.forEach { q -> QuestionCard(ctx, q) { version++ } }
         }
 
+        // --- Todo lo que depende de las tareas, en su propia sección ---
+        //
+        // El latido vive adentro y no acá. Cuando estaba en el padre, cada tic recomponía la
+        // pantalla entera —encabezado, repositorios, botones, plan— aunque lo único que hubiera
+        // cambiado fuera el avance de una tarea. Ahora esta sección se relee sola y el resto ni se
+        // entera: sus parámetros son los mismos, así que Compose lo saltea.
+        SeccionTareas(
+            ctx = ctx,
+            implId = implId,
+            impl = impl,
+            misRepos = misRepos,
+            version = version,
+            suyos = suyos,
+            onOpenTask = { tareaAbierta = it },
+            onChange = { version++ },
+        )
+
+        // El feed, aparte de todo lo demás: cambia con cada línea que emite el motor —decenas por
+        // segundo— y es lo único que tiene que redibujarse a ese ritmo.
+        SeccionFeed(ctx, implId)
+    }
+}
+
+/**
+ * El avance, las revisiones, el esfuerzo, el diagrama, la tabla y los commits.
+ *
+ * Están juntos porque todos leen las mismas tareas, y separados del resto de la pantalla porque son
+ * lo único que cambia mientras algo corre. El latido vive acá adentro: en el padre, cada tic
+ * recomponía la pantalla completa para mostrar que una barra avanzó un punto.
+ */
+@Composable
+private fun SeccionTareas(
+    ctx: AppContext,
+    implId: String,
+    impl: io.acr.impl.Implementation,
+    misRepos: List<io.acr.forge.RepoRecord>,
+    version: Int,
+    /** Cómo está configurado cada repositorio: de dónde parte. Para listar los commits de la rama. */
+    suyos: List<io.acr.impl.ImplRepo>,
+    onOpenTask: (String) -> Unit,
+    onChange: () -> Unit,
+) {
+    val corriendo = impl.status == ImplStatus.RUNNING || impl.status == ImplStatus.PLANNING
+    val rama = impl.branch
+    var tic by remember(implId) { mutableStateOf(0) }
+    val tareas = io.acr.ui.dbState(implId, version, tic, initial = emptyList<io.acr.impl.ImplTask>()) {
+        ctx.impls.tasks(implId)
+    }
+    // Cada tres segundos y no cada uno: una tarea dura minutos, así que refrescar tres veces más
+    // seguido no adelanta ninguna noticia y sí hace trabajar a la pantalla todo el tiempo.
+    androidx.compose.runtime.LaunchedEffect(corriendoAlgo(tareas)) {
+        while (corriendoAlgo(tareas)) {
+            kotlinx.coroutines.delay(3_000)
+            tic++
+        }
+    }
+    val avance = remember(tareas) { progressOf(tareas) }
+    // Animado: el salto de una tarea a la siguiente se lee como movimiento y no como un parpadeo.
+    val fraccion by androidx.compose.animation.core.animateFloatAsState(
+        targetValue = remember(tareas, tic) { avance.fraction(tareas) },
+        animationSpec = androidx.compose.animation.core.tween(600),
+        label = "avance",
+    )
+    var tareaAbierta by remember(implId) { mutableStateOf<String?>(null) }
+    androidx.compose.runtime.LaunchedEffect(tareaAbierta) {
+        tareaAbierta?.let { onOpenTask(it); tareaAbierta = null }
+    }
+
+    Column(Modifier.fillMaxWidth()) {
         // --- Avance ---
         if (avance.total > 0) {
             Spacer(Modifier.height(14.dp))
@@ -412,7 +428,7 @@ fun ImplDetail(
                         tasks = tareas,
                         repos = misRepos,
                         running = corriendo,
-                        onDone = { version++ },
+                        onDone = onChange,
                     )
                 }
             }
@@ -703,6 +719,20 @@ fun ImplDetail(
             }
         }
 
+    }
+}
+
+/**
+ * El feed de actividad.
+ *
+ * Aparte de todo lo demás porque cambia con cada línea que emite el motor. Leyéndolo desde el padre,
+ * esa frecuencia se contagiaba a la pantalla entera.
+ */
+@Composable
+private fun SeccionFeed(ctx: AppContext, implId: String) {
+    val progreso by ctx.implEngine.progress.collectAsState()
+    val vivo = progreso[implId]
+    Column(Modifier.fillMaxWidth()) {
         // --- Feed en vivo ---
         vivo?.lines?.takeIf { it.isNotEmpty() }?.let { lineas ->
             Spacer(Modifier.height(12.dp))
@@ -874,4 +904,61 @@ private fun TiraDeAvance(tareas: List<io.acr.impl.ImplTask>) {
             )
         }
     }
+}
+
+/**
+ * Qué está pasando ahora mismo, arriba de todo.
+ *
+ * Su propio hijo porque lee el feed, y el feed cambia con cada línea que emite el motor. Leído desde
+ * el padre, esa frecuencia se contagiaba a toda la pantalla: cada línea de log recomponía el
+ * encabezado, los repositorios, los botones y el plan.
+ */
+@Composable
+private fun TarjetaActividad(ctx: AppContext, implId: String) {
+    val progreso by ctx.implEngine.progress.collectAsState()
+    val vivo = progreso[implId]
+            vivo?.lines?.takeIf { it.isNotEmpty() }?.let { lineas ->
+        Spacer(Modifier.height(10.dp))
+        Column(
+            Modifier.fillMaxWidth()
+                .clip(RoundedCornerShape(6.dp))
+                .background(MaterialTheme.colorScheme.surfaceVariant)
+                .padding(10.dp),
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                CircularProgressIndicator(
+                    Modifier.height(14.dp).width(14.dp),
+                    strokeWidth = 2.dp,
+                )
+                Spacer(Modifier.width(8.dp))
+                Text(
+                    lineas.last().trim(),
+                    style = MaterialTheme.typography.bodySmall,
+                    maxLines = 1,
+                )
+            }
+            // Las anteriores, atenuadas: lo último dice qué pasa ahora, las de atrás dicen
+            // que viene avanzando y no que se colgó en el primer paso.
+            lineas.dropLast(1).takeLast(5).reversed().forEach { l ->
+                Text(
+                    l.trim(),
+                    style = MaterialTheme.typography.labelSmall
+                        .copy(fontFamily = FontFamily.Monospace),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                )
+            }
+        }
+    }
+}
+
+/** La última línea del feed, para el encabezado. Aparte por la misma razón que la tarjeta. */
+@Composable
+private fun TextoActividad(ctx: AppContext, implId: String) {
+    val progreso by ctx.implEngine.progress.collectAsState()
+    Text(
+        progreso[implId]?.lines?.lastOrNull()?.trim()?.take(90) ?: t("impl.analyzing"),
+        style = MaterialTheme.typography.labelSmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
 }

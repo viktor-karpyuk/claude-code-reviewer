@@ -2100,3 +2100,53 @@ class DbStateKeysTest {
         assertTrue(consultas.isEmpty(), "quedan consultas atadas al feed: ${consultas.map { it.value }}")
     }
 }
+
+/**
+ * Que el refresco esté aislado por sección.
+ *
+ * Se prueba sobre el código y no componiendo, porque lo que hay que fijar es una decisión de
+ * estructura: quién lee el estado que cambia rápido. Un solo latido leído arriba recompone la
+ * pantalla entera para mostrar que una barra se movió un punto — y eso es exactamente lo que se
+ * siente como que todo se recarga solo.
+ */
+class SectionRefreshTest {
+
+    private val fuente = java.io.File("src/main/kotlin/io/acr/ui/impl/ImplDetail.kt").readText()
+
+    private fun cuerpoDe(nombre: String): String {
+        val i = fuente.indexOf("fun $nombre(")
+        assertTrue(i > 0, "no existe $nombre")
+        val fin = fuente.indexOf("\n@Composable", i).takeIf { it > 0 } ?: fuente.length
+        return fuente.substring(i, fin)
+    }
+
+    @Test
+    fun theParentDoesNotReadTheActivityFeed() {
+        // El feed cambia con cada línea que emite el motor: decenas por segundo. Leerlo arriba
+        // contagia esa frecuencia al encabezado, a los repositorios, a los botones y al plan.
+        val padre = cuerpoDe("ImplDetail")
+        assertTrue(
+            !padre.contains("implEngine.progress"),
+            "el padre volvió a leer el feed: eso recompone toda la pantalla por cada línea de log",
+        )
+    }
+
+    @Test
+    fun theTasksSectionOwnsItsOwnHeartbeat() {
+        val seccion = cuerpoDe("SeccionTareas")
+        assertTrue(seccion.contains("var tic by remember"), "la sección late sola")
+        assertTrue(seccion.contains("ctx.impls.tasks(implId)"), "y lee lo suyo")
+    }
+
+    @Test
+    fun theParentBeatsSlowlyAndOnlyForItsOwnState() {
+        // Lo del padre son el estado y los botones: cambian cuando alguien hace algo, no cuando
+        // una tarea avanza.
+        val padre = cuerpoDe("ImplDetail")
+        assertTrue(padre.contains("delay(5_000)"), "cinco segundos, no uno")
+        assertTrue(
+            !padre.contains("progressOf(tareas)"),
+            "el avance se calcula en la sección que lo muestra",
+        )
+    }
+}
