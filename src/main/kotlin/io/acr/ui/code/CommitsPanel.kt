@@ -179,10 +179,19 @@ fun CommitsPanel(
                     }
                 }
                 Spacer(Modifier.height(4.dp))
-                // Archivos del commit, en fila: suelen ser pocos.
-                LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    items(files, key = { it.path }) { f ->
-                        FileChip(f, active = selectedFile == f.path) { selectedFile = f.path }
+                // Archivos del commit, uno por renglón.
+                //
+                // Estaban en una fila horizontal —"suelen ser pocos"— y eso es cierto hasta que no
+                // lo es: un commit de veinte archivos dejaba la mitad fuera de la pantalla, y los
+                // nombres largos, que es lo que hay en un proyecto real, se recortaban al punto de
+                // no distinguirse entre sí. En vertical entra el nombre completo y se ve cuántos
+                // son de un vistazo.
+                Column(
+                    Modifier.fillMaxWidth().heightIn(max = 220.dp)
+                        .verticalScroll(rememberScrollState()),
+                ) {
+                    files.forEach { f ->
+                        FileLine(f, active = selectedFile == f.path) { selectedFile = f.path }
                     }
                 }
                 Spacer(Modifier.height(6.dp))
@@ -239,5 +248,45 @@ private fun FileChip(f: Git.FileChange, active: Boolean, onClick: () -> Unit) {
         Text("+${f.added}", style = MaterialTheme.typography.labelSmall, color = Color(0xFF35A66F))
         Spacer(Modifier.width(3.dp))
         Text("−${f.deleted}", style = MaterialTheme.typography.labelSmall, color = Color(0xFFCB5A50))
+    }
+}
+
+/**
+ * Un archivo del commit, en su renglón.
+ *
+ * Con la ruta completa y las líneas a la derecha: en un proyecto real dos archivos se distinguen por
+ * la carpeta, no por el nombre —hay quince `index.ts`— así que recortar el principio de la ruta es
+ * recortar justo lo que identifica.
+ */
+@Composable
+private fun FileLine(f: Git.FileChange, active: Boolean, onClick: () -> Unit) {
+    Row(
+        Modifier.fillMaxWidth()
+            .background(if (active) MaterialTheme.colorScheme.surfaceVariant else Color.Transparent)
+            .clickableText(onClick)
+            .padding(horizontal = 8.dp, vertical = 3.dp),
+        verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
+    ) {
+        Text(
+            f.path,
+            style = MaterialTheme.typography.labelSmall
+                .copy(fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace),
+            modifier = Modifier.weight(1f),
+            maxLines = 1,
+        )
+        Text(
+            "+${f.added}",
+            style = MaterialTheme.typography.labelSmall,
+            color = io.acr.ui.stats.ChartColors.added,
+            modifier = Modifier.width(46.dp),
+            textAlign = androidx.compose.ui.text.style.TextAlign.End,
+        )
+        Text(
+            "−${f.deleted}",
+            style = MaterialTheme.typography.labelSmall,
+            color = io.acr.ui.stats.ChartColors.deleted,
+            modifier = Modifier.width(46.dp),
+            textAlign = androidx.compose.ui.text.style.TextAlign.End,
+        )
     }
 }

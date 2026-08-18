@@ -209,6 +209,43 @@ fun ImplDetail(
             // Ajustar sin perder lo hecho: cambiar un parámetro o sumar un repositorio no puede
             // obligar a empezar de cero.
             TextButton(onClick = { editando = true }) { Text(t("common.edit")) }
+            // Borrar, con lo que eso implica dicho antes y no después.
+            //
+            // Dos pasos y no un diálogo: lo que hay que leer es corto —qué se pierde— y un modal
+            // para eso agrega un click sin agregar información. El aviso nombra el taller cuando
+            // hay trabajo sin devolver, que es lo único irrecuperable: las tareas y el historial se
+            // pueden rehacer, un commit que sólo existe en una carpeta que se va, no.
+            var confirmandoBorrar by remember(implId) { mutableStateOf(false) }
+            val tallerSinDevolver = io.acr.ui.dbState(implId, version, initial = false) {
+                kotlinx.coroutines.runBlocking {
+                    impl.useWorkspace && !ctx.workspaces
+                        .inspect(implId, impl.title, misRepos, impl.branch).safeToDelete
+                }
+            }
+            TextButton(
+                enabled = !corriendo,
+                onClick = {
+                    if (!confirmandoBorrar) {
+                        confirmandoBorrar = true
+                    } else {
+                        ctx.impls.delete(implId)
+                        onBack()
+                    }
+                },
+            ) {
+                Text(
+                    if (confirmandoBorrar) t("impl.deleteConfirm") else t("common.delete"),
+                    color = if (confirmandoBorrar) StatusColors.FAILED else androidx.compose.ui.graphics.Color.Unspecified,
+                )
+            }
+            if (confirmandoBorrar) {
+                Text(
+                    if (tallerSinDevolver) t("impl.deleteWarnWorkspace") else t("impl.deleteWarn"),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = StatusColors.FAILED,
+                )
+                TextButton(onClick = { confirmandoBorrar = false }) { Text(t("common.cancel")) }
+            }
             // Analizar los documentos antes de planificar sobre ellos: un plan no puede ser mejor
             // que las specs de las que sale, y lo que las specs no dicen el planificador lo
             // inventa sin marcarlo.

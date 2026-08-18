@@ -3,6 +3,35 @@
 Reglas de numeración en [CLAUDE.md](CLAUDE.md): un requerimiento **nuevo** incrementa *major*;
 cambiar uno **existente** incrementa *patch*.
 
+## 84.0.0
+
+**Los hilos del PR se leen dentro de la vista de código.** Una pestaña nueva, al lado de archivos y
+hallazgos, con cada comentario y lo que contestaron debajo. Para saber si algo ya se había
+respondido había que ir a Bitbucket, mirar y volver — y volver es lo caro: se pierde el archivo
+abierto y la línea donde uno estaba. Tocando un hilo, la vista salta al archivo y la línea de ese
+comentario.
+
+Las respuestas van indentadas y con el nombre de quien las escribió: sin el nombre, dos respuestas
+seguidas se leen como un texto largo, y quién dijo qué es la mitad de la información cuando uno está
+tratando de entender si algo quedó resuelto.
+
+**Los archivos de un commit, en lista vertical.** Estaban en una fila horizontal —"suelen ser
+pocos"— y eso es cierto hasta que no lo es: un commit de veinte archivos dejaba la mitad fuera de la
+pantalla, y los nombres largos se recortaban al punto de no distinguirse entre sí. Ahora entra la
+ruta completa, que es lo que identifica un archivo en un proyecto real: hay quince `index.ts`, y lo
+que los diferencia es la carpeta.
+
+**Se puede borrar una implementación.** Con lo que eso implica dicho antes y no después: si su
+taller tiene trabajo que no está en tus clones, el aviso lo nombra, porque eso es lo único
+irrecuperable — las tareas y el historial se pueden rehacer; un commit que sólo existe en una
+carpeta que se va, no. El taller no se toca automáticamente: se resuelve antes, a mano.
+
+**Una sección con todos los PRs abiertos**, de todos los repositorios, con su tarjeta para aislarla
+de un click. Las demás secciones muestran lo que pide algo; para tener el panorama había que entrar
+repositorio por repositorio. Sale del caché y no de la red: la lista aparece al instante y el botón
+de refrescar es el que va a buscar — una pantalla que tarda seis segundos en abrir porque consulta
+cuatro proveedores no se abre.
+
 ## 83.0.1
 
 En el tablero, "Buscar PRs nuevos" pasa a llamarse **"Refrescar"**. El botón hace más que buscar

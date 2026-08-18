@@ -125,6 +125,19 @@ fun DashboardPanel(ctx: AppContext, onOpenPr: (repoId: String, prId: Long) -> Un
                 replies = vivos(ctx.replies.openOnes(), { it.repoId }, { it.prId }),
                 awaitingThem = vivos(ctx.reviews.awaitingThem(), { it.repoId }, { it.prId }),
                 cerrados = cerrados,
+                // Todos los PRs abiertos, de todos los repositorios. Es la vista que faltaba: las
+                // demás secciones muestran lo que pide algo, y para tener el panorama había que
+                // entrar repositorio por repositorio.
+                //
+                // Sale del caché y no de la red: la lista aparece al instante y el botón de
+                // refrescar es el que va a buscar. Una pantalla que tarda seis segundos en abrir
+                // porque consulta cuatro proveedores no se abre.
+                abiertos = ctx.repos.list()
+                    .filter { !it.hidden && !it.localOnly }
+                    .flatMap { repo ->
+                        ctx.prCache.get(repo.id).prs.map { repo to it }
+                    }
+                    .filter { (repo, pr) -> pr.id !in cerrados[repo.id].orEmpty() },
                 totals = ctx.reviews.totals(),
                 current = ctx.reviews.currentPeriods(),
                 daily = ctx.reviews.statsByPeriod("day", 14),
@@ -167,6 +180,15 @@ fun DashboardPanel(ctx: AppContext, onOpenPr: (repoId: String, prId: Long) -> Un
                     "${running.count { it.auto }} automáticas",
                     selected = focus == "running",
                     onClick = { focus = if (focus == "running") null else "running" },
+                )
+                // Todos los abiertos, para poder aislar la sección con un click igual que las
+                // demás. Sin la tarjeta, la sección nueva quedaba abajo de todo sin forma de
+                // llegar directo.
+                Stat(
+                    io.acr.i18n.t("dash.openPrs"), snapshot.abiertos.size.toString(),
+                    io.acr.i18n.t("dash.acrossRepos", snapshot.abiertos.map { it.first.id }.distinct().size),
+                    selected = focus == "prs",
+                    onClick = { focus = if (focus == "prs") null else "prs" },
                 )
                 Stat(
                     io.acr.i18n.t("dash.readyToPublish"), snapshot.ready.size.toString(),
@@ -472,6 +494,55 @@ fun DashboardPanel(ctx: AppContext, onOpenPr: (repoId: String, prId: Long) -> Un
                 }
             }
 
+            // --- Todos los PRs abiertos ---
+            if (focus == null || focus == "prs") {
+            item {
+                Section(
+                    text = io.acr.i18n.t("dash.allPrs", snapshot.abiertos.size),
+                    collapsed = "prs" in plegadas,
+                    onToggle = { alternar("prs") },
+                )
+            }
+            items(
+                if ("prs" in plegadas) emptyList() else snapshot.abiertos,
+                key = { (r, p) -> "ap-${r.id}-${p.id}" },
+            ) { (repo, pr) ->
+                Row(
+                    Modifier.fillMaxWidth().clickableText { onOpenPr(repo.id, pr.id) }
+                        .padding(vertical = 6.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        "${repo.name} · #${pr.id}",
+                        style = MaterialTheme.typography.labelMedium,
+                        modifier = Modifier.width(240.dp),
+                        maxLines = 1,
+                    )
+                    Text(
+                        pr.title,
+                        style = MaterialTheme.typography.bodySmall,
+                        modifier = Modifier.weight(1f),
+                        maxLines = 1,
+                    )
+                    if (pr.isDraft) {
+                        Text(
+                            io.acr.i18n.t("prs.draft"),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(end = 8.dp),
+                        )
+                    }
+                    Text(
+                        pr.author,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.width(150.dp),
+                        maxLines = 1,
+                    )
+                }
+            }
+            }
+
             if (focus == null || focus == "recent") {
             item {
                 Section(
@@ -518,6 +589,8 @@ private data class Snapshot(
      * que importa no es "qué hay que hacer" sino "qué pasó", y ocultarlo sería borrar el pasado.
      */
     val cerrados: Map<String, Set<Long>> = emptyMap(),
+    /** Todos los PRs abiertos, de todos los repositorios, con el repositorio al que pertenecen. */
+    val abiertos: List<Pair<io.acr.forge.RepoRecord, io.acr.forge.PullRequest>> = emptyList(),
     val totals: io.acr.data.ReviewRepository.Totals =
         io.acr.data.ReviewRepository.Totals(0, 0, 0, 0, 0, 0),
     val current: io.acr.data.ReviewRepository.Current =

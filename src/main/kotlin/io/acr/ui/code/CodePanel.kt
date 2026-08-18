@@ -115,6 +115,14 @@ fun CodePanel(
     val findings = io.acr.ui.dbState(repo.id, prId, notesVersion, initial = emptyList()) {
         ctx.findings.forLatestReview(repo.id, prId)
     }
+    // Los comentarios del PR, armados en hilos: el nuestro arriba y las respuestas debajo.
+    val comentarios = io.acr.ui.dbState(repo.id, prId, notesVersion, initial = emptyList()) {
+        ctx.comments.forPr(repo.id, prId)
+    }
+    val hilos = remember(comentarios) {
+        val respuestas = comentarios.filter { it.parentId != null }.groupBy { it.parentId }
+        comentarios.filter { it.parentId == null }.map { it to respuestas[it.commentId].orEmpty() }
+    }
 
     // Por qué la lista está vacía, cuando lo está. Un panel en blanco no distingue "este PR no
     // cambió nada" de "no puedo ver la rama", y son dos cosas muy distintas: la primera no tiene
@@ -223,6 +231,14 @@ fun CodePanel(
                     { sidebar = Sidebar.HALLAZGOS },
                     { Text(io.acr.i18n.t("code.tabFindings", anchors.size)) },
                 )
+                // Los hilos del PR, acá adentro. Para saber si algo ya se contestó había que ir a
+                // Bitbucket, mirar, y volver — y volver es lo caro: se pierde el archivo abierto y
+                // la línea donde uno estaba.
+                FilterChip(
+                    sidebar == Sidebar.HILOS,
+                    { sidebar = Sidebar.HILOS },
+                    { Text(io.acr.i18n.t("code.tabThreads", hilos.size)) },
+                )
             }
             Spacer(Modifier.height(6.dp))
             if (loading) LinearProgressIndicator(Modifier.fillMaxWidth())
@@ -235,6 +251,30 @@ fun CodePanel(
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.padding(12.dp),
                 )
+            }
+            if (sidebar == Sidebar.HILOS) {
+                if (hilos.isEmpty()) {
+                    Text(
+                        io.acr.i18n.t("code.noThreads"),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(12.dp),
+                    )
+                }
+                LazyColumn(Modifier.fillMaxSize()) {
+                    items(hilos, key = { (c, _) -> c.commentId }) { (raiz, respuestas) ->
+                        HiloDelPr(raiz, respuestas) {
+                            // Al archivo y la línea del comentario: es lo que uno quiere ver
+                            // cuando lee un hilo, y buscarlo a mano en la lista de archivos es
+                            // exactamente el trabajo que esta pestaña viene a ahorrar.
+                            raiz.inlinePath?.let { p ->
+                                selected = p
+                                pendingLine = raiz.inlineLine
+                                highlight = p to (raiz.inlineLine ?: 0)
+                            }
+                        }
+                    }
+                }
             }
             if (sidebar == Sidebar.ARCHIVOS) {
                 LazyColumn(Modifier.fillMaxSize()) {
@@ -664,7 +704,7 @@ private fun NoteDialog(title: String, initial: String, onDismiss: () -> Unit, on
 }
 
 /** Qué muestra la columna izquierda: el árbol del diff o lo que hay para revisar. */
-internal enum class Sidebar { ARCHIVOS, HALLAZGOS }
+internal enum class Sidebar { ARCHIVOS, HALLAZGOS, HILOS }
 
 /**
  * Una observación anclada al código: un hallazgo de la review o una nota propia.
@@ -746,6 +786,57 @@ private fun AnchorRow(a: Anchor, active: Boolean, onClick: () -> Unit) {
                     Spacer(Modifier.width(6.dp))
                     io.acr.ui.StatusBadge(io.acr.i18n.t("common.published"))
                 }
+            }
+        }
+    }
+}
+
+/**
+ * Un hilo del PR: el comentario y lo que contestaron.
+ *
+ * Las respuestas van indentadas y con el nombre de quien las escribió. Sin el nombre, dos respuestas
+ * seguidas se leen como un solo texto largo, y quién dijo qué es la mitad de la información cuando
+ * uno está tratando de entender si algo quedó resuelto.
+ */
+@Composable
+private fun HiloDelPr(
+    raiz: io.acr.data.StoredComment,
+    respuestas: List<io.acr.data.StoredComment>,
+    onGoToLine: () -> Unit,
+) {
+    Column(
+        Modifier.fillMaxWidth()
+            .clickableText(onGoToLine)
+            .padding(horizontal = 8.dp, vertical = 6.dp),
+    ) {
+        Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+            Text(
+                raiz.author,
+                style = MaterialTheme.typography.labelSmall,
+                color = if (raiz.ours) MaterialTheme.colorScheme.primary
+                else MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            raiz.inlinePath?.let { p ->
+                Spacer(Modifier.width(6.dp))
+                Text(
+                    p.substringAfterLast('/') + (raiz.inlineLine?.let { ":$it" } ?: ""),
+                    style = MaterialTheme.typography.labelSmall
+                        .copy(fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                )
+            }
+        }
+        Text(raiz.body.trim(), style = MaterialTheme.typography.bodySmall, maxLines = 6)
+        respuestas.forEach { r ->
+            Column(Modifier.padding(start = 12.dp, top = 4.dp)) {
+                Text(
+                    "↳ " + r.author,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = if (r.ours) MaterialTheme.colorScheme.primary
+                    else MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Text(r.body.trim(), style = MaterialTheme.typography.bodySmall, maxLines = 6)
             }
         }
     }

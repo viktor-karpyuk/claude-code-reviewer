@@ -987,8 +987,30 @@ class ImplRepository(private val store: Store) {
         }
     }
 
+    /**
+     * Borra una implementación y todo lo suyo.
+     *
+     * Las tareas, los pasos, las preguntas, las revisiones y los jobs se van con ella por las
+     * claves foráneas; el contexto y el registro de los jobs no las tienen —se escriben desde el
+     * motor, donde una foránea habría hecho fallar una escritura por una carrera— así que se borran
+     * a mano. Dejarlos sería basura indexada por un id que ya no existe.
+     *
+     * El taller NO se toca acá: puede tener el único ejemplar de una tarde de trabajo, y esto no
+     * puede verificar nada una vez que la fila se fue. Se resuelve antes, en la pantalla.
+     */
     fun delete(id: String) {
-        store.stmt("DELETE FROM implementation WHERE id = ?") { ps -> ps.setString(1, id); ps.executeUpdate() }
+        store.transaction { conn ->
+            conn.prepareStatement(
+                """DELETE FROM task_context WHERE task_id IN
+                     (SELECT id FROM impl_task WHERE impl_id = ?)""",
+            ).use { ps -> ps.setString(1, id); ps.executeUpdate() }
+            conn.prepareStatement(
+                "DELETE FROM job_log WHERE job_id IN (SELECT id FROM job WHERE impl_id = ?)",
+            ).use { ps -> ps.setString(1, id); ps.executeUpdate() }
+            conn.prepareStatement("DELETE FROM implementation WHERE id = ?").use { ps ->
+                ps.setString(1, id); ps.executeUpdate()
+            }
+        }
     }
 
     private fun query(tail: String, bind: (java.sql.PreparedStatement) -> Unit): List<Implementation> =
