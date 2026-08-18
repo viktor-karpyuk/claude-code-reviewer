@@ -2067,3 +2067,36 @@ class DuracionTest {
         assertEquals("—", io.acr.impl.minutosLegibles(null as Double?))
     }
 }
+
+/**
+ * La regla de las claves de [io.acr.ui.dbState]: la primera identifica, las demás refrescan.
+ *
+ * No se puede componer en un test sin un entorno de Compose, así que lo que se fija acá es la
+ * decisión: cuál de las claves manda. Es la que evita que una pantalla que se refresca sola vacíe
+ * su tabla y la vuelva a llenar en cada vuelta.
+ */
+class DbStateKeysTest {
+
+    @Test
+    fun theFirstKeyIsTheIdentityAndTheRestAreRefreshes() {
+        val fuente = java.io.File("src/main/kotlin/io/acr/ui/DbState.kt").readText()
+        assertTrue(
+            fuente.contains("remember(keys.firstOrNull())"),
+            "el valor sobrevive a un refresco: sólo se vuelve al inicial cuando cambia la identidad",
+        )
+        assertTrue(
+            fuente.contains("LaunchedEffect(*keys)"),
+            "pero cualquier clave dispara la recarga",
+        )
+    }
+
+    @Test
+    fun theImplementationScreenDoesNotQueryOnEveryLogLine() {
+        // `vivo` cambia con cada línea que emite el motor —decenas por segundo mientras una tarea
+        // trabaja— y como clave de una consulta la relanzaba con esa frecuencia.
+        val fuente = java.io.File("src/main/kotlin/io/acr/ui/impl/ImplDetail.kt").readText()
+        val consultas = Regex("""dbState\((implId|r\.id)[^)]*""").findAll(fuente)
+            .filter { it.value.contains("vivo") }.toList()
+        assertTrue(consultas.isEmpty(), "quedan consultas atadas al feed: ${consultas.map { it.value }}")
+    }
+}

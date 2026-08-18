@@ -76,13 +76,16 @@ fun ImplDetail(
     val progreso by ctx.implEngine.progress.collectAsState()
     val vivo = progreso[implId]
 
-    val impl = io.acr.ui.dbState(implId, version, vivo, tic, initial = null as io.acr.impl.Implementation?) {
+    // Sin `vivo` entre las claves: ese objeto cambia con cada línea de log —decenas por segundo
+    // mientras una tarea trabaja— y como clave de una consulta la relanzaba con esa frecuencia. El
+    // latido de tres segundos ya trae lo que haya cambiado en la base.
+    val impl = io.acr.ui.dbState(implId, version, tic, initial = null as io.acr.impl.Implementation?) {
         ctx.impls.get(implId)
     } ?: return
-    val tareas = io.acr.ui.dbState(implId, version, vivo, tic, initial = emptyList<io.acr.impl.ImplTask>()) {
+    val tareas = io.acr.ui.dbState(implId, version, tic, initial = emptyList<io.acr.impl.ImplTask>()) {
         ctx.impls.tasks(implId)
     }
-    val preguntas = io.acr.ui.dbState(implId, version, vivo, tic, initial = emptyList<io.acr.impl.ImplQuestion>()) {
+    val preguntas = io.acr.ui.dbState(implId, version, tic, initial = emptyList<io.acr.impl.ImplQuestion>()) {
         ctx.impls.questions(implId)
     }
     // Late mientras haya algo corriendo, esté abierta la lista o el detalle de una tarea: es lo
@@ -420,7 +423,7 @@ fun ImplDetail(
         // con cuatro hallazgos sin arreglar no está en el mismo estado que una limpia, y el costo
         // total no dice nada de eso.
         val paralelas = remember(tareas) { paralelasDe(tareas) }
-        val revisiones = io.acr.ui.dbState(implId, version, vivo, tic, initial = emptyList<io.acr.impl.ReviewPass>()) {
+        val revisiones = io.acr.ui.dbState(implId, version, tic, initial = emptyList<io.acr.impl.ReviewPass>()) {
             ctx.impls.reviews(implId)
         }
         if (revisiones.isNotEmpty()) {

@@ -3,6 +3,20 @@
 Reglas de numeración en [CLAUDE.md](CLAUDE.md): un requerimiento **nuevo** incrementa *major*;
 cambiar uno **existente** incrementa *patch*.
 
+## 71.2.0
+
+**La tabla de tareas se vaciaba y se volvía a llenar todo el tiempo.** Eran dos cosas sumadas.
+
+La primera: al recargar, el valor volvía al inicial —lista vacía— hasta que la consulta contestaba.
+Con una pantalla que se refresca sola, eso es la tabla parpadeando y el scroll saltando varias veces
+por segundo. Ahora lo que ya está en pantalla se queda hasta que llega lo nuevo. Sólo se vuelve al
+valor inicial cuando cambia la **identidad** de lo que se mira —otra implementación, otra tarea—,
+porque ahí lo viejo pertenece a otra cosa y mostrarlo sería mentir.
+
+La segunda: las consultas estaban atadas al feed de actividad, que cambia con **cada línea de log**
+—decenas por segundo mientras una tarea trabaja—. El latido de tres segundos ya trae lo que haya
+cambiado en la base; el feed sólo tiene que dibujar el feed.
+
 ## 71.1.0
 
 **"Retomar" parecía un botón muerto, y no lo era.** El motor rechaza la corrida cuando un
