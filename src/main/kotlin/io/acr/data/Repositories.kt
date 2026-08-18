@@ -12,7 +12,7 @@ class RepoRepository(private val store: Store, private val secrets: Secrets) {
         store.stmt(
             """SELECT id, name, provider, owner, slug, local_path, token_cipher, project_kind,
                       default_depth, default_model, auto_review, skip_drafts, skip_titles,
-                      skip_authors, only_targets, reply_mode, local_only
+                      skip_authors, only_targets, reply_mode, local_only, hidden
                FROM repo ORDER BY name""",
         ) { ps ->
             ps.executeQuery().use { rs ->
@@ -20,10 +20,26 @@ class RepoRepository(private val store: Store, private val secrets: Secrets) {
                     while (rs.next()) add(map(rs.getString(1), rs.getString(2), rs.getString(3),
                         rs.getString(4), rs.getString(5), rs.getString(6), rs.getBytes(7),
                         rs.getString(8), rs.getString(9), rs.getString(10), rs.getInt(11) == 1,
-                        rs.getInt(12) == 1, rs.getString(13), rs.getString(14), rs.getString(15), rs.getString(16), rs.getInt(17) == 1))
+                        rs.getInt(12) == 1, rs.getString(13), rs.getString(14), rs.getString(15), rs.getString(16), rs.getInt(17) == 1,
+                        rs.getInt(18) == 1))
                 }
             }
         }
+
+    /**
+     * Saca un repositorio de la vista, o lo devuelve.
+     *
+     * No lo borra: sus reviews, sus hallazgos y las implementaciones que lo usan siguen intactos, y
+     * volver a mostrarlo es un click. Esa es toda la diferencia con borrar, y es la que hace que se
+     * pueda ocultar sin pensarlo dos veces.
+     */
+    fun setHidden(id: String, hidden: Boolean) {
+        store.stmt("UPDATE repo SET hidden = ? WHERE id = ?") { ps ->
+            ps.setInt(1, if (hidden) 1 else 0)
+            ps.setString(2, id)
+            ps.executeUpdate()
+        }
+    }
 
     /**
      * Registra una carpeta como destino de implementaciones, o devuelve la que ya estaba.
@@ -78,7 +94,7 @@ class RepoRepository(private val store: Store, private val secrets: Secrets) {
         store.stmt(
             """SELECT id, name, provider, owner, slug, local_path, token_cipher, project_kind,
                       default_depth, default_model, auto_review, skip_drafts, skip_titles,
-                      skip_authors, only_targets, reply_mode, local_only
+                      skip_authors, only_targets, reply_mode, local_only, hidden
                FROM repo WHERE id = ?""",
         ) { ps ->
             ps.setString(1, id)
@@ -86,7 +102,8 @@ class RepoRepository(private val store: Store, private val secrets: Secrets) {
                 if (rs.next()) map(rs.getString(1), rs.getString(2), rs.getString(3),
                     rs.getString(4), rs.getString(5), rs.getString(6), rs.getBytes(7),
                     rs.getString(8), rs.getString(9), rs.getString(10), rs.getInt(11) == 1,
-                    rs.getInt(12) == 1, rs.getString(13), rs.getString(14), rs.getString(15), rs.getString(16), rs.getInt(17) == 1) else null
+                    rs.getInt(12) == 1, rs.getString(13), rs.getString(14), rs.getString(15), rs.getString(16), rs.getInt(17) == 1,
+                    rs.getInt(18) == 1) else null
             }
         }
 
@@ -187,6 +204,7 @@ class RepoRepository(private val store: Store, private val secrets: Secrets) {
         skipDrafts: Boolean, skipTitles: String?, skipAuthors: String?, onlyTargets: String?,
         replyMode: String?,
         localOnly: Boolean = false,
+        hidden: Boolean = false,
     ) = RepoRecord(
         id = id,
         name = name,
@@ -210,6 +228,7 @@ class RepoRepository(private val store: Store, private val secrets: Secrets) {
         ),
         replyMode = io.acr.forge.ReplyMode.fromName(replyMode),
         localOnly = localOnly,
+        hidden = hidden,
     )
 
     private companion object { const val AUTO = "AUTO" }

@@ -164,6 +164,10 @@ fun App(ctx: AppContext) {
                             onOpen = { selection.go(Selection.Repo(it.id)) },
                             onEdit = { selection.go(Selection.RepoForm(it.id)) },
                             onAdd = { selection.go(Selection.RepoForm(null)) },
+                            onHide = { r, oculto ->
+                                ctx.repos.setHidden(r.id, oculto)
+                                scope.launch { reloadRepos() }
+                            },
                         )
                         is Selection.Settings -> SettingsPanel(
                             ctx = ctx,

@@ -27,6 +27,10 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -58,7 +62,14 @@ fun ReposPanel(
     onOpen: (RepoRecord) -> Unit,
     onEdit: (RepoRecord) -> Unit,
     onAdd: () -> Unit,
+    /** Ocultar o recuperar un repositorio. Recarga la lista al terminar. */
+    onHide: (RepoRecord, Boolean) -> Unit = { _, _ -> },
 ) {
+    // Los ocultos, aparte y detrás de un click. Con quince repositorios los tres de todos los días
+    // quedan enterrados entre los doce que se agregaron para una implementación puntual.
+    var verOcultos by remember { mutableStateOf(false) }
+    val visibles = repos.filter { !it.hidden }
+    val ocultos = repos.filter { it.hidden }
     // La foto del día, una vez por apertura de la sección y fuera del hilo de UI. Antes se
     // guardaba adentro de la lectura de cada tarjeta, así que escribía en cada recomposición.
     androidx.compose.runtime.LaunchedEffect(repos) {
@@ -101,14 +112,49 @@ fun ReposPanel(
             horizontalArrangement = Arrangement.spacedBy(12.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            repos.forEach { repo ->
+            visibles.forEach { repo ->
                 RepoCard(
                     ctx = ctx,
                     repo = repo,
                     running = running[repo.id] ?: 0,
                     onOpen = { onOpen(repo) },
                     onEdit = { onEdit(repo) },
+                    onHide = { onHide(repo, true) },
                 )
+            }
+        }
+
+        // Los ocultos: siempre recuperables, nunca en el camino. Se muestran en una línea y no como
+        // tarjetas —lo que se busca acá es el nombre para traerlo de vuelta, no su estado—.
+        if (ocultos.isNotEmpty()) {
+            Spacer(Modifier.height(20.dp))
+            androidx.compose.material3.TextButton(onClick = { verOcultos = !verOcultos }) {
+                Text((if (verOcultos) "▾  " else "▸  ") + t("repos.hidden", ocultos.size))
+            }
+            if (verOcultos) {
+                ocultos.forEach { r ->
+                    Row(
+                        Modifier.fillMaxWidth().padding(vertical = 2.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(
+                            r.name,
+                            style = MaterialTheme.typography.bodySmall,
+                            modifier = Modifier.width(240.dp),
+                            maxLines = 1,
+                        )
+                        Text(
+                            if (r.localOnly) r.localPath else "${r.owner}/${r.slug}",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.weight(1f),
+                            maxLines = 1,
+                        )
+                        androidx.compose.material3.TextButton(onClick = { onHide(r, false) }) {
+                            Text(t("repos.unhide"))
+                        }
+                    }
+                }
             }
         }
     }
@@ -133,6 +179,7 @@ private fun RepoCard(
     running: Int,
     onOpen: () -> Unit,
     onEdit: () -> Unit,
+    onHide: () -> Unit = {},
 ) {
     // Leer y escribir estaban juntos acá, y eso hacía un INSERT por tarjeta cada vez que la
     // pantalla se recomponía: siete repositorios, siete escrituras, por cada vuelta de layout.
@@ -261,6 +308,12 @@ private fun RepoCard(
         Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
             TextButton(onClick = onOpen) { Text(t("repos.openPrsAction")) }
             TextButton(onClick = onEdit) { Text(t("common.edit")) }
+            // Ocultar no borra: las reviews, los hallazgos y las implementaciones que lo usan
+            // siguen intactos. Esa es la diferencia con borrar, y es la que hace que se pueda
+            // ocultar sin pensarlo dos veces.
+            io.acr.ui.InfoTip(t("repos.hideTip"), t("repos.hideTipOut")) {
+                TextButton(onClick = onHide) { Text(t("repos.hide")) }
+            }
         }
     }
 }

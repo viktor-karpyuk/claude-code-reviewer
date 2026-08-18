@@ -31,6 +31,15 @@ data class RepoRecord(
      * de PRs no la ofrecen.
      */
     val localOnly: Boolean = false,
+    /**
+     * Fuera de la vista, pero no borrado.
+     *
+     * Con quince repositorios, los tres de todos los días quedan enterrados entre los doce que se
+     * agregaron para una implementación puntual. Esto es una decisión de pantalla y nada más: el
+     * repositorio sigue existiendo, sus reviews siguen ahí, y una implementación que lo use sigue
+     * corriendo igual. Para hacerlo desaparecer de verdad está borrar.
+     */
+    val hidden: Boolean = false,
 )
 
 /**

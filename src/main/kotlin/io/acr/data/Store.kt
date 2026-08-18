@@ -1265,6 +1265,16 @@ class Store(private val dbPath: Path, val settings: DbSettings = DbSettings()) :
             """
             ALTER TABLE implementation ADD COLUMN missing_repos TEXT
             """.trimIndent(),
+
+            // v61 — repositorios ocultos.
+            //
+            // Con quince repositorios, los tres que uno mira todos los días quedan enterrados entre
+            // los doce que se agregaron para una implementación puntual. Ocultar es **sólo de la
+            // vista**: el repositorio sigue existiendo, sus reviews siguen ahí y una implementación
+            // que lo use sigue funcionando. Borrar sería otra cosa y ya existe.
+            """
+            ALTER TABLE repo ADD COLUMN hidden INTEGER
+            """.trimIndent(),
         )
     }
 }

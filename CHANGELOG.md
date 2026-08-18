@@ -3,6 +3,17 @@
 Reglas de numeración en [CLAUDE.md](CLAUDE.md): un requerimiento **nuevo** incrementa *major*;
 cambiar uno **existente** incrementa *patch*.
 
+## 77.0.0
+
+**Se pueden ocultar repositorios sin perderlos.** Con quince, los tres que uno mira todos los días
+quedan enterrados entre los doce que se agregaron para una implementación puntual.
+
+Ocultar es una decisión de pantalla y nada más: el repositorio sigue existiendo, sus reviews y sus
+hallazgos siguen ahí, y una implementación que lo use sigue corriendo igual. Esa es toda la
+diferencia con borrar —que ya existía— y es la que permite ocultar sin pensarlo dos veces. Los
+ocultos quedan detrás de un desplegable al pie, en una línea cada uno: lo que se busca ahí es el
+nombre para traerlo de vuelta, no su estado.
+
 ## 76.0.0
 
 **Un servicio que los documentos nombran ahora se averigua antes de decidir nada.** La versión

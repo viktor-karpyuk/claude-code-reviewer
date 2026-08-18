@@ -2665,3 +2665,59 @@ class MissingRepoTest {
         }
     }
 }
+
+/**
+ * Ocultar un repositorio no es borrarlo.
+ *
+ * Con quince repositorios, los tres de todos los días quedan enterrados entre los doce que se
+ * agregaron para una implementación puntual. Pero ocultar es una decisión de pantalla: si además
+ * rompiera algo, nadie lo usaría.
+ */
+class HiddenRepoTest {
+
+    private fun conCtx(block: (AppContext, String) -> Unit) {
+        val dir = java.nio.file.Files.createTempDirectory("acr-hide")
+        val ctx = AppContext.bootstrap(dir)
+        try {
+            val id = ctx.repos.create(
+                "tmp-h-${System.nanoTime()}", Provider.BITBUCKET, "acme", "demo",
+                dir.toString(), null, null, null, "", false,
+                io.acr.forge.SkipRules(), io.acr.forge.ReplyMode.OFF,
+            )
+            block(ctx, id)
+        } finally {
+            ctx.close()
+            dir.toFile().deleteRecursively()
+        }
+    }
+
+    @Test
+    fun aHiddenRepoIsStillThere() = conCtx { ctx, id ->
+        ctx.repos.setHidden(id, true)
+        assertTrue(ctx.repos.get(id)!!.hidden)
+        assertTrue(
+            ctx.repos.list().any { it.id == id },
+            "sigue en la lista: quién lo esconde es la pantalla, no la base — si desapareciera de " +
+                "acá, una implementación que lo usa dejaría de encontrarlo",
+        )
+    }
+
+    @Test
+    fun bringingItBackIsOneClick() = conCtx { ctx, id ->
+        ctx.repos.setHidden(id, true)
+        ctx.repos.setHidden(id, false)
+        assertTrue(!ctx.repos.get(id)!!.hidden)
+    }
+
+    @Test
+    fun anImplementationOnAHiddenRepoKeepsWorking() = conCtx { ctx, id ->
+        // Es la diferencia con borrar, y la que hace que ocultar se pueda hacer sin pensarlo.
+        val implId = ctx.impls.create(
+            listOf(io.acr.impl.ImplRepo(id, io.acr.impl.RepoRole.OTHER, null)),
+            "sobre uno oculto", listOf("/tmp/x.md"), null,
+        )
+        ctx.repos.setHidden(id, true)
+        assertEquals(listOf(id), ctx.impls.reposOf(implId).map { it.repoId })
+        assertEquals(id, ctx.repos.get(id)?.id)
+    }
+}
