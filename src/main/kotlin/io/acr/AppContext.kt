@@ -190,6 +190,24 @@ class AppContext private constructor(
                 impls.taskStatus(id) != io.acr.impl.TaskStatus.DONE
             }
             hechas.forEach { impls.resetTask(it) }
+            // Los talleres de lo que ya terminó y ya está devuelto. Devolver puede fallar por algo
+            // pasajero, y entonces el taller queda —bien— sin borrar; si después alguien devuelve el
+            // trabajo a mano, nadie vuelve a limpiar y la carpeta ocupa disco para siempre.
+            runCatching {
+                kotlinx.coroutines.runBlocking {
+                    workspaces.prune(
+                        impls.list()
+                            .filter { it.status == io.acr.impl.ImplStatus.DONE }
+                            .map { i ->
+                                Triple(
+                                    i.id,
+                                    impls.reposOf(i.id).mapNotNull { repos.get(it.repoId) },
+                                    i.branch,
+                                )
+                            },
+                    )
+                }
+            }
             // Y las implementaciones que quedaron diciendo que corrían. Sin esto la pantalla ofrece
             // frenarlas en vez de retomarlas, y el avance se queda congelado para siempre.
             runCatching { impls.stopOrphanedRunning() }

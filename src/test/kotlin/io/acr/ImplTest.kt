@@ -3173,3 +3173,70 @@ class WorkspaceSizeTest {
         }
     }
 }
+
+/**
+ * El ciclo de vida del taller según cómo termine la implementación.
+ *
+ * Devolver y borrar son dos cosas distintas y se deciden distinto: devolver pasa siempre, borrar
+ * sólo cuando terminó de verdad.
+ */
+class WorkspaceLifecycleTest {
+
+    private fun conTaller(block: (io.acr.impl.Workspaces, io.acr.forge.RepoRecord, String) -> Unit) {
+        val base = java.nio.file.Files.createTempDirectory("acr-ciclo").toFile()
+        try {
+            val d = java.io.File(base, "origen").apply { mkdirs() }
+            kotlinx.coroutines.runBlocking {
+                io.acr.claude.Git.init(d)
+                java.io.File(d, "a.txt").writeText("1")
+                io.acr.claude.Git.commitAll(d, "inicial")
+            }
+            val repo = io.acr.forge.RepoRecord(
+                id = "r", name = "origen", provider = Provider.BITBUCKET, owner = "a", slug = "b",
+                localPath = d.absolutePath, token = null,
+            )
+            val rama = kotlinx.coroutines.runBlocking { io.acr.claude.Git.currentBranch(d) } ?: "main"
+            block(io.acr.impl.Workspaces(java.io.File(base, "ws")), repo, rama)
+        } finally {
+            base.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun pruneClearsWhatIsFinishedAndAlreadySafe() = conTaller { ws, repo, rama ->
+        kotlinx.coroutines.runBlocking {
+            ws.prepare("i1", listOf(repo), "f-x", { rama })
+            java.io.File(ws.repoDir("i1", "origen"), "b.txt").writeText("2")
+            io.acr.claude.Git.commitAll(ws.repoDir("i1", "origen"), "1. b")
+
+            // Todavía no devuelto: el barrendero no lo toca.
+            assertEquals(0, ws.prune(listOf(Triple("i1", listOf(repo), "f-x"))))
+            assertTrue(ws.dirOf("i1").exists())
+
+            ws.syncBack("i1", listOf(repo), "f-x")
+            assertEquals(1, ws.prune(listOf(Triple("i1", listOf(repo), "f-x"))))
+            assertTrue(!ws.dirOf("i1").exists())
+        }
+    }
+
+    @Test
+    fun pruneNeverTouchesWhatItCannotVerify() = conTaller { ws, repo, rama ->
+        // Un taller cuya implementación no está en la lista de terminadas no se toca, aunque esté
+        // limpio: el barrendero sólo borra lo que puede afirmar.
+        kotlinx.coroutines.runBlocking {
+            ws.prepare("i1", listOf(repo), "f-x", { rama })
+            assertEquals(0, ws.prune(emptyList()))
+            assertTrue(ws.dirOf("i1").exists())
+        }
+    }
+
+    @Test
+    fun aWorkspaceWithNoCommitsIsSafeFromTheStart() = conTaller { ws, repo, rama ->
+        // Sin commits propios no hay nada que perder: el sha de la rama es el mismo que el de la
+        // base, así que borrarlo no tira trabajo.
+        kotlinx.coroutines.runBlocking {
+            ws.prepare("i1", listOf(repo), "f-x", { rama })
+            assertTrue(ws.inspect("i1", "t", listOf(repo), "f-x").safeToDelete)
+        }
+    }
+}

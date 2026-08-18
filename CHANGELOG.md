@@ -3,6 +3,36 @@
 Reglas de numeración en [CLAUDE.md](CLAUDE.md): un requerimiento **nuevo** incrementa *major*;
 cambiar uno **existente** incrementa *patch*.
 
+## 81.0.0
+
+Más sobre la gestión de talleres, con el foco en el peor caso silencioso.
+
+**El trabajo vuelve a tus clones en todos los finales, no sólo cuando termina bien.** Antes, una
+implementación que quedaba esperando una decisión, que fallaba, o que alguien frenaba, dejaba todo lo
+que había hecho únicamente adentro del taller. Desde afuera parecía que no había hecho nada, y si
+nadie la retomaba, no lo hizo para nadie. Ahora se devuelve siempre; **borrar** sigue siendo otra
+cosa y pasa sólo cuando terminó de verdad, porque una implementación que se va a retomar necesita su
+taller con todo lo commiteado.
+
+**Un barrendero al abrir la app** borra los talleres de implementaciones terminadas cuyo trabajo ya
+está del otro lado. Devolver puede fallar por algo pasajero —el clon estaba parado en esa rama— y
+entonces el taller queda, correctamente, sin borrar; si más tarde alguien devuelve el trabajo a mano,
+nadie volvía a limpiar y la carpeta ocupaba disco para siempre. Sólo toca lo que puede verificar.
+
+**"¿Ya está a salvo?" se contesta por commit y no por nombre de rama.** Un taller recién creado
+aparecía como "con trabajo sin devolver" siempre: su rama apunta al mismo commit que la base, que el
+clon obviamente tiene, pero bajo otro nombre. Un aviso que casi siempre está equivocado es peor que
+no avisar — enseña a ignorarlo, y el día que dice la verdad nadie lo mira.
+
+**El taller se ve desde la implementación**, con su estado y el botón para devolver el trabajo sin
+esperar a que termine — que es lo que permite mirarlo con las herramientas de siempre mientras sigue
+corriendo. El detalle y el borrado se quedan en administración: borrar no es algo que uno haga
+mirando el avance.
+
+Y en administración, el total en disco y cuántos talleres tienen trabajo sin devolver, con esos
+primeros en la lista: uno con trabajo pendiente entre diez limpios se pierde de vista, y es el único
+que importa.
+
 ## 80.1.0
 
 Barrido sobre los talleres, que son lo más nuevo y lo más riesgoso. **La pantalla mentía durante toda

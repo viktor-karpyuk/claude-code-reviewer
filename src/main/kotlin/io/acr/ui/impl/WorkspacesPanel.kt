@@ -77,6 +77,20 @@ fun WorkspacesPanel(ctx: AppContext) {
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.weight(1f),
             )
+            // El total, que es la pregunta que trae a alguien acá cuando el disco aprieta. Y el
+            // recuento de lo que todavía no se devolvió, que es lo único que pide una decisión.
+            val total = talleres.sumOf { it.sizeBytes }
+            val sinDevolver = talleres.count { !it.safeToDelete }
+            if (talleres.isNotEmpty()) {
+                Text(
+                    t("ws.total", mb(total), talleres.size) +
+                        (if (sinDevolver > 0) "  ·  " + t("ws.pending", sinDevolver) else ""),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = if (sinDevolver > 0) StatusColors.NEEDS_HUMAN
+                    else MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Spacer(Modifier.width(10.dp))
+            }
             Text(
                 ctx.workspaces.rootDir().absolutePath,
                 style = MaterialTheme.typography.labelSmall.copy(fontFamily = FontFamily.Monospace),
@@ -93,7 +107,9 @@ fun WorkspacesPanel(ctx: AppContext) {
             )
         }
 
-        talleres.forEach { w ->
+        // Primero lo que pide una decisión. Un taller con trabajo sin devolver entre diez que están
+        // limpios se pierde de vista, y es el único que importa.
+        talleres.sortedBy { it.safeToDelete }.forEach { w ->
             Column(
                 Modifier.fillMaxWidth()
                     .clip(RoundedCornerShape(8.dp))

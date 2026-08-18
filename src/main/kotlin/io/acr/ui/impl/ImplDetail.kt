@@ -612,6 +612,14 @@ private fun SeccionTareas(
             }
         }
 
+        // El taller de esta implementación: dónde está, cuánto ocupa y si el trabajo ya está
+        // devuelto. Vivía sólo en la pantalla de administración, y la pregunta "¿esto ya está en mi
+        // clon?" se hace parado acá, mirando lo que se hizo — no yendo a buscar otra pantalla.
+        if (impl.useWorkspace) {
+            Spacer(Modifier.height(12.dp))
+            TallerDeLaImpl(ctx, impl, misRepos, onChange)
+        }
+
         // La consola, arriba de las tareas: lo que se escribe acá se convierte en una y aparece
         // ahí abajo, así que ponerla lejos rompería la relación entre lo que uno pide y dónde
         // aparece.
@@ -1058,4 +1066,77 @@ private fun TextoActividad(ctx: AppContext, implId: String) {
         style = MaterialTheme.typography.labelSmall,
         color = MaterialTheme.colorScheme.onSurfaceVariant,
     )
+}
+
+/**
+ * El taller de una implementación, resumido.
+ *
+ * Sólo lo que se decide desde acá: si el trabajo ya está en los clones y el botón para devolverlo.
+ * El detalle por repositorio y el borrado viven en administración — acá estorbarían, y borrar no es
+ * algo que uno haga mirando el avance.
+ */
+@Composable
+private fun TallerDeLaImpl(
+    ctx: AppContext,
+    impl: io.acr.impl.Implementation,
+    misRepos: List<io.acr.forge.RepoRecord>,
+    onChange: () -> Unit,
+) {
+    var trabajando by remember(impl.id) { mutableStateOf(false) }
+    var version2 by remember(impl.id) { mutableStateOf(0) }
+    val scope = androidx.compose.runtime.rememberCoroutineScope()
+    val w = io.acr.ui.dbState(impl.id, version2, initial = null as io.acr.impl.Workspace?) {
+        kotlinx.coroutines.runBlocking {
+            ctx.workspaces.inspect(impl.id, impl.title, misRepos, impl.branch)
+        }
+    }
+    if (w == null || !w.exists) return
+
+    Row(
+        Modifier.fillMaxWidth()
+            .clip(RoundedCornerShape(6.dp))
+            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f))
+            .padding(10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(Modifier.weight(1f)) {
+            Text(
+                t("impl.workshop") + "  ·  " +
+                    (if (w.safeToDelete) t("ws.safe") else t("ws.unsynced")),
+                style = MaterialTheme.typography.labelSmall,
+                color = if (w.safeToDelete) StatusColors.DONE else StatusColors.NEEDS_HUMAN,
+            )
+            Text(
+                w.path,
+                style = MaterialTheme.typography.labelSmall.copy(fontFamily = FontFamily.Monospace),
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+            )
+        }
+        if (trabajando) {
+            CircularProgressIndicator(Modifier.height(16.dp).width(16.dp), strokeWidth = 2.dp)
+            Spacer(Modifier.width(8.dp))
+        }
+        // Devolver a mano, sin esperar a que termine: es lo que permite mirar el trabajo con las
+        // herramientas de siempre mientras la implementación sigue.
+        impl.branch?.let { rama ->
+            io.acr.ui.InfoTip(t("ws.syncTip"), t("ws.syncTipOut")) {
+                TextButton(
+                    enabled = !trabajando && !w.safeToDelete,
+                    onClick = {
+                        trabajando = true
+                        scope.launch {
+                            ctx.workspaces.syncBack(impl.id, misRepos, rama)
+                            trabajando = false
+                            version2++
+                            onChange()
+                        }
+                    },
+                ) { Text(t("ws.sync")) }
+            }
+        }
+        TextButton(onClick = {
+            runCatching { java.awt.Desktop.getDesktop().open(java.io.File(w.path)) }
+        }) { Text(t("impl.openRepo")) }
+    }
 }

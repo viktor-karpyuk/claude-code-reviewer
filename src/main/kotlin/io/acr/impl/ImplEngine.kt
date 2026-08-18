@@ -488,6 +488,11 @@ class ImplEngine(
             kotlinx.coroutines.coroutineScope {
                 while (true) {
                     if (implId in cancelled) {
+                        // Frenar también devuelve: si alguien corta y no vuelve nunca, el trabajo
+                        // tiene que existir fuera del taller igual.
+                        if (enWorkspace) {
+                            workspaces!!.syncBack(implId, repos, rama) { log(implId, it) }
+                        }
                         impls.finish(implId, ImplStatus.STOPPED, costo)
                         estadoFinal = ImplStatus.STOPPED
                         log(implId, "Frenada. Lo hecho quedó commiteado en «$rama».")
@@ -540,29 +545,33 @@ class ImplEngine(
                                 )
                             }
                         }
-                        // El trabajo vuelve al clon del usuario y el taller se cierra.
+                        // El trabajo vuelve al clon del usuario en **todos** los finales, y el
+                        // taller se cierra sólo cuando terminó de verdad.
                         //
-                        // En este orden y no al revés: empujar, verificar que los dos shas coincidan
-                        // y sólo entonces borrar. Borrar primero y verificar después es como se
-                        // pierde el trabajo de una tarde, y con un workspace por implementación el
-                        // trabajo de una tarde es exactamente lo que hay adentro.
+                        // Devolver siempre es lo que evita el peor caso silencioso: una
+                        // implementación que queda esperando una decisión, o que falla, y que nadie
+                        // retoma nunca. Sin esto, todo lo que hizo vive únicamente adentro del
+                        // taller — y desde afuera parece que no hizo nada.
                         //
-                        // Sólo cuando terminó de verdad. Una implementación que quedó esperando una
-                        // decisión o con tareas fallidas se va a retomar, y para eso necesita su
-                        // taller con todo lo que hay commiteado.
-                        if (enWorkspace && estado == ImplStatus.DONE) {
+                        // Borrar es otra cosa y va sólo con DONE: una implementación que se va a
+                        // retomar necesita su taller con todo lo commiteado. Y el orden importa —
+                        // empujar, verificar que los dos shas coincidan, y recién entonces borrar.
+                        if (enWorkspace) {
                             val problemas = workspaces!!.syncBack(implId, repos, rama) { log(implId, it) }
                                 .mapNotNull { (nombre, error) -> error?.let { "$nombre: $it" } }
-                            if (problemas.isEmpty()) {
-                                workspaces.delete(implId, repos, rama)
-                                    .onSuccess { log(implId, "Workspace borrado: el código quedó en las ramas.") }
-                                    .onFailure { log(implId, "No pude borrar el workspace: ${it.message}") }
-                            } else {
-                                // Se conserva a propósito: es el único lugar donde está ese trabajo.
-                                log(
+                            when {
+                                problemas.isNotEmpty() -> log(
                                     implId,
-                                    "El workspace se conserva porque no pude devolver todo: " +
+                                    "El taller se conserva porque no pude devolver todo: " +
                                         problemas.joinToString("; "),
+                                )
+                                estado == ImplStatus.DONE ->
+                                    workspaces.delete(implId, repos, rama)
+                                        .onSuccess { log(implId, "Taller borrado: el código quedó en las ramas.") }
+                                        .onFailure { log(implId, "No pude borrar el taller: ${it.message}") }
+                                else -> log(
+                                    implId,
+                                    "El trabajo quedó en tus clones. El taller se conserva para retomar.",
                                 )
                             }
                         }

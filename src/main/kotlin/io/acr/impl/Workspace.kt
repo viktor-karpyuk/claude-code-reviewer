@@ -17,14 +17,24 @@ data class WorkspaceRepo(
     val head: String?,
     /** El mismo sha del otro lado. Iguales significa que el trabajo ya está a salvo. */
     val originHead: String?,
+    /**
+     * Si el clon ya tiene ese commit, aunque sea con otro nombre de rama.
+     *
+     * Hace falta porque comparar sólo por nombre daba un falso "sin devolver" en cada taller recién
+     * creado: su rama apunta al mismo commit que la base, que el clon obviamente tiene, pero bajo
+     * otro nombre. Un aviso que casi siempre está equivocado es peor que no avisar — enseña a
+     * ignorarlo, y el día que dice la verdad nadie lo mira.
+     */
+    val reachable: Boolean = false,
 ) {
     /**
      * ¿Todo lo de la copia ya está en el clon del usuario?
      *
-     * Es la única pregunta que autoriza a borrar. Los dos shas iguales significan que la rama de
-     * allá tiene exactamente lo mismo que la de acá; con `head` en null no hay nada que perder.
+     * Es la única pregunta que autoriza a borrar. La contesta el commit y no el nombre: si el clon
+     * ya tiene ese commit, borrar el taller no pierde nada aunque la rama allá se llame distinto o
+     * no exista.
      */
-    val synced: Boolean get() = head == null || head == originHead
+    val synced: Boolean get() = head == null || head == originHead || reachable
 }
 
 /** El workspace de una implementación. */
@@ -180,7 +190,11 @@ class Workspaces(private val root: File) {
                 val ws = repoDir(implId, r.name)
                 if (!Git.isRepo(ws)) return@forEach
                 val aca = Git.branchHead(ws, rama)
-                if (aca != null && aca != Git.branchHead(File(r.localPath), rama)) {
+                // Por commit y no por nombre: si el clon ya lo tiene, borrar no pierde nada.
+                if (aca != null &&
+                    aca != Git.branchHead(File(r.localPath), rama) &&
+                    !Git.exists(File(r.localPath), aca)
+                ) {
                     error(
                         "${r.name} tiene commits en el workspace que no están en el clon. " +
                             "Devolvelos antes de borrar.",
@@ -209,9 +223,33 @@ class Workspaces(private val root: File) {
                 sizeBytes = if (ws.exists()) tamano(ws) else 0,
                 head = rama?.takeIf { Git.isRepo(ws) }?.let { Git.branchHead(ws, it) },
                 originHead = rama?.let { Git.branchHead(File(r.localPath), it) },
+                reachable = rama?.takeIf { Git.isRepo(ws) }
+                    ?.let { Git.branchHead(ws, it) }
+                    ?.let { Git.exists(File(r.localPath), it) } ?: false,
             )
         }
         return Workspace(implId, implTitle, dir.absolutePath, detalle, dir.exists())
+    }
+
+    /**
+     * Borra los talleres de implementaciones terminadas cuyo trabajo ya está del otro lado.
+     *
+     * Corre al abrir la app. Existe porque devolver puede fallar por algo pasajero —el clon estaba
+     * parado en esa rama, el disco estaba lleno— y entonces el taller queda, correctamente, sin
+     * borrar. Si más tarde alguien devuelve el trabajo a mano, nadie vuelve a limpiar: la carpeta se
+     * queda ocupando disco para siempre.
+     *
+     * Sólo toca lo que puede verificar: implementación terminada y los dos shas iguales. Devuelve
+     * cuántos borró.
+     */
+    suspend fun prune(terminadas: List<Triple<String, List<RepoRecord>, String?>>): Int {
+        var borrados = 0
+        terminadas.forEach { (implId, repos, rama) ->
+            if (!dirOf(implId).exists()) return@forEach
+            val w = inspect(implId, "", repos, rama)
+            if (w.safeToDelete && delete(implId, repos, rama).isSuccess) borrados++
+        }
+        return borrados
     }
 
     /** Carpetas de workspace que no corresponden a ninguna implementación viva. */
