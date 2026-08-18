@@ -51,6 +51,12 @@ class DiffParserTest {
     @Test
     fun lineNumbersMatchTheRealFile() {
         if (!Git.isRepo(dir)) { println("SKIP: sin clon local"); return }
+        // La rama de un PR se borra al mergear. Depender de que siga estando convierte esto en un
+        // test que falla por el calendario y no por el código.
+        if (!runBlocking { Git.exists(dir, "origin/feature/pos-ar-fiscal") }) {
+            println("SKIP: la rama del PR ya no está en el clon")
+            return
+        }
         val files = runBlocking { Git.numstat(dir, range) }
             .filter { it.path.endsWith(".java") || it.path.endsWith(".kt") }
         if (files.isEmpty()) { println("SKIP: sin archivos de código"); return }

@@ -24,6 +24,12 @@ class AutoModeTest {
     fun inferPlanFromRealDiff() {
         val dir = File("/Users/viktor/dev/kubrik/ks-erp/kubrik-erp-be")
         if (!Git.isRepo(dir)) { println("SKIP: sin clon local"); return }
+        // La rama de un PR se borra al mergear. Depender de que siga estando convierte esto en un
+        // test que falla por el calendario y no por el código.
+        if (!runBlocking { Git.exists(dir, "origin/feature/pos-ar-fiscal") }) {
+            println("SKIP: la rama del PR ya no está en el clon")
+            return
+        }
         val range = "origin/develop...origin/feature/pos-ar-fiscal"
         val files = runBlocking { Git.numstat(dir, range) }
         println("archivos en el diff: ${files.size}, líneas: ${files.sumOf { it.touched }}")

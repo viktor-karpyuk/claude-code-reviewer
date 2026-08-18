@@ -3,6 +3,24 @@
 Reglas de numeración en [CLAUDE.md](CLAUDE.md): un requerimiento **nuevo** incrementa *major*;
 cambiar uno **existente** incrementa *patch*.
 
+## 82.0.1
+
+**Se revierte el filtro de PRs aprobados que introduje en la versión anterior.** Estaba mal por dos
+motivos.
+
+El que se ve: las aprobaciones se leen de la base **después** del primer dibujo, así que un PR
+aprobado aparecía y un instante después desaparecía solo. Un filtro que depende de un dato que llega
+tarde siempre parpadea.
+
+El de fondo: **aprobado no es mergeado**. El PR sigue abierto y puede seguir necesitando trabajo, y
+lo que se quiere esconder son los cerrados — para eso ya están los filtros de estado, que además son
+explícitos. Agregué un filtro nuevo para un problema que ya tenía solución, y encima cambié el
+comportamiento por defecto.
+
+También: tres tests dependían de que la rama `feature/pos-ar-fiscal` siguiera existiendo en el clon.
+Se borró al mergear el PR —lo mismo que hace un rato investigamos en el 155— y desde entonces
+fallaban por el calendario y no por el código. Ahora se saltean cuando la rama no está.
+
 ## 82.0.0
 
 **Una respuesta a un comentario ahora dispara la verificación.** Es el bug que reportaste del PR 128:

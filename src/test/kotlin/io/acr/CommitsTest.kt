@@ -12,6 +12,12 @@ class CommitsTest {
     fun readsCommitsOfARealPr() {
         val dir = File("/Users/viktor/dev/kubrik/ks-erp/kubrik-erp-be")
         if (!Git.isRepo(dir)) { println("SKIP"); return }
+        // La rama de un PR se borra al mergear. Depender de que siga estando convierte esto en un
+        // test que falla por el calendario y no por el código.
+        if (!runBlocking { Git.exists(dir, "origin/feature/pos-ar-fiscal") }) {
+            println("SKIP: la rama del PR ya no está en el clon")
+            return
+        }
         val commits = runBlocking { Git.commits(dir, "develop", "feature/pos-ar-fiscal") }
         println("commits: ${commits.size}")
         commits.take(3).forEach {
