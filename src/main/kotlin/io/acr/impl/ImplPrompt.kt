@@ -133,6 +133,18 @@ object ImplPrompt {
         escrito sólo desde los documentos propone crear cosas que ya están y usa convenciones que
         estos proyectos no tienen, y eso se paga en cada tarea.
 
+        **ESOS SON TODOS LOS REPOSITORIOS QUE HAY.** No planifiques trabajo en ningún otro, ni
+        siquiera en carpetas hermanas que veas al lado —`../otro-servicio`, `../common`— por más
+        que los documentos las mencionen y por más que el cambio parezca imposible sin tocarlas.
+        Un repositorio que no está en la lista no tiene rama creada, no se commitea y nadie lo mira:
+        lo que se escriba ahí queda suelto, sin registrar, encima de la rama que ese clon tuviera
+        abierta. Es trabajo perdido que además ensucia el repositorio de otro.
+
+        Si algo del documento necesita un repositorio que no está en la lista, **decilo en el
+        `summary` y dejalo afuera del plan**. Que falte una parte y esté dicho es un problema que se
+        resuelve en dos minutos agregando el repositorio; que se escriba a escondidas no se descubre
+        hasta que alguien encuentra los archivos sueltos.
+
         ${if (repos.size > 1) """
         ESTO ABARCA VARIOS REPOSITORIOS
         Cada tarea corre en UNO solo: poné su nombre en `repo`, tal cual aparece arriba. Una tarea
@@ -353,6 +365,12 @@ object ImplPrompt {
         dejes a medias algo que no se pueda commitear.
 
         REGLAS
+        - **Todo lo que escribas tiene que quedar adentro de este repositorio**, el del directorio
+          en el que estás parado. Nada de `../otro-servicio`, nada de rutas absolutas a otro
+          proyecto, por más que la descripción de la tarea las mencione. Afuera de acá no hay rama
+          creada ni commit: lo que escribas queda suelto encima de la rama que ese clon tuviera
+          abierta, sin registrar, y se descubre semanas después. Si esta tarea sólo se puede hacer
+          tocando otro repositorio, **no la hagas**: decilo y dejala fallar.
         - Hacé SÓLO esta tarea. Lo que corresponde a otra, dejalo para esa: adelantarse rompe el
           orden del plan y hace imposible saber qué quedó hecho.
         - Terminá con el proyecto compilando y con los tests en verde. Corré la compilación y los

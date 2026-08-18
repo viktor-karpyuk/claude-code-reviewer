@@ -3,6 +3,43 @@
 Reglas de numeración en [CLAUDE.md](CLAUDE.md): un requerimiento **nuevo** incrementa *major*;
 cambiar uno **existente** incrementa *patch*.
 
+## 73.0.0
+
+**El trabajo se escapaba del repositorio y nadie se enteraba.** Esto explica el "sigue escribiendo
+en develop", y era peor de lo que parecía: la rama **sí** se creaba y **sí** se usaba. Lo que pasaba
+es que siete tareas escribieron en `../timelog-ms` —un repositorio vecino que los documentos
+mencionaban y que no era parte de la implementación—. Ahí no hay rama creada ni nadie commitea, así
+que los archivos quedaron sueltos encima de `develop`, invisibles para la herramienta. Las tareas
+dieron DONE, el repositorio asignado quedó limpio, no hubo commit, y el tablero decía que todo había
+salido bien.
+
+Tres cambios, uno por cada lugar donde esto pasó desapercibido:
+
+- **El planificador ya no puede inventar repositorios.** Se le dice que los de la lista son todos
+  los que hay, incluso si los documentos nombran carpetas hermanas. Si algo necesita uno que no
+  está, va en el resumen y queda fuera del plan: que falte una parte y esté dicho se arregla en dos
+  minutos agregando el repositorio; que se escriba a escondidas no se descubre hasta que alguien
+  encuentra los archivos sueltos.
+- **La tarea tiene prohibido escribir fuera de su árbol.** Si sólo se puede hacer tocando otro
+  repositorio, no se hace: se reporta y falla.
+- **Terminar sin cambios dejó de ser un éxito.** Un árbol limpio después de una tarea de código
+  significa una de dos cosas, y las dos son un problema: o no hizo nada, o lo hizo en otro lado.
+  Ahora la tarea falla diciendo cuál de las dos, y si escribió afuera, nombra los archivos.
+
+**Verificamos quedar en la rama.** `git checkout` falla en silencio —una base que no existe, un
+archivo que se pisaría— y el resultado se descartaba. Ahora, si el repositorio no quedó en la rama
+de la implementación, no se ejecuta nada.
+
+**Se puede frenar una tarea desde su detalle.** Y el símbolo de "corriendo" dejó de ser un ▶, que se
+lee como un botón de play —"esto está detenido, arrancalo"— justo cuando es lo contrario.
+
+**Analizar los documentos ahora es un job**, con su registro guardado en la base y un final
+explícito. Sin eso, un análisis cortado y uno que nunca se lanzó se veían igual desde afuera.
+
+**En la lista de trabajos está el id del job y el de su tarea**, completos y seleccionables, para
+poder rastrear qué disparó qué. Y en el Gantt, el nombre de cada tarea toma el color de su estado:
+en una lista de veinte, la barra queda lejos del texto.
+
 ## 72.1.0
 
 **Las acotaciones de la revisión son complementarias.** El campo pasó a llamarse "Acotaciones

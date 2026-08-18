@@ -57,6 +57,8 @@ fun TaskDetailScreen(
     onBack: () -> Unit,
     onHome: () -> Unit,
     onRetry: () -> Unit,
+    /** Frenar la tarea que está corriendo. Deja lo hecho y la devuelve a la cola. */
+    onPause: () -> Unit,
 ) {
     val analisis = task.diff?.files?.let { io.acr.impl.analyze(it) }
     // Una tarea que todavía no corrió no tiene commit, ni código, ni resultado. Mostrarle esas
@@ -101,8 +103,15 @@ fun TaskDetailScreen(
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
-            if (task.status == TaskStatus.FAILED) {
-                TextButton(onClick = onRetry) { Text(t("impl.retry")) }
+            when (task.status) {
+                TaskStatus.FAILED -> TextButton(onClick = onRetry) { Text(t("impl.retry")) }
+                // Frenar lo que está corriendo. Es la acción que uno busca cuando entra a mirar una
+                // tarea que se está pasando de tiempo o que arrancó por error, y no estaba en
+                // ningún lado: había que salir a la implementación para encontrarla.
+                TaskStatus.RUNNING -> io.acr.ui.InfoTip(t("impl.pauseTaskTip"), t("impl.pauseTaskTipOut")) {
+                    TextButton(onClick = onPause) { Text(t("impl.pauseTask")) }
+                }
+                else -> Unit
             }
         }
 
@@ -501,7 +510,9 @@ private fun CommitBloque(task: ImplTask, repo: RepoRecord?) {
 
 internal fun marcaDe(s: TaskStatus): String = when (s) {
     TaskStatus.DONE -> "✓"
-    TaskStatus.RUNNING -> "▶"
+    // No "▶": ese símbolo se lee como un botón de play, o sea "esto está detenido, arrancalo",
+    // que es exactamente lo contrario de lo que pasa. El engranaje dice que algo está trabajando.
+    TaskStatus.RUNNING -> "⚙"
     TaskStatus.FAILED -> "✗"
     TaskStatus.BLOCKED -> "⏸"
     TaskStatus.SKIPPED -> "–"

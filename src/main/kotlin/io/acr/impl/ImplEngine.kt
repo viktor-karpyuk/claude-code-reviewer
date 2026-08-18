@@ -127,6 +127,18 @@ class ImplEngine(
         }
     }
 
+    /**
+     * Igual, pero además lo guarda en el registro del job.
+     *
+     * Para los jobs sin tarea —analizar, auditar, planificar— este registro es todo su rastro: el
+     * feed vive en memoria y desaparece al cerrar la app, y sin nada escrito un análisis que se
+     * cortó y uno que nunca se lanzó se ven igual.
+     */
+    private fun log(implId: String, jobId: String, linea: String) {
+        log(implId, linea)
+        runCatching { jobs.logLine(jobId, linea) }
+    }
+
     private fun clear(implId: String) {
         _progress.update { it - implId }
     }
@@ -380,6 +392,18 @@ class ImplEngine(
             } else {
                 log(implId, "${r.name}: «$rama» desde «$base»…")
                 Git.checkoutBranch(File(r.localPath), rama, base)
+                // Y se verifica que haya quedado ahí. `git checkout` falla en silencio —una base que
+                // no existe, un archivo que se pisaría— y el resultado se descartaba: la
+                // implementación seguía como si nada, escribiendo y commiteando sobre la rama vieja.
+                val quedo = Git.currentBranch(File(r.localPath))
+                if (quedo != rama) {
+                    val msg = "${r.name} no pudo pasar a «$rama» (quedó en «${quedo ?: "?"}»). " +
+                        "Sin la rama correcta, el trabajo se commitearía sobre la de siempre."
+                    log(implId, msg)
+                    jobs.finish(jobImpl, JobState.FAILED, msg)
+                    impls.setStatus(implId, ImplStatus.FAILED, msg)
+                    return Result.failure(IllegalStateException(msg))
+                }
             }
         }
 
@@ -742,10 +766,37 @@ class ImplEngine(
         val sha = if (Git.isDirty(dir)) {
             Git.commitAll(dir, "${tarea.seq}. ${tarea.title}\n\n${res.text.take(1_500)}")
         } else {
-            // Terminar sin cambios es sospechoso, pero no siempre un error: puede ser una tarea
-            // que ya estaba hecha. Se registra y se sigue.
-            log(implId, "  (sin cambios en el árbol)")
             null
+        }
+
+        // Decir que terminó sin haber cambiado nada no es terminar.
+        //
+        // Salió de un caso real: siete tareas dieron DONE sin un solo commit, y los archivos habían
+        // ido a parar a un repositorio vecino —`../timelog-ms`, que los documentos mencionaban—
+        // donde no hay rama creada ni nadie commitea. Quedaron sueltos encima de develop, invisibles
+        // para la herramienta, y el tablero decía que todo había salido bien.
+        //
+        // Un árbol limpio después de una tarea de código significa una de dos cosas, y las dos son
+        // un problema: o no hizo nada, o lo hizo en otro lado. Darlo por bueno es lo que hace que el
+        // problema no se vea.
+        if (sha == null) {
+            val afuera = jobs.contextOf(tarea.id)
+                .filter { it.kind == ContextKind.FILE }
+                .map { it.text }
+                .filter { ruta -> ruta.startsWith("../") || ruta.startsWith("/") && !ruta.startsWith(repoTarea.localPath) }
+                .distinct()
+                .take(6)
+            val motivo = if (afuera.isEmpty()) {
+                "Dijo que terminó pero no cambió nada en ${repoTarea.name}."
+            } else {
+                "Escribió fuera de ${repoTarea.name}, donde no hay rama ni commit: " +
+                    afuera.joinToString(", ") + ". Esos cambios quedaron sueltos."
+            }
+            impls.failTask(tarea.id, motivo, res.costUsd)
+            jobs.finish(jobId, JobState.FAILED, motivo)
+            jobs.add(tarea.id, jobId, ContextKind.NOTE, motivo)
+            log(implId, "✗ ${tarea.seq}. $motivo")
+            return res.costUsd ?: 0.0
         }
 
         // Los pasos se cierran con lo que reportó el modelo, al terminar y no mientras corre: no
@@ -825,14 +876,17 @@ class ImplEngine(
         if (docs.isEmpty()) return Result.failure(IllegalStateException("No hay documentos que analizar."))
 
         val idioma = prefs.get(io.acr.AppContext.PREF_LANGUAGE) ?: "español"
+        // Con job, como todo lo que corre: sin él, un análisis que se corta con la app no deja
+        // rastro —no hay tarea que mirar— y desde afuera es idéntico a uno que nunca se lanzó.
+        val jobSpecs = jobs.start(JobKind.SPECS, implId, workDir = principal.localPath)
         // Uno por línea y con su tamaño: "analizando 9 documentos" no deja ver que el que
         // importaba entró vacío, y ese es el modo de fallar más callado que tiene esto.
-        log(implId, "Leyendo ${docs.size} documento(s):")
-        docs.forEach { d -> log(implId, "  · ${d.name} (${d.content.length} caracteres)") }
-        log(implId, "Analizando qué falta, qué es ambiguo y qué se contradice…")
+        log(implId, jobSpecs, "Leyendo ${docs.size} documento(s):")
+        docs.forEach { d -> log(implId, jobSpecs, "  · ${d.name} (${d.content.length} caracteres)") }
+        log(implId, jobSpecs, "Analizando qué falta, qué es ambiguo y qué se contradice…")
 
         return runCatching {
-            val res = ClaudeCli.run(
+            val res = latiendo(jobSpecs) { ClaudeCli.run(
                 binary = binario,
                 workDir = File(principal.localPath),
                 prompt = ImplPrompt.improveSpecs(docs, describir(repos, implId), impl.extraPrompt, idioma),
@@ -841,8 +895,13 @@ class ImplEngine(
                 disallowedTools = ImplPrompt.DENIED_TOOLS,
                 jsonSchema = ImplPrompt.SPECS_SCHEMA,
                 register = { running["$implId#specs"] = it },
-                onEvent = { evt -> resumir(evt)?.let { log(implId, it) } },
-            )
+                onEvent = { evt ->
+                    resumir(evt)?.let { log(implId, jobSpecs, it) }
+                    (evt as? io.acr.claude.ClaudeEvent.Started)?.let {
+                        jobs.attachSession(jobSpecs, it.sessionId, null)
+                    }
+                },
+            ) }
             running.remove("$implId#specs")
             if (!res.ok) error(res.stderr.ifBlank { "El análisis no devolvió nada." })
 
@@ -863,15 +922,18 @@ class ImplEngine(
                 salida.resumen, salida.issues.joinToString("\n") { it.first },
                 null, res.costUsd, io.acr.impl.ReviewKind.SPECS,
             )
+            jobs.finish(jobSpecs, JobState.DONE)
             log(
-                implId,
-                "Documento agregado: ${destino.name} · ${salida.issues.size} cosa(s) encontradas" +
+                implId, jobSpecs,
+                "✓ Análisis terminado. Documento agregado: ${destino.name} · " +
+                    "${salida.issues.size} cosa(s) encontradas" +
                     (if (abiertas > 0) ", $abiertas quedan como pregunta." else "."),
             )
             destino.absolutePath
         }.onFailure {
             running.remove("$implId#specs")
-            log(implId, "Error: ${it.message.orEmpty().take(300)}")
+            jobs.finish(jobSpecs, JobState.FAILED, it.message)
+            log(implId, jobSpecs, "✗ El análisis no pudo terminar: ${it.message.orEmpty().take(300)}")
         }
     }
 

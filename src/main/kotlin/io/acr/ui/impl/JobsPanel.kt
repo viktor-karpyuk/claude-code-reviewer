@@ -138,6 +138,15 @@ private fun Fila(
     } else {
         emptyList()
     }
+    // Para los jobs sin tarea —analizar, auditar, planificar— el registro guardado es todo su
+    // rastro. Es lo que contesta "¿qué llegó a hacer?" cuando uno se cortó a la mitad.
+    val registro = if (abierto && job.taskId == null) {
+        io.acr.ui.dbState(job.id, abierto, initial = emptyList<Pair<String, String>>()) {
+            ctx.jobs2.logOf(job.id)
+        }
+    } else {
+        emptyList()
+    }
     val tarea = if (abierto && job.taskId != null) {
         io.acr.ui.dbState(job.taskId, abierto, initial = null as io.acr.impl.ImplTask?) {
             ctx.impls.tasks(job.implId).firstOrNull { it.id == job.taskId }
@@ -161,18 +170,10 @@ private fun Fila(
                 modifier = Modifier.width(110.dp),
             )
             Text(
-                (if (job.taskId != null) (if (abierto) "▾  " else "▸  ") else "") +
-                    (titulos[job.implId] ?: job.implId.take(8)),
+                (if (abierto) "▾  " else "▸  ") + (titulos[job.implId] ?: job.implId.take(8)),
                 style = MaterialTheme.typography.bodySmall,
                 maxLines = 1,
-                modifier = Modifier.weight(1f)
-                    .then(
-                        if (job.taskId != null) {
-                            Modifier.clickable { abierto = !abierto }
-                        } else {
-                            Modifier
-                        },
-                    ),
+                modifier = Modifier.weight(1f).clickable { abierto = !abierto },
             )
             // El intento importa: un job que va por el tercero está contando una historia distinta
             // de uno que arrancó recién, aunque los dos digan "corriendo".
@@ -203,17 +204,24 @@ private fun Fila(
         // La sesión es lo que permite retomar de verdad: sin ella, un intento nuevo empieza de cero
         // con el contexto acumulado. Se muestra para poder saber cuál de los dos casos es.
         val detalle = listOfNotNull(
+            // El id completo del job: es lo que se busca en la base cuando algo salió raro y hay
+            // que reconstruir qué tarea lo disparó. Recortado no sirve para eso.
+            t("jobs.id", job.id),
+            job.taskId?.let { t("jobs.task", it) },
             job.sessionId?.take(8)?.let { t("jobs.session", it) },
             job.pid?.let { "pid $it" },
             job.error?.take(120),
         )
         if (detalle.isNotEmpty()) {
-            Text(
-                detalle.joinToString("  ·  "),
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(start = 70.dp),
-            )
+            androidx.compose.foundation.text.selection.SelectionContainer {
+                Text(
+                    detalle.joinToString("  ·  "),
+                    style = MaterialTheme.typography.labelSmall
+                        .copy(fontFamily = FontFamily.Monospace),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(start = 70.dp),
+                )
+            }
         }
         if (abierto) {
             Column(Modifier.fillMaxWidth().padding(start = 70.dp, top = 4.dp, bottom = 6.dp)) {
@@ -223,7 +231,15 @@ private fun Fila(
                         style = MaterialTheme.typography.bodySmall,
                     )
                 }
-                if (contexto.isEmpty()) {
+                registro.forEach { (_, linea) ->
+                    Text(
+                        linea,
+                        style = MaterialTheme.typography.labelSmall
+                            .copy(fontFamily = FontFamily.Monospace),
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                if (contexto.isEmpty() && registro.isEmpty()) {
                     Text(
                         t("impl.contextEmpty"),
                         style = MaterialTheme.typography.labelSmall,

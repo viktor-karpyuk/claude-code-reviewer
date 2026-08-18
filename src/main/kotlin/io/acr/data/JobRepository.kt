@@ -168,6 +168,40 @@ class JobRepository(private val store: Store) {
             }
         }
 
+    /**
+     * Guarda una línea del registro de un job.
+     *
+     * Para los jobs que no tienen tarea —analizar documentos, auditar, planificar— este log es todo
+     * su rastro: sin él, uno que se cortó y uno que nunca se lanzó se ven igual desde afuera.
+     *
+     * Con tope. Un análisis largo emite miles de eventos y guardarlos todos convertiría la tabla en
+     * un depósito de ruido; las primeras líneas dicen qué se propuso y las últimas, dónde quedó.
+     */
+    fun logLine(jobId: String, line: String, max: Int = 400) {
+        val limpio = line.trim().take(500)
+        if (limpio.isBlank()) return
+        val cuantas = store.stmt("SELECT COUNT(*) FROM job_log WHERE job_id = ?") { ps ->
+            ps.setString(1, jobId)
+            ps.executeQuery().use { if (it.next()) it.getInt(1) else 0 }
+        }
+        if (cuantas >= max) return
+        store.stmt("INSERT INTO job_log(id, job_id, line, at) VALUES (?,?,?,?)") { ps ->
+            ps.setString(1, UlidCreator.getUlid().toString())
+            ps.setString(2, jobId)
+            ps.setString(3, limpio)
+            ps.setString(4, Instant.now().toString())
+            ps.executeUpdate()
+        }
+    }
+
+    fun logOf(jobId: String): List<Pair<String, String>> =
+        store.stmt("SELECT at, line FROM job_log WHERE job_id = ? ORDER BY at") { ps ->
+            ps.setString(1, jobId)
+            ps.executeQuery().use { rs ->
+                buildList { while (rs.next()) add(rs.getString(1).orEmpty() to rs.getString(2).orEmpty()) }
+            }
+        }
+
     // --- contexto -----------------------------------------------------------------------
 
     /**

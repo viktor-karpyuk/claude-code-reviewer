@@ -272,8 +272,18 @@ fun GanttView(
                     )
                     // Recortado por el medidor y no por el layout: así el título largo no se mete
                     // debajo de las barras.
+                    //
+                    // Y el nombre toma el color de su estado: en una lista de veinte, la barra queda
+                    // lejos del texto y hay que cruzar la fila con la vista para saber cómo terminó
+                    // cada una. Lo pendiente se deja en el color normal —si todo tiene color, el
+                    // color deja de decir algo—.
                     drawText(
-                        medidor, b.task.title, topLeft = Offset(42f * d, y - 6f * d), style = titulo,
+                        medidor, b.task.title, topLeft = Offset(42f * d, y - 6f * d),
+                        style = if (b.task.status == TaskStatus.PENDING) {
+                            titulo
+                        } else {
+                            titulo.copy(color = color)
+                        },
                         size = Size(etiqueta - 50f * d, filaAlta), maxLines = 1,
                     )
 

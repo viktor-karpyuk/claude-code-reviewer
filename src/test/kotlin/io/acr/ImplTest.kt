@@ -2303,3 +2303,116 @@ class ReviewGuidanceTest {
         assertTrue(prompt("algo").contains("mandan"))
     }
 }
+
+/**
+ * Que el trabajo no se escape del repositorio que le tocó.
+ *
+ * Salió de un caso real: siete tareas dieron DONE sin un solo commit, y los archivos habían ido a
+ * parar a `../timelog-ms` —un repositorio vecino que los documentos mencionaban— donde no hay rama
+ * creada ni nadie commitea. Quedaron sueltos encima de develop, invisibles para la herramienta, y
+ * el tablero decía que todo había salido bien.
+ */
+class StayInsideTheRepoTest {
+
+    @Test
+    fun thePlannerIsToldThoseAreAllTheRepositoriesThereAre() {
+        val p = io.acr.impl.ImplPrompt.plan(
+            docs = listOf(io.acr.impl.SourceDoc("req.md", "tocá ../otro-servicio")),
+            extra = null,
+            repos = listOf(Triple("be", "BACKEND", "/tmp/be")),
+            baseBranch = "develop",
+            language = "español",
+        )
+        assertTrue(p.contains("ESOS SON TODOS LOS REPOSITORIOS QUE HAY"))
+        assertTrue(p.contains("../"), "nombra el patrón concreto que aparece en las specs")
+        assertTrue(
+            p.contains("dejalo afuera del plan"),
+            "y da la salida: decirlo, no hacerlo a escondidas",
+        )
+    }
+
+    @Test
+    fun theTaskIsToldToStayInsideItsOwnTree() {
+        val t = ImplTask(
+            "t", "i", null, 1, "tarea", "tocá ../common", emptyList(), TaskSize.M, 10,
+            TaskStatus.PENDING, null, null, null, null, null, null,
+        )
+        val p = io.acr.impl.ImplPrompt.task(t, listOf(t), emptyList(), null, "español")
+        assertTrue(p.contains("tiene que quedar adentro de este repositorio"))
+        assertTrue(
+            p.contains("no la hagas"),
+            "una tarea que sólo se puede hacer tocando otro repositorio tiene que fallar, no " +
+                "resolverse por afuera",
+        )
+    }
+}
+
+/** El símbolo de una tarea corriendo no puede ser un botón de play. */
+class RunningSymbolTest {
+
+    @Test
+    fun runningIsNotAnInvitationToPress() {
+        // "▶" se lee como "esto está detenido, arrancalo", que es lo contrario de lo que pasa.
+        assertTrue(io.acr.ui.impl.marcaDe(TaskStatus.RUNNING) != "▶")
+        assertEquals("✓", io.acr.ui.impl.marcaDe(TaskStatus.DONE))
+        assertEquals("✗", io.acr.ui.impl.marcaDe(TaskStatus.FAILED))
+    }
+}
+
+/** El registro de un job sin tarea: su único rastro. */
+class JobLogTest {
+
+    @Test
+    fun theLogOfAJobSurvivesTheApp() {
+        val dir = java.nio.file.Files.createTempDirectory("acr-joblog")
+        val ctx = AppContext.bootstrap(dir)
+        try {
+            val repoId = ctx.repos.create(
+                "tmp-jl-${System.nanoTime()}", Provider.BITBUCKET, "acme", "demo",
+                dir.toString(), null, null, null, "", false,
+                io.acr.forge.SkipRules(), io.acr.forge.ReplyMode.OFF,
+            )
+            val implId = ctx.impls.create(
+                listOf(io.acr.impl.ImplRepo(repoId, io.acr.impl.RepoRole.OTHER, null)),
+                "con log", listOf("/tmp/x.md"), null,
+            )
+            val jobId = ctx.jobs2.start(io.acr.impl.JobKind.SPECS, implId)
+
+            ctx.jobs2.logLine(jobId, "Leyendo 3 documento(s):")
+            ctx.jobs2.logLine(jobId, "  · req.md (120 caracteres)")
+            ctx.jobs2.logLine(jobId, "   ")
+
+            val log = ctx.jobs2.logOf(jobId)
+            assertEquals(2, log.size, "lo en blanco no se guarda")
+            assertEquals("Leyendo 3 documento(s):", log.first().second)
+        } finally {
+            ctx.close()
+            dir.toFile().deleteRecursively()
+        }
+    }
+
+    @Test
+    fun theLogHasACeiling() {
+        // Un análisis largo emite miles de eventos: sin tope, la tabla se vuelve un depósito de
+        // ruido y las líneas que importan quedan enterradas.
+        val dir = java.nio.file.Files.createTempDirectory("acr-joblog2")
+        val ctx = AppContext.bootstrap(dir)
+        try {
+            val repoId = ctx.repos.create(
+                "tmp-jl2-${System.nanoTime()}", Provider.BITBUCKET, "acme", "demo2",
+                dir.toString(), null, null, null, "", false,
+                io.acr.forge.SkipRules(), io.acr.forge.ReplyMode.OFF,
+            )
+            val implId = ctx.impls.create(
+                listOf(io.acr.impl.ImplRepo(repoId, io.acr.impl.RepoRole.OTHER, null)),
+                "tope", listOf("/tmp/x.md"), null,
+            )
+            val jobId = ctx.jobs2.start(io.acr.impl.JobKind.SPECS, implId)
+            repeat(12) { ctx.jobs2.logLine(jobId, "línea $it", max = 5) }
+            assertEquals(5, ctx.jobs2.logOf(jobId).size)
+        } finally {
+            ctx.close()
+            dir.toFile().deleteRecursively()
+        }
+    }
+}

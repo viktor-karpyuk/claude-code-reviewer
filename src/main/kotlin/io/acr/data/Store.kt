@@ -1210,6 +1210,22 @@ class Store(private val dbPath: Path, val settings: DbSettings = DbSettings()) :
             ALTER TABLE implementation ADD COLUMN replans INTEGER;--split--
             ALTER TABLE implementation ADD COLUMN replanned_at TEXT
             """.trimIndent(),
+
+            // v57 — el log de un job, guardado.
+            //
+            // Las tareas dejan su rastro en `task_context`; los análisis —documentos, auditoría,
+            // planificación— no tienen tarea, así que su registro vivía sólo en memoria y
+            // desaparecía al cerrar la app. Desde afuera, un análisis que se cortó y uno que nunca
+            // se lanzó se veían igual.
+            """
+            CREATE TABLE job_log (
+                id     TEXT PRIMARY KEY,
+                job_id TEXT NOT NULL,
+                line   TEXT NOT NULL,
+                at     TEXT NOT NULL
+            );--split--
+            CREATE INDEX ix_job_log ON job_log(job_id, at)
+            """.trimIndent(),
         )
     }
 }

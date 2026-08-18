@@ -152,6 +152,13 @@ fun ImplDetail(
                 onBack = { tareaAbierta = null; version++ },
                 onHome = { tareaAbierta = null; onBack() },
                 onRetry = { ctx.impls.resetTask(tar.id); tareaAbierta = null; version++ },
+                // Frenar la implementación y no sólo esta tarea: el proceso es de la
+                // implementación, y matarlo sin que el motor se entere lo dejaría relanzándolo en
+                // la vuelta siguiente. Lo hecho queda commiteado y la tarea vuelve a la cola.
+                onPause = {
+                    ctx.implEngine.cancel(implId)
+                    version++
+                },
             )
             return
         }
