@@ -3,6 +3,21 @@
 Reglas de numeración en [CLAUDE.md](CLAUDE.md): un requerimiento **nuevo** incrementa *major*;
 cambiar uno **existente** incrementa *patch*.
 
+## 78.0.0
+
+**Los commits pasaron a ser una sección propia.** Estaban en un desplegable dentro del detalle, y
+ahí el diff no entraba: cuatrocientos píxeles de alto compartidos con el resto de la implementación,
+para leer código que necesita ancho y contexto. Uno terminaba abriendo el repositorio en otra
+herramienta, que es exactamente lo que la app venía a evitar.
+
+Ahora es una pantalla con la lista a la izquierda y el commit elegido a la derecha, con todo el
+ancho. Al costado y no expandiendo la lista: con quince commits, expandir el octavo empuja los siete
+anteriores fuera de la vista y se pierde el lugar donde uno estaba.
+
+En el detalle queda una línea con el número de commits que lleva ahí, y desde la pantalla hay un
+**volver a las tareas** explícito además de las migas — mirar un commit para entender una tarea es
+el camino más común, y no tiene que depender de reconocer que el título del medio es un enlace.
+
 ## 77.0.0
 
 **Se pueden ocultar repositorios sin perderlos.** Con quince, los tres que uno mira todos los días

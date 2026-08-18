@@ -69,6 +69,7 @@ fun ImplDetail(
     var tareaAbierta by remember(implId) { mutableStateOf<String?>(null) }
     // Si esto viviera dentro del encabezado, la tarjeta de actividad no podría leerlo.
     var analizando by remember(implId) { mutableStateOf(false) }
+    var viendoCommits by remember(implId) { mutableStateOf(false) }
     // El padre late lento y a propósito.
     //
     // Lo suyo es el encabezado, los repositorios y los botones: cosas que cambian cuando alguien
@@ -133,6 +134,19 @@ fun ImplDetail(
             actuales = suyos,
             onBack = { editando = false },
             onSaved = { editando = false; version++ },
+        )
+        return
+    }
+
+    // Los commits, en su propia pantalla: el diff necesita ancho y ahí lo tiene.
+    if (viendoCommits) {
+        ImplCommitsScreen(
+            ctx = ctx,
+            impl = impl,
+            misRepos = misRepos,
+            suyos = suyos,
+            onBack = { viendoCommits = false },
+            onHome = { viendoCommits = false; onBack() },
         )
         return
     }
@@ -353,6 +367,7 @@ fun ImplDetail(
             version = version,
             suyos = suyos,
             onOpenTask = { tareaAbierta = it },
+            onOpenCommits = { viendoCommits = true },
             onChange = { version++ },
         )
 
@@ -379,6 +394,7 @@ private fun SeccionTareas(
     /** Cómo está configurado cada repositorio: de dónde parte. Para listar los commits de la rama. */
     suyos: List<io.acr.impl.ImplRepo>,
     onOpenTask: (String) -> Unit,
+    onOpenCommits: () -> Unit,
     onChange: () -> Unit,
 ) {
     val corriendo = impl.status == ImplStatus.RUNNING || impl.status == ImplStatus.PLANNING
@@ -747,84 +763,43 @@ private fun SeccionTareas(
 
         // --- Commits de la rama ---
         impl.branch?.let { rama ->
-            val commits = io.acr.ui.dbState(implId, version, tic, initial = emptyList<Pair<String, io.acr.claude.Git.Commit>>()) {
+            // Los commits viven en su propia pantalla: acá sólo el acceso y el número.
+            //
+            // Estaban en un desplegable, y ahí el diff no entraba —cuatrocientos píxeles de alto
+            // compartidos con el resto de la implementación, para leer código que necesita ancho—.
+            // Uno terminaba abriendo el repositorio en otra herramienta, que es justo lo que la app
+            // venía a evitar.
+            val cuantos = io.acr.ui.dbState(implId, version, initial = 0) {
                 kotlinx.coroutines.runBlocking {
-                    misRepos.flatMap { r ->
+                    val r2 = impl.branch ?: return@runBlocking 0
+                    misRepos.sumOf { r ->
                         val base = suyos.firstOrNull { it.repoId == r.id }?.baseBranch
                             ?: impl.baseBranch ?: "develop"
-                        io.acr.claude.Git.commitsBetween(java.io.File(r.localPath), base, rama)
-                            .map { r.name to it }
+                        io.acr.claude.Git.commitsBetween(java.io.File(r.localPath), base, r2).size
                     }
                 }
             }
-            if (commits.isNotEmpty()) {
-                Spacer(Modifier.height(14.dp))
-                io.acr.ui.CollapsibleCard(
-                    t("impl.commits", commits.size),
-                    ctx.prefs,
-                    "implcommits-$implId",
-                    maxHeight = 240.dp,
-                    defaultCollapsed = true,
+            if (cuantos > 0) {
+                Spacer(Modifier.height(12.dp))
+                Row(
+                    Modifier.fillMaxWidth()
+                        .clip(RoundedCornerShape(6.dp))
+                        .clickable { onOpenCommits() }
+                        .padding(vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    // Qué commit está abierto. La lista decía qué se hizo y cuándo, y no había
-                    // forma de ver qué: abrir el repositorio en una terminal para contestar eso es
-                    // salirse de la herramienta justo en la pregunta más común.
-                    var commitAbierto by remember(implId) { mutableStateOf<String?>(null) }
-                    commits.forEach { (repoNombre, c) ->
-                        val suyo = misRepos.firstOrNull { it.name == repoNombre } ?: misRepos.firstOrNull()
-                        Row(
-                            Modifier.fillMaxWidth()
-                                .clickable {
-                                    commitAbierto = if (commitAbierto == c.sha) null else c.sha
-                                }
-                                .padding(vertical = 1.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            Text(
-                                (if (commitAbierto == c.sha) "▾ " else "▸ ") + c.sha.take(7),
-                                style = MaterialTheme.typography.labelSmall
-                                    .copy(fontFamily = FontFamily.Monospace),
-                                modifier = Modifier.width(70.dp),
-                            )
-                            if (misRepos.size > 1) {
-                                Text(
-                                    repoNombre,
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    modifier = Modifier.width(120.dp),
-                                    maxLines = 1,
-                                )
-                            }
-                            Text(
-                                c.subject,
-                                style = MaterialTheme.typography.labelSmall,
-                                modifier = Modifier.weight(1f),
-                                maxLines = 1,
-                            )
-                            Text(
-                                c.date,
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                modifier = Modifier.width(84.dp),
-                            )
-                            // Abrir la carpeta del repositorio: para lo que la app no hace —correr
-                            // algo, mirar con otra herramienta— el camino más corto es el sistema.
-                            suyo?.let { r ->
-                                TextButton(onClick = {
-                                    runCatching {
-                                        java.awt.Desktop.getDesktop().open(java.io.File(r.localPath))
-                                    }
-                                }) { Text(t("impl.openRepo")) }
-                            }
-                        }
-                        if (commitAbierto == c.sha && suyo != null) {
-                            CommitDiffView(suyo, c.sha)
-                        }
-                    }
+                    Text(t("impl.commits", cuantos), style = MaterialTheme.typography.titleSmall)
+                    Spacer(Modifier.width(10.dp))
+                    Text(
+                        t("impl.commitsGo"),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Spacer(Modifier.weight(1f))
+                    Text("→", color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             }
         }
-
     }
 }
 
@@ -839,7 +814,6 @@ private fun SeccionFeed(ctx: AppContext, implId: String) {
     val progreso by ctx.implEngine.progress.collectAsState()
     val vivo = progreso[implId]
     Column(Modifier.fillMaxWidth()) {
-        // --- Feed en vivo ---
         vivo?.lines?.takeIf { it.isNotEmpty() }?.let { lineas ->
             Spacer(Modifier.height(12.dp))
             Column(
