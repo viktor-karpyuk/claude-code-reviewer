@@ -3,6 +3,39 @@
 Reglas de numeración en [CLAUDE.md](CLAUDE.md): un requerimiento **nuevo** incrementa *major*;
 cambiar uno **existente** incrementa *patch*.
 
+## 80.0.0
+
+**Cada implementación trabaja en su propio taller.** Hasta ahora escribía directamente en tu clon, y
+eso traía tres problemas de distinta gravedad: tu árbol de trabajo se llenaba de cambios a mitad de
+camino; dos implementaciones sobre el mismo repositorio se peleaban por esa única copia; y cualquier
+cosa que tuvieras sin commitear bloqueaba el arranque o quedaba mezclada con lo generado.
+
+Ahora se clona cada repositorio afectado a un taller propio y todo el trabajo pasa ahí. El clon es
+`--local`: enlaza los objetos en vez de copiarlos, así que un repositorio de dos gigas se clona en un
+segundo. Sin eso esto sería inviable.
+
+**Uno por implementación y no uno por tarea.** Dos tareas del mismo repositorio siguen sin poder
+correr a la vez —comparten el árbol— pero dos implementaciones distintas ya no se estorban, que es
+donde estaba el choque real. Y como no se toca tu clon, lo que tengas sin commitear deja de importar:
+el bloqueo que hasta ahora impedía arrancar desaparece de raíz.
+
+**El trabajo no vive en el taller.** Al terminar se empuja cada rama a tu clon local —no al remoto,
+que es una decisión tuya— y recién entonces se borra, después de comparar los dos shas. Ese orden es
+todo: borrar primero y verificar después es como se pierde el trabajo de una tarde, y con un taller
+por implementación el trabajo de una tarde es exactamente lo que hay adentro. Si algo no se pudo
+devolver, el taller se conserva y se dice por qué.
+
+Sólo se limpia cuando la implementación terminó de verdad. Una que quedó esperando una decisión o con
+tareas fallidas se va a retomar, y para eso necesita su taller con todo lo que hay commiteado.
+
+**Una sección de administración** muestra cada taller con sus repositorios, el sha de los dos lados y
+lo que ocupa. El botón de borrar sólo aparece cuando los shas coinciden: para una acción que no tiene
+vuelta, confirmar no alcanza — tiene que estar verificado. Las carpetas que quedaron de
+implementaciones borradas se listan aparte y no se tocan: no hay rama ni clon con el que compararlas.
+
+Las implementaciones que ya venían corriendo siguen trabajando en tu clon, como antes. Cambiarles el
+modelo de ejecución a mitad de camino dejaría la mitad del trabajo en un lado y la mitad en el otro.
+
 ## 79.0.0
 
 **Se registra lo que consume cada corrida del CLI**, y desde un solo lugar. Hay nueve sitios que

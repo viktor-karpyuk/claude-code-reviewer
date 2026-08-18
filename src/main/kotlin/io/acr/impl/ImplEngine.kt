@@ -56,6 +56,13 @@ class ImplEngine(
      * proceso. Todo lo que hace falta para retomar pasa por acá.
      */
     private val jobs: io.acr.data.JobRepository,
+    /**
+     * El taller aparte. Null hace que todo trabaje en el clon del usuario, como antes.
+     *
+     * Es un parámetro y no un singleton para que los tests puedan correr el motor sin tocar el disco
+     * del usuario, que es exactamente el problema que los workspaces vienen a resolver.
+     */
+    private val workspaces: Workspaces? = null,
 ) {
 
     private val _progress = MutableStateFlow<Map<String, ImplProgress>>(emptyMap())
@@ -339,10 +346,19 @@ class ImplEngine(
         val binario = ClaudeCli.resolveBinary(prefs.get(io.acr.AppContext.PREF_CLAUDE_BINARY))
             ?: return Result.failure(IllegalStateException("No encuentro el ejecutable de Claude Code."))
         val porId = repos.associateBy { it.id }
+        // Dónde se trabaja cada repositorio: el workspace si la implementación lo usa, el clon del
+        // usuario si no. Todo lo demás —checkout, commits, diffs, revisión— usa esta función y no la
+        // ruta del repositorio, así que hay un solo lugar donde esto se decide.
+        val enWorkspace = impl.useWorkspace && workspaces != null
+        fun dirDe(r: RepoRecord): File =
+            if (enWorkspace) workspaces!!.repoDir(implId, r.name) else File(r.localPath)
 
-        // Se chequean todos antes de tocar ninguno: encontrar el segundo repositorio sucio con el
-        // primero ya modificado dejaría el trabajo partido a la mitad.
-        repos.forEach { r ->
+        // Con workspace, lo que el usuario tenga sin commitear en su clon no importa: no se toca su
+        // árbol de trabajo. Eso elimina de raíz el bloqueo que hasta ahora impedía arrancar.
+        //
+        // Sin workspace se chequean todos antes de tocar ninguno: encontrar el segundo repositorio
+        // sucio con el primero ya modificado dejaría el trabajo partido a la mitad.
+        if (!enWorkspace) repos.forEach { r ->
             val d = File(r.localPath)
             if (!Git.isRepo(d)) {
                 val msg = "«${r.localPath}» no es un repositorio de git."
@@ -376,6 +392,25 @@ class ImplEngine(
         }
 
         cancelled.remove(implId)
+        // El taller, antes de tocar nada. Idempotente: retomar es el caso normal, así que si el clon
+        // del workspace ya está se reusa con todo lo que las tareas anteriores dejaron commiteado.
+        if (enWorkspace) {
+            val configurados0 = impls.reposOf(implId)
+            val prep = workspaces!!.prepare(
+                implId, repos, rama,
+                baseDe = { id ->
+                    configurados0.firstOrNull { it.repoId == id }?.baseBranch
+                        ?: impl.baseBranch ?: "develop"
+                },
+                log = { log(implId, it) },
+            )
+            if (prep.isFailure) {
+                val msg = prep.exceptionOrNull()?.message ?: "No pude preparar el workspace."
+                impls.setStatus(implId, ImplStatus.FAILED, msg)
+                log(implId, msg)
+                return Result.failure(IllegalStateException(msg))
+            }
+        }
         // El job de la implementación: el padre del que cuelgan los de cada tarea. Es lo que se
         // arranca y se pausa cuando se arranca y se pausa la implementación, y lo que después
         // permite preguntar "¿qué había en marcha?" sin recorrer tarea por tarea.
@@ -393,7 +428,15 @@ class ImplEngine(
         // tres nombres distintos es un problema que no hace falta tener.
         val configurados = impls.reposOf(implId)
         val baseDe = mutableMapOf<String, String>()
-        repos.forEach { r ->
+        if (enWorkspace) {
+            // Con workspace la rama ya la dejó `prepare`; acá sólo se anota de dónde partió cada
+            // uno, que es lo que la revisión final necesita para armar el rango del diff.
+            repos.forEach { r ->
+                baseDe[r.id] = configurados.firstOrNull { it.repoId == r.id }?.baseBranch
+                    ?: impl.baseBranch ?: "develop"
+            }
+        }
+        if (!enWorkspace) repos.forEach { r ->
             // De dónde parte cada uno: lo configurado, o la rama en la que esté parado el clon.
             // No todos los repositorios usan el mismo nombre.
             val base = configurados.firstOrNull { it.repoId == r.id }?.baseBranch
@@ -489,9 +532,35 @@ class ImplEngine(
                             val tocados = todas.mapNotNull { t -> porId[t.repoId] }.distinctBy { it.id }
                             tocados.forEach { r ->
                                 costo += audit(
-                                    implId, r, docs, binario, modelo, idioma,
+                                    implId, r, dirDe(r), docs, binario, modelo, idioma,
                                     impl.reviewMin.coerceAtLeast(1), impl.reviewMax,
                                     baseRef = baseDe[r.id] ?: "HEAD",
+                                )
+                            }
+                        }
+                        // El trabajo vuelve al clon del usuario y el taller se cierra.
+                        //
+                        // En este orden y no al revés: empujar, verificar que los dos shas coincidan
+                        // y sólo entonces borrar. Borrar primero y verificar después es como se
+                        // pierde el trabajo de una tarde, y con un workspace por implementación el
+                        // trabajo de una tarde es exactamente lo que hay adentro.
+                        //
+                        // Sólo cuando terminó de verdad. Una implementación que quedó esperando una
+                        // decisión o con tareas fallidas se va a retomar, y para eso necesita su
+                        // taller con todo lo que hay commiteado.
+                        if (enWorkspace && estado == ImplStatus.DONE) {
+                            val problemas = workspaces!!.syncBack(implId, repos, rama) { log(implId, it) }
+                                .mapNotNull { (nombre, error) -> error?.let { "$nombre: $it" } }
+                            if (problemas.isEmpty()) {
+                                workspaces.delete(implId, repos, rama)
+                                    .onSuccess { log(implId, "Workspace borrado: el código quedó en las ramas.") }
+                                    .onFailure { log(implId, "No pude borrar el workspace: ${it.message}") }
+                            } else {
+                                // Se conserva a propósito: es el único lugar donde está ese trabajo.
+                                log(
+                                    implId,
+                                    "El workspace se conserva porque no pude devolver todo: " +
+                                        problemas.joinToString("; "),
                                 )
                             }
                         }
@@ -529,7 +598,8 @@ class ImplEngine(
                         async {
                             runTask(
                                 implId, tarea, todas, porId, repos, docs, impl.extraPrompt,
-                                idioma, modelo, binario, reintentadas, jobImpl,
+                                idioma, modelo, binario, reintentadas,
+                                dirDe(porId[tarea.repoId] ?: repos.first()), jobImpl,
                                 revisar = if (!impl.reviewEach) {
                                     null
                                 } else {
@@ -640,13 +710,18 @@ class ImplEngine(
         modelo: String,
         binario: String,
         reintentadas: MutableSet<String>,
+        /** Dónde trabajar: el clon del usuario, o su copia en el workspace. */
+        workDir: File,
         /** El job de la implementación, del que este cuelga. */
         jobPadre: String?,
         /** Si hay que revisar apenas termina esta tarea, y con cuántas pasadas. */
         revisar: Triple<Int, Int, String>? = null,
     ): Double {
         val repoTarea = porId[tarea.repoId] ?: repos.first()
-        val dir = File(repoTarea.localPath)
+        // El directorio llega desde afuera: puede ser el clon del usuario o el del workspace, y esa
+        // decisión se toma una sola vez arriba en vez de repetirse en cada función que necesita una
+        // ruta —que es como una de ellas se queda vieja y escribe en el lugar equivocado—.
+        val dir = workDir
         val clave = "$implId#${tarea.id}"
 
         // Lo que quedó de intentos anteriores. Un intento que se cortó dejó archivos modificados y
@@ -910,7 +985,7 @@ class ImplEngine(
         if (revisar != null && sha != null) {
             val (min, max, base) = revisar
             extraCosto = audit(
-                implId, repoTarea, docs, binario, modelo, idioma, min, max,
+                implId, repoTarea, dir, docs, binario, modelo, idioma, min, max,
                 tarea = tarea, baseRef = base,
             )
         }
@@ -1322,6 +1397,8 @@ class ImplEngine(
     private suspend fun audit(
         implId: String,
         repo: RepoRecord,
+        /** Dónde está el árbol a revisar. */
+        workDir: File,
         docs: List<SourceDoc>,
         binario: String,
         modelo: String,
@@ -1352,7 +1429,7 @@ class ImplEngine(
             val res = runCatching {
                 ClaudeCli.run(
                     binary = binario,
-                    workDir = File(repo.localPath),
+                    workDir = workDir,
                     prompt = ImplPrompt.review(
                         pasada, max, "$baseRef..HEAD", docs, alcance, previos.toList(), idioma,
                     ),
@@ -1376,9 +1453,9 @@ class ImplEngine(
             costo += res.costUsd ?: 0.0
 
             val salida = parseReview(res.structured ?: res.text)
-            val sha = if (Git.isDirty(File(repo.localPath))) {
+            val sha = if (Git.isDirty(workDir)) {
                 Git.commitAll(
-                    File(repo.localPath),
+                    workDir,
                     "revisión $pasada: ${salida.arreglados} arreglo(s)\n\n${salida.resumen.take(1_500)}",
                 )
             } else {

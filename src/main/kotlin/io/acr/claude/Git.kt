@@ -181,6 +181,46 @@ object Git {
      *
      * No toca nada si ya es un repositorio.
      */
+    /**
+     * Clona un repositorio local en otra carpeta, compartiendo objetos.
+     *
+     * `--local` sobre una ruta del mismo disco enlaza los objetos en vez de copiarlos: un repositorio
+     * de dos gigas se clona en un segundo y ocupa lo que ocupa su árbol de trabajo. Sin eso, un
+     * workspace por implementación sería inviable — nadie espera cinco minutos y medio disco para
+     * empezar a trabajar.
+     *
+     * No toca el repositorio de origen: sólo lo lee.
+     */
+    suspend fun cloneLocal(origen: File, destino: File): Result = withContext(Dispatchers.IO) {
+        destino.parentFile?.mkdirs()
+        run(destino.parentFile ?: destino, listOf("git", "clone", "--local", origen.absolutePath, destino.absolutePath))
+    }
+
+    /**
+     * Empuja una rama del workspace al clon del usuario.
+     *
+     * Es el paso que hace que el trabajo exista fuera del workspace. Se empuja a una ruta local, no
+     * al remoto: el remoto es una decisión de una persona y esto no la toma.
+     *
+     * Falla si la rama es la que el destino tiene abierta —git no deja pisar el árbol de trabajo de
+     * otro— y eso está bien: la rama de una implementación es nueva, y si alguien la tiene abierta
+     * allá es porque está trabajando en ella.
+     */
+    suspend fun pushToLocal(workspace: File, destino: File, rama: String): Result =
+        withContext(Dispatchers.IO) {
+            run(workspace, listOf("git", "push", destino.absolutePath, "$rama:$rama"))
+        }
+
+    /** ¿Existe esa rama en ese repositorio? Es la verificación antes de borrar un workspace. */
+    suspend fun hasBranch(dir: File, rama: String): Boolean = withContext(Dispatchers.IO) {
+        run(dir, listOf("git", "rev-parse", "--verify", "refs/heads/$rama")).ok
+    }
+
+    /** El sha de una rama, para comparar los dos lados antes de borrar. */
+    suspend fun branchHead(dir: File, rama: String): String? = withContext(Dispatchers.IO) {
+        run(dir, listOf("git", "rev-parse", "refs/heads/$rama")).takeIf { it.ok }?.output?.trim()
+    }
+
     suspend fun init(dir: File): Boolean {
         if (isRepo(dir)) return true
         if (!dir.isDirectory && !dir.mkdirs()) return false

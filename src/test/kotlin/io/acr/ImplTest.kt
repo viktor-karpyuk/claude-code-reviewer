@@ -2911,3 +2911,170 @@ class RequestReadingTest {
         assertTrue(prompt("che").contains("es mejor una tarea que dice"))
     }
 }
+
+/**
+ * El taller aparte: clonar, trabajar, devolver y sólo entonces borrar.
+ *
+ * Lo que se prueba con git de verdad y no con dobles: el valor entero de esto está en que el trabajo
+ * llegue del workspace al clon del usuario, y eso es una operación de git. Un test con dobles diría
+ * que el código llama a las funciones correctas, que no es la pregunta.
+ */
+class WorkspaceTest {
+
+    private fun repoDePrueba(dir: java.io.File, nombre: String): io.acr.forge.RepoRecord {
+        val d = java.io.File(dir, nombre).apply { mkdirs() }
+        kotlinx.coroutines.runBlocking {
+            io.acr.claude.Git.init(d)
+            java.io.File(d, "README.md").writeText("原")
+            io.acr.claude.Git.commitAll(d, "inicial")
+        }
+        return io.acr.forge.RepoRecord(
+            id = "r-$nombre", name = nombre, provider = Provider.BITBUCKET, owner = "acme",
+            slug = nombre, localPath = d.absolutePath, token = null,
+        )
+    }
+
+    /** La rama inicial depende de la config de git de cada máquina: main acá, master allá. */
+    private var ramaBase = "main"
+
+    private fun conTaller(block: (io.acr.impl.Workspaces, java.io.File, io.acr.forge.RepoRecord) -> Unit) {
+        val base = java.nio.file.Files.createTempDirectory("acr-ws").toFile()
+        try {
+            val repo = repoDePrueba(base, "proyecto")
+            ramaBase = kotlinx.coroutines.runBlocking {
+                io.acr.claude.Git.currentBranch(java.io.File(repo.localPath))
+            } ?: "main"
+            block(io.acr.impl.Workspaces(java.io.File(base, "workspaces")), base, repo)
+        } finally {
+            base.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun preparingClonesAndLeavesTheBranchReady() = conTaller { ws, _, repo ->
+        val r = kotlinx.coroutines.runBlocking {
+            ws.prepare("i1", listOf(repo), "feature-x", { ramaBase })
+        }
+        assertTrue(r.isSuccess, "falló: ${r.exceptionOrNull()?.message}")
+        val copia = ws.repoDir("i1", repo.name)
+        assertTrue(io.acr.claude.Git.isRepo(copia))
+        assertEquals("feature-x", kotlinx.coroutines.runBlocking { io.acr.claude.Git.currentBranch(copia) })
+        assertTrue(java.io.File(copia, "README.md").exists(), "vino con el historial del original")
+    }
+
+    @Test
+    fun theUserCloneIsNotTouchedWhileWorking() = conTaller { ws, _, repo ->
+        // Es la razón principal de todo esto: el árbol de trabajo de alguien no se llena de cambios
+        // a mitad de camino.
+        val antes = kotlinx.coroutines.runBlocking { io.acr.claude.Git.currentBranch(java.io.File(repo.localPath)) }
+        kotlinx.coroutines.runBlocking {
+            ws.prepare("i1", listOf(repo), "feature-x", { ramaBase })
+            val copia = ws.repoDir("i1", repo.name)
+            java.io.File(copia, "nuevo.kt").writeText("fun main() {}")
+            io.acr.claude.Git.commitAll(copia, "1. algo")
+        }
+        assertEquals(
+            antes,
+            kotlinx.coroutines.runBlocking { io.acr.claude.Git.currentBranch(java.io.File(repo.localPath)) },
+            "el clon siguió en su rama",
+        )
+        assertTrue(!java.io.File(repo.localPath, "nuevo.kt").exists(), "y sin los archivos nuevos")
+    }
+
+    @Test
+    fun theWorkComesBackToTheClone() = conTaller { ws, _, repo ->
+        kotlinx.coroutines.runBlocking {
+            ws.prepare("i1", listOf(repo), "feature-x", { ramaBase })
+            val copia = ws.repoDir("i1", repo.name)
+            java.io.File(copia, "nuevo.kt").writeText("fun main() {}")
+            io.acr.claude.Git.commitAll(copia, "1. algo")
+
+            val problemas = ws.syncBack("i1", listOf(repo), "feature-x")
+            assertTrue(problemas.all { it.second == null }, "sin problemas: $problemas")
+            assertTrue(
+                io.acr.claude.Git.hasBranch(java.io.File(repo.localPath), "feature-x"),
+                "la rama llegó al clon del usuario",
+            )
+            assertEquals(
+                io.acr.claude.Git.branchHead(copia, "feature-x"),
+                io.acr.claude.Git.branchHead(java.io.File(repo.localPath), "feature-x"),
+                "con el mismo commit en la punta",
+            )
+        }
+    }
+
+    @Test
+    fun itRefusesToDeleteWorkThatIsNotSafeYet() = conTaller { ws, _, repo ->
+        // La verificación no es una formalidad: es lo único que separa limpiar de perder una tarde
+        // de trabajo, y con un taller por implementación una tarde de trabajo es lo que hay adentro.
+        kotlinx.coroutines.runBlocking {
+            ws.prepare("i1", listOf(repo), "feature-x", { ramaBase })
+            val copia = ws.repoDir("i1", repo.name)
+            java.io.File(copia, "sin-devolver.kt").writeText("algo")
+            io.acr.claude.Git.commitAll(copia, "1. sin devolver")
+
+            val r = ws.delete("i1", listOf(repo), "feature-x")
+            assertTrue(r.isFailure, "no se borra lo que no está del otro lado")
+            assertTrue(ws.dirOf("i1").exists())
+            assertTrue(r.exceptionOrNull()?.message?.contains("no están en el clon") == true)
+        }
+    }
+
+    @Test
+    fun onceItIsSafeTheWorkshopGoes() = conTaller { ws, _, repo ->
+        kotlinx.coroutines.runBlocking {
+            ws.prepare("i1", listOf(repo), "feature-x", { ramaBase })
+            val copia = ws.repoDir("i1", repo.name)
+            java.io.File(copia, "listo.kt").writeText("algo")
+            io.acr.claude.Git.commitAll(copia, "1. listo")
+            ws.syncBack("i1", listOf(repo), "feature-x")
+
+            assertTrue(ws.delete("i1", listOf(repo), "feature-x").isSuccess)
+            assertTrue(!ws.dirOf("i1").exists(), "no queda nada del taller")
+            assertTrue(
+                io.acr.claude.Git.hasBranch(java.io.File(repo.localPath), "feature-x"),
+                "pero el trabajo sí quedó",
+            )
+        }
+    }
+
+    @Test
+    fun preparingTwiceKeepsWhatWasAlreadyDone() = conTaller { ws, _, repo ->
+        // Retomar es el caso normal, no la excepción: si el clon del taller ya está, se reusa con
+        // todo lo que las tareas anteriores dejaron commiteado.
+        kotlinx.coroutines.runBlocking {
+            ws.prepare("i1", listOf(repo), "feature-x", { ramaBase })
+            val copia = ws.repoDir("i1", repo.name)
+            java.io.File(copia, "de-antes.kt").writeText("algo")
+            io.acr.claude.Git.commitAll(copia, "1. de antes")
+
+            ws.prepare("i1", listOf(repo), "feature-x", { ramaBase })
+            assertTrue(java.io.File(copia, "de-antes.kt").exists(), "no se reclonó encima")
+        }
+    }
+
+    @Test
+    fun inspectComparesBothSidesInsteadOfGuessing() = conTaller { ws, _, repo ->
+        kotlinx.coroutines.runBlocking {
+            ws.prepare("i1", listOf(repo), "feature-x", { ramaBase })
+            val copia = ws.repoDir("i1", repo.name)
+            java.io.File(copia, "x.kt").writeText("algo")
+            io.acr.claude.Git.commitAll(copia, "1. x")
+
+            val antes = ws.inspect("i1", "una impl", listOf(repo), "feature-x")
+            assertTrue(!antes.safeToDelete, "hay un commit que no está del otro lado")
+
+            ws.syncBack("i1", listOf(repo), "feature-x")
+            val despues = ws.inspect("i1", "una impl", listOf(repo), "feature-x")
+            assertTrue(despues.safeToDelete, "los dos shas coinciden: eso es la prueba")
+        }
+    }
+
+    @Test
+    fun orphanFoldersAreFoundButNotTouched() = conTaller { ws, _, repo ->
+        kotlinx.coroutines.runBlocking { ws.prepare("borrada", listOf(repo), "feature-x", { ramaBase }) }
+        val sueltos = ws.orphans(setOf("otra"))
+        assertEquals(listOf("borrada"), sueltos.map { it.name })
+        assertTrue(sueltos.first().exists(), "se listan, no se borran: no hay con qué verificarlas")
+    }
+}

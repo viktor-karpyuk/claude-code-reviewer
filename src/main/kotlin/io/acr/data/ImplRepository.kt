@@ -26,8 +26,9 @@ class ImplRepository(private val store: Store) {
         val id = UlidCreator.getUlid().toString()
         store.transaction { conn ->
             conn.prepareStatement(
-                """INSERT INTO implementation(id, repo_id, title, sources, extra_prompt, status, created_at)
-                   VALUES (?,?,?,?,?,?,?)""",
+                """INSERT INTO implementation(id, repo_id, title, sources, extra_prompt, status,
+                         created_at, use_workspace)
+                   VALUES (?,?,?,?,?,?,?,1)""",
             ).use { ps ->
                 ps.setString(1, id)
                 ps.setString(2, repos.first().repoId)
@@ -955,6 +956,15 @@ class ImplRepository(private val store: Store) {
         }
     }
 
+    /** Si trabaja en un taller aparte. Sólo se cambia antes de que haya commits. */
+    fun setUseWorkspace(implId: String, usar: Boolean) {
+        store.stmt("UPDATE implementation SET use_workspace = ? WHERE id = ?") { ps ->
+            ps.setInt(1, if (usar) 1 else 0)
+            ps.setString(2, implId)
+            ps.executeUpdate()
+        }
+    }
+
     /** Cuántas tareas dejar correr a la vez. Null o cero es sin tope. */
     fun setMaxParallel(implId: String, max: Int?) {
         store.stmt("UPDATE implementation SET max_parallel = ? WHERE id = ?") { ps ->
@@ -987,7 +997,7 @@ class ImplRepository(private val store: Store) {
                       plan_summary, plan_model, code_model, error, cost_usd, created_at,
                       planned_at, finished_at, review_guidance, review_min, review_max,
                       review_each, branch_fixed, replans, replanned_at, max_parallel,
-                      missing_repos
+                      missing_repos, use_workspace
                  FROM implementation $tail""",
         ) { ps ->
             bind(ps)
@@ -1023,6 +1033,7 @@ class ImplRepository(private val store: Store) {
                                 reviewEach = (rs.getObject(20)?.let { rs.getInt(20) } ?: 0) == 1,
                                 branchFixed = (rs.getObject(21)?.let { rs.getInt(21) } ?: 0) == 1,
                                 maxParallel = rs.getObject(24)?.let { rs.getInt(24) }?.takeIf { it > 0 },
+                                useWorkspace = (rs.getObject(26)?.let { rs.getInt(26) } ?: 0) == 1,
                                 missingRepos = rs.getString(25).orEmpty().lines()
                                     .filter { it.isNotBlank() }
                                     .mapNotNull { l ->

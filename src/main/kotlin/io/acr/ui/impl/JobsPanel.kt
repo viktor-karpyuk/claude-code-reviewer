@@ -84,6 +84,13 @@ fun JobsPanel(ctx: AppContext) {
         androidx.compose.material3.HorizontalDivider(color = MaterialTheme.colorScheme.surfaceVariant)
         Spacer(Modifier.height(16.dp))
 
+        // Los talleres, en la misma pantalla de administración: lo que consume, lo que corre y lo
+        // que ocupa disco son las tres cosas que uno revisa en el mismo momento.
+        WorkspacesPanel(ctx)
+        Spacer(Modifier.height(20.dp))
+        androidx.compose.material3.HorizontalDivider(color = MaterialTheme.colorScheme.surfaceVariant)
+        Spacer(Modifier.height(16.dp))
+
         if (vivos.isEmpty() && muertos.isEmpty()) {
             Text(
                 t("jobs.none"),

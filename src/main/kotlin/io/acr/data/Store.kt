@@ -1302,6 +1302,19 @@ class Store(private val dbPath: Path, val settings: DbSettings = DbSettings()) :
             );--split--
             CREATE INDEX ix_cli_usage_at ON cli_usage(at)
             """.trimIndent(),
+
+            // v63 — trabajar en un taller aparte.
+            //
+            // Hasta acá cada tarea escribía directo en el clon del usuario: su árbol de trabajo se
+            // llenaba de cambios a mitad de camino, dos implementaciones sobre el mismo repositorio
+            // se peleaban por esa única copia, y cualquier cosa sin commitear bloqueaba el arranque.
+            //
+            // La marca es por implementación y no global: una que ya viene corriendo con commits en
+            // el clon del usuario no puede cambiar de modelo de ejecución a mitad de camino. Las
+            // nuevas arrancan con workspace; las viejas siguen como estaban.
+            """
+            ALTER TABLE implementation ADD COLUMN use_workspace INTEGER
+            """.trimIndent(),
         )
     }
 }

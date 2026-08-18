@@ -180,6 +180,14 @@ data class Implementation(
      * que alguien está usando.
      */
     val maxParallel: Int? = null,
+    /**
+     * Si trabaja en un taller aparte en vez de en el clon del usuario.
+     *
+     * Por implementación y no global: una que ya viene corriendo con commits en el clon no puede
+     * cambiar de modelo de ejecución a mitad de camino sin dejar la mitad del trabajo en un lado y
+     * la mitad en el otro.
+     */
+    val useWorkspace: Boolean = false,
     /** Repositorios que el plan necesita y que no están declarados. */
     val missingRepos: List<MissingRepo> = emptyList(),
     val replans: Int = 0,
