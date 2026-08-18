@@ -3,6 +3,35 @@
 Reglas de numeración en [CLAUDE.md](CLAUDE.md): un requerimiento **nuevo** incrementa *major*;
 cambiar uno **existente** incrementa *patch*.
 
+## 72.0.0
+
+**Replanificar ya no destruye lo que pasó.** Antes reemplazaba el plan entero: se perdía el registro
+de las tareas hechas —la única forma de saber qué produjo cada commit— y, si algo estaba corriendo,
+su fila desaparecía debajo del proceso que seguía escribiendo archivos.
+
+Ahora **lo hecho y lo que está corriendo se quedan**, y sólo se reemplaza lo que no empezó. Al
+planificador se le dice cuáles son intocables para que planifique nada más que lo que falta, y las
+tareas nuevas se numeran a continuación de las que quedan — con sus dependencias traducidas, porque
+una tarea nueva que dependía de "la 2" habría terminado esperando a la 2 vieja, que es otra cosa y
+en el peor caso ya está terminada.
+
+Como consecuencia, el aviso al confirmar dejó de hablar de pérdidas: dice cuántas se reemplazan y
+cuántas quedan.
+
+**Replanificar ya no obliga a escribir nada.** El prompt de revisión ya dice qué mirar —orden,
+tamaño, pasos—, así que exigir un texto era pedir que alguien redacte lo que el sistema ya sabe
+pedir. Con el campo vacío, revisa con su propio criterio.
+
+**Cuántas veces se replanificó, y cuándo fue la última.** Contestan cosas distintas: el contador
+dice si el plan es inestable —tres replanificaciones seguidas son una señal de que el problema no
+está en el plan—, y la fecha dice si lo que estás mirando es de antes o de después del último
+cambio.
+
+**Los tres botones de análisis explican qué hacen y qué dejan.** "Analizar los documentos", "Auditar
+contra las specs" y "Revisar y replanificar" son fáciles de confundir por el nombre y muy distintos
+al ejecutarse: uno lee las specs, otro compara el plan contra ellas, el tercero rehace el plan. El
+que duda termina apretando el que suena más inofensivo, que no siempre es el que necesita.
+
 ## 71.3.0
 
 **Se acabó el recargar todo.** El detalle de una implementación tenía un solo latido leído arriba de

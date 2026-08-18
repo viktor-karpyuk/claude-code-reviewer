@@ -150,12 +150,18 @@ class ImplEngine(
         /**
          * En qué sentido revisar el plan que ya existe, cuando esto es una replanificación.
          *
-         * Null es planificar de cero. Con texto, al modelo se le da el plan actual y esta guía y se
-         * le pide el revisado: replanificar de cero perdería las decisiones de orden que ya estaban
-         * bien y devolvería otras distintas, y entonces no habría forma de saber si la revisión
-         * mejoró algo o simplemente barajó de nuevo.
+         * Null es planificar de cero. Con texto —aunque sea vacío— al modelo se le da el plan
+         * actual y se le pide el revisado: replanificar de cero perdería las decisiones de orden que
+         * ya estaban bien y devolvería otras distintas, y entonces no habría forma de saber si la
+         * revisión mejoró algo o simplemente barajó de nuevo.
+         *
+         * La guía puede venir vacía. El prompt de revisión ya dice qué mirar —orden, tamaño,
+         * pasos—, así que obligar a escribir algo era pedir que alguien redacte lo que el sistema
+         * ya sabe pedir.
          */
         guidance: String? = null,
+        /** True cuando esto es una replanificación, aunque no haya guía escrita. */
+        revising: Boolean = guidance != null,
     ): Result<Int> {
         val impl = impls.get(implId) ?: return Result.failure(IllegalStateException("No existe."))
         val principal = repos.firstOrNull()
@@ -173,14 +179,34 @@ class ImplEngine(
         }
 
         // El plan actual, para revisarlo en vez de rehacerlo.
-        val revision = guidance?.takeIf { it.isNotBlank() }?.let { guia ->
+        val revision = if (!revising) null else run {
+            val guia = guidance?.takeIf { it.isNotBlank() }
+                ?: "Revisá el plan con el criterio de arriba. No hay nada puntual para corregir: " +
+                "buscá vos qué está flojo."
             val previas = impls.tasks(implId)
+            val intocables = previas.filter {
+                it.status == TaskStatus.DONE || it.status == TaskStatus.RUNNING
+            }
             val texto = buildString {
                 impl.planSummary?.takeIf { it.isNotBlank() }?.let { appendLine(it).appendLine() }
                 previas.forEach { t ->
-                    appendLine("${t.seq}. ${t.title}")
+                    val marca = when (t.status) {
+                        TaskStatus.DONE -> " [YA HECHA — no la repitas]"
+                        TaskStatus.RUNNING -> " [SE ESTÁ HACIENDO AHORA — no la repitas]"
+                        else -> ""
+                    }
+                    appendLine("${t.seq}. ${t.title}$marca")
                     t.detail.takeIf { d -> d.isNotBlank() }?.let { d -> appendLine("   $d") }
                     t.steps.forEach { paso -> appendLine("   - ${paso.title}") }
+                }
+                if (intocables.isNotEmpty()) {
+                    appendLine()
+                    appendLine(
+                        "Las tareas ${intocables.joinToString(", ") { "#${it.seq}" }} quedan como " +
+                            "están: su código ya está escrito o se está escribiendo ahora. Planificá " +
+                            "SÓLO lo que falta, y numerá desde 1 — la herramienta las renumera " +
+                            "a continuación de las que quedan.",
+                    )
                 }
             }
             texto to guia
@@ -238,7 +264,7 @@ class ImplEngine(
             // Si alguien escribió el nombre de la rama, manda sobre el que propone el modelo. Es
             // una decisión de una persona sobre algo que después va a buscar a mano en git.
             val ramaFinal = if (impl.branchFixed) impl.branch ?: rama else rama
-            impls.savePlan(implId, resumen, ramaFinal, base, modelo, tareas)
+            impls.savePlan(implId, resumen, ramaFinal, base, modelo, tareas, revision = revising)
             guidance?.takeIf { it.isNotBlank() }?.let { impls.saveReviewGuidance(implId, it) }
             log(
                 implId,

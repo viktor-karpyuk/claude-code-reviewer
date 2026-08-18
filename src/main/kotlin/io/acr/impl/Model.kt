@@ -164,6 +164,15 @@ data class Implementation(
      * vez planificado, `branch` está lleno en los dos casos— y replanificar pisaría lo elegido.
      */
     val branchFixed: Boolean = false,
+    /**
+     * Cuántas veces se rehízo el plan, y cuándo fue la última.
+     *
+     * Contestan cosas distintas y por eso van las dos: el contador dice si el plan es inestable
+     * —tres replanificaciones seguidas son una señal de que el problema no está en el plan—, y la
+     * fecha dice si lo que uno está mirando es de antes o de después del último cambio.
+     */
+    val replans: Int = 0,
+    val replannedAt: String? = null,
     val planModel: String?,
     val codeModel: String?,
     val error: String?,

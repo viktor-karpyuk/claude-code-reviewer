@@ -1195,6 +1195,21 @@ class Store(private val dbPath: Path, val settings: DbSettings = DbSettings()) :
             """
             ALTER TABLE repo ADD COLUMN local_only INTEGER
             """.trimIndent(),
+
+            // v56 — replanificar sin borrar lo que ya pasó.
+            //
+            // Hasta acá, replanificar reemplazaba el plan entero: se perdía el registro de las
+            // tareas hechas y, si algo estaba corriendo, su fila desaparecía debajo del proceso que
+            // seguía escribiendo. Ahora se preservan las hechas y la que corre, y sólo se
+            // reemplazan las que no empezaron.
+            //
+            // El contador y la fecha van juntos porque contestan cosas distintas: cuántas veces se
+            // rehízo dice si el plan es inestable —tres replanificaciones son una señal—, y cuándo
+            // dice si lo que estás mirando es de antes o de después del último cambio.
+            """
+            ALTER TABLE implementation ADD COLUMN replans INTEGER;--split--
+            ALTER TABLE implementation ADD COLUMN replanned_at TEXT
+            """.trimIndent(),
         )
     }
 }

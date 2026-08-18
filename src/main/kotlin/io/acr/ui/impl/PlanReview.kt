@@ -63,10 +63,14 @@ fun PlanReview(
     var auditando by remember(impl.id) { mutableStateOf(false) }
     var revisando by remember(impl.id) { mutableStateOf(false) }
 
-    // Replanificar reemplaza las tareas, así que el registro de las que ya corrieron se pierde. Los
-    // commits siguen en la rama —el trabajo no se va— pero saber qué tarea los hizo, cuánto tardó y
-    // qué tocó, sí. Por eso se avisa con el número y se pide confirmar en vez de deshacer solo.
+    // Qué se toca y qué no. Lo hecho y lo que está corriendo se quedan: lo primero tiene su código
+    // commiteado y su registro es la única forma de saber qué lo produjo; lo segundo tiene un
+    // proceso escribiendo archivos ahora mismo. Se reemplaza sólo lo que no empezó.
     val hechas = tasks.count { it.status == TaskStatus.DONE }
+    val corriendoAhora = tasks.count { it.status == TaskStatus.RUNNING }
+    val porEmpezar = tasks.count {
+        it.status != TaskStatus.DONE && it.status != TaskStatus.RUNNING
+    }
 
     Column(Modifier.fillMaxWidth()) {
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -81,6 +85,18 @@ fun PlanReview(
             TextButton(onClick = { verPrompt = !verPrompt }) {
                 Text((if (verPrompt) "▾  " else "▸  ") + t("impl.reviewPrompt"))
             }
+        }
+
+        // Cuántas veces se rehízo y cuándo. El contador dice si el plan es inestable —tres
+        // replanificaciones seguidas son una señal de que el problema no está en el plan— y la
+        // fecha dice si lo que uno mira es de antes o de después del último cambio.
+        if (impl.replans > 0) {
+            Text(
+                t("impl.replanCount", impl.replans) +
+                    impl.replannedAt?.let { "  ·  " + t("impl.replanLast", fechaCorta(it)) }.orEmpty(),
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
         }
 
         // Qué se le pide al modelo por defecto. Está a la vista para no escribir una guía que
@@ -118,6 +134,7 @@ fun PlanReview(
             // Auditar es lo que llena la guía sin tener que escribirla: va de los documentos al
             // plan, requisito por requisito, y deja anotado lo que falta. No cambia nada por su
             // cuenta —replanificar tira las tareas y eso no puede pasar solo—.
+            io.acr.ui.InfoTip(t("impl.auditTip"), t("impl.auditTipOut")) {
             OutlinedButton(
                 enabled = !running && !revisando && !auditando && repos.isNotEmpty() && tasks.isNotEmpty(),
                 onClick = {
@@ -130,17 +147,21 @@ fun PlanReview(
                     }
                 },
             ) { Text(t("impl.audit")) }
+            }
             if (auditando) CircularProgressIndicator(Modifier.height(18.dp).width(18.dp), strokeWidth = 2.dp)
+            io.acr.ui.InfoTip(t("impl.replanTip"), t("impl.replanTipOut")) {
             Button(
-                enabled = !running && !revisando && !auditando && guia.isNotBlank() && repos.isNotEmpty(),
+                // Sin exigir guía: el prompt de revisión ya dice qué mirar, así que obligar a
+                // escribir algo era pedir que alguien redacte lo que el sistema ya sabe pedir.
+                enabled = !running && !revisando && !auditando && repos.isNotEmpty(),
                 onClick = {
-                    if (hechas > 0 && !confirmando) {
+                    if (porEmpezar > 0 && !confirmando) {
                         confirmando = true
                     } else {
                         confirmando = false
                         revisando = true
                         scope.launch {
-                            ctx.implEngine.plan(repos, impl.id, guia)
+                            ctx.implEngine.plan(repos, impl.id, guia, revising = true)
                             revisando = false
                             onDone()
                         }
@@ -149,10 +170,11 @@ fun PlanReview(
             ) {
                 Text(if (confirmando) t("impl.reviewConfirm") else t("impl.reviewGo"))
             }
+            }
             if (revisando) CircularProgressIndicator(Modifier.height(18.dp).width(18.dp), strokeWidth = 2.dp)
             if (confirmando) {
                 Text(
-                    t("impl.reviewLoses", hechas),
+                    t("impl.reviewReplaces", porEmpezar, hechas + corriendoAhora),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.error,
                     modifier = Modifier.weight(1f),
@@ -168,3 +190,9 @@ fun PlanReview(
         }
     }
 }
+
+/** Fecha corta y local: acá se mira de reojo, no se audita. */
+private fun fechaCorta(iso: String): String = runCatching {
+    java.time.Instant.parse(iso).atZone(java.time.ZoneId.systemDefault())
+        .format(java.time.format.DateTimeFormatter.ofPattern("dd/MM HH:mm"))
+}.getOrDefault(iso.take(16))

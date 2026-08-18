@@ -179,18 +179,44 @@ class ImplRepository(private val store: Store) {
         baseBranch: String,
         planModel: String,
         tasks: List<ImplTask>,
+        /**
+         * Rehacer el plan sin borrar lo que ya pasó.
+         *
+         * En una replanificación, las tareas **hechas** y la que está **corriendo** se quedan donde
+         * están: las primeras tienen su código commiteado y su registro es la única forma de saber
+         * qué lo produjo; la segunda tiene un proceso escribiendo archivos ahora mismo, y borrarle
+         * la fila de abajo la dejaría trabajando para nadie.
+         *
+         * Sólo se reemplaza lo que no empezó. Las tareas nuevas se numeran a continuación de las
+         * preservadas, así el número sigue siendo el orden real y no hay dos tareas 3.
+         */
+        revision: Boolean = false,
     ) {
         store.transaction { conn ->
+            // Qué se conserva. En una replanificación, lo hecho y lo que corre; si no, nada.
+            val intocables = if (!revision) "" else " AND status NOT IN ('DONE','RUNNING')"
+
             // El contexto de las tareas que se van también se va: describe un trabajo que el plan
             // nuevo ya no pide, y dejarlo colgado haría que un intento futuro crea que hay avance
             // sobre algo distinto. Va primero, mientras las tareas todavía existen para poder
             // encontrarlo.
             conn.prepareStatement(
                 """DELETE FROM task_context WHERE task_id IN
-                     (SELECT id FROM impl_task WHERE impl_id = ?)""",
+                     (SELECT id FROM impl_task WHERE impl_id = ?$intocables)""",
             ).use { ps -> ps.setString(1, implId); ps.executeUpdate() }
-            conn.prepareStatement("DELETE FROM impl_task WHERE impl_id = ?").use { ps ->
+            conn.prepareStatement("DELETE FROM impl_task WHERE impl_id = ?$intocables").use { ps ->
                 ps.setString(1, implId); ps.executeUpdate()
+            }
+
+            // Desde qué número siguen las nuevas. Si no se preservó nada, desde uno.
+            val base = if (!revision) {
+                0
+            } else {
+                conn.prepareStatement("SELECT COALESCE(MAX(seq), 0) FROM impl_task WHERE impl_id = ?")
+                    .use { ps ->
+                        ps.setString(1, implId)
+                        ps.executeQuery().use { rs -> if (rs.next()) rs.getInt(1) else 0 }
+                    }
             }
             conn.prepareStatement(
                 """UPDATE implementation SET plan_summary = ?, branch = ?, base_branch = ?,
@@ -205,8 +231,24 @@ class ImplRepository(private val store: Store) {
                 ps.setString(7, implId)
                 ps.executeUpdate()
             }
+            if (revision) {
+                conn.prepareStatement(
+                    """UPDATE implementation
+                          SET replans = COALESCE(replans, 0) + 1, replanned_at = ?
+                        WHERE id = ?""",
+                ).use { ps ->
+                    ps.setString(1, Instant.now().toString())
+                    ps.setString(2, implId)
+                    ps.executeUpdate()
+                }
+            }
             val ahora = Instant.now().toString()
-            tasks.forEach { t ->
+            // De qué número del plan nuevo salió cada tarea, para poder traducir sus dependencias.
+            // Sin esta traducción, una tarea que depende de "la 2" del plan nuevo terminaría
+            // esperando a la 2 vieja, que es otra cosa —y en el peor caso, una ya terminada, con lo
+            // que arrancaría sin que su verdadera dependencia exista.
+            val nuevoSeq = tasks.mapIndexed { i, t -> t.seq to base + i + 1 }.toMap()
+            tasks.forEachIndexed { i, t ->
                 val taskId = UlidCreator.getUlid().toString()
                 conn.prepareStatement(
                     """INSERT INTO impl_task(id, impl_id, seq, title, detail, depends_on, size,
@@ -215,10 +257,15 @@ class ImplRepository(private val store: Store) {
                 ).use { ps ->
                     ps.setString(1, taskId)
                     ps.setString(2, implId)
-                    ps.setInt(3, t.seq)
+                    ps.setInt(3, base + i + 1)
                     ps.setString(4, t.title)
                     ps.setString(5, t.detail)
-                    ps.setString(6, t.dependsOn.joinToString(","))
+                    // Una dependencia que apunta a una tarea preservada se deja como está: ese
+                    // número sigue existiendo y significa lo mismo.
+                    ps.setString(
+                        6,
+                        t.dependsOn.joinToString(",") { d -> (nuevoSeq[d] ?: d).toString() },
+                    )
                     ps.setString(7, t.size?.name)
                     if (t.estimateMin == null) ps.setNull(8, java.sql.Types.INTEGER) else ps.setInt(8, t.estimateMin)
                     ps.setString(9, TaskStatus.PENDING.name)
@@ -826,7 +873,7 @@ class ImplRepository(private val store: Store) {
             """SELECT id, repo_id, title, sources, extra_prompt, branch, base_branch, status,
                       plan_summary, plan_model, code_model, error, cost_usd, created_at,
                       planned_at, finished_at, review_guidance, review_min, review_max,
-                      review_each, branch_fixed
+                      review_each, branch_fixed, replans, replanned_at
                  FROM implementation $tail""",
         ) { ps ->
             bind(ps)
@@ -861,6 +908,8 @@ class ImplRepository(private val store: Store) {
                                 reviewMax = rs.getObject(19)?.let { rs.getInt(19) } ?: 5,
                                 reviewEach = (rs.getObject(20)?.let { rs.getInt(20) } ?: 0) == 1,
                                 branchFixed = (rs.getObject(21)?.let { rs.getInt(21) } ?: 0) == 1,
+                                replans = rs.getObject(22)?.let { rs.getInt(22) } ?: 0,
+                                replannedAt = rs.getString(23),
                             ),
                         )
                     }

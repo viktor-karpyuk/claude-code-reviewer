@@ -181,17 +181,19 @@ fun ImplDetail(
             // Analizar los documentos antes de planificar sobre ellos: un plan no puede ser mejor
             // que las specs de las que sale, y lo que las specs no dicen el planificador lo
             // inventa sin marcarlo.
-            TextButton(
-                enabled = !corriendo && !analizando,
-                onClick = {
-                    analizando = true
-                    ctx.appScope.launch {
-                        ctx.implEngine.improveSpecs(misRepos, implId)
-                        analizando = false
-                        version++
-                    }
-                },
-            ) { Text(t("impl.analyzeDocs")) }
+            io.acr.ui.InfoTip(t("impl.analyzeDocsTip"), t("impl.analyzeDocsTipOut")) {
+                TextButton(
+                    enabled = !corriendo && !analizando,
+                    onClick = {
+                        analizando = true
+                        ctx.appScope.launch {
+                            ctx.implEngine.improveSpecs(misRepos, implId)
+                            analizando = false
+                            version++
+                        }
+                    },
+                ) { Text(t("impl.analyzeDocs")) }
+            }
             if (analizando) {
                 CircularProgressIndicator(Modifier.height(16.dp).width(16.dp), strokeWidth = 2.dp)
                 Spacer(Modifier.width(8.dp))

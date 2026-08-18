@@ -2150,3 +2150,101 @@ class SectionRefreshTest {
         )
     }
 }
+
+/**
+ * Replanificar sin destruir lo que ya pasó.
+ *
+ * Antes, rehacer el plan borraba todo: se perdía el registro de las tareas hechas —la única forma
+ * de saber qué produjo cada commit— y, si algo estaba corriendo, su fila desaparecía debajo del
+ * proceso que seguía escribiendo archivos.
+ */
+class ReplanTest {
+
+    private fun conPlan(block: (AppContext, String, List<ImplTask>) -> Unit) {
+        val dir = java.nio.file.Files.createTempDirectory("acr-replan")
+        val ctx = AppContext.bootstrap(dir)
+        try {
+            val repoId = ctx.repos.create(
+                "tmp-rp-${System.nanoTime()}", Provider.BITBUCKET, "acme", "demo",
+                System.getProperty("java.io.tmpdir"), null, null, null, "", false,
+                io.acr.forge.SkipRules(), io.acr.forge.ReplyMode.OFF,
+            )
+            val id = ctx.impls.create(
+                listOf(io.acr.impl.ImplRepo(repoId, io.acr.impl.RepoRole.OTHER, null)),
+                "replan", listOf("/tmp/x.md"), null,
+            )
+            ctx.impls.savePlan(id, "r", "rama", "develop", "fable", (1..4).map { tarea(it) })
+            block(ctx, id, ctx.impls.tasks(id))
+        } finally {
+            ctx.close()
+            dir.toFile().deleteRecursively()
+        }
+    }
+
+    private fun tarea(seq: Int, dep: List<Int> = emptyList()) = ImplTask(
+        "", "", null, seq, "tarea $seq", "detalle", dep, TaskSize.M, 10,
+        TaskStatus.PENDING, null, null, null, null, null, null,
+    )
+
+    @Test
+    fun whatIsDoneAndWhatIsRunningSurvive() = conPlan { ctx, id, tareas ->
+        ctx.impls.finishTask(tareas[0].id, "abc", "hecha", 0.1)
+        ctx.impls.startTask(tareas[1].id)
+
+        ctx.impls.savePlan(id, "nuevo", "rama", "develop", "fable", listOf(tarea(1), tarea(2)), revision = true)
+
+        val despues = ctx.impls.tasks(id)
+        assertEquals(4, despues.size, "las dos preservadas más las dos nuevas: ${despues.map { it.seq }}")
+        assertEquals(TaskStatus.DONE, despues.first { it.seq == 1 }.status)
+        assertEquals("abc", despues.first { it.seq == 1 }.commitSha, "con su commit intacto")
+        assertEquals(TaskStatus.RUNNING, despues.first { it.seq == 2 }.status)
+    }
+
+    @Test
+    fun theNewTasksAreNumberedAfterTheSurvivors() = conPlan { ctx, id, tareas ->
+        // Sin renumerar habría dos tareas 1, y el número deja de ser el orden real.
+        ctx.impls.finishTask(tareas[0].id, "abc", "hecha", 0.1)
+        ctx.impls.finishTask(tareas[1].id, "def", "hecha", 0.1)
+
+        ctx.impls.savePlan(id, "n", "rama", "develop", "fable", listOf(tarea(1), tarea(2)), revision = true)
+
+        assertEquals(listOf(1, 2, 3, 4), ctx.impls.tasks(id).map { it.seq })
+    }
+
+    @Test
+    fun dependenciesOfTheNewPlanAreTranslated() = conPlan { ctx, id, tareas ->
+        // La tarea nueva "2" depende de la nueva "1", no de la vieja 1 —que además está terminada,
+        // con lo que arrancaría sin que su verdadera dependencia exista.
+        ctx.impls.finishTask(tareas[0].id, "abc", "hecha", 0.1)
+
+        ctx.impls.savePlan(
+            id, "n", "rama", "develop", "fable",
+            listOf(tarea(1), tarea(2, dep = listOf(1))), revision = true,
+        )
+
+        val nuevas = ctx.impls.tasks(id).filter { it.status == TaskStatus.PENDING }
+        val segunda = nuevas.maxBy { it.seq }
+        assertEquals(listOf(segunda.seq - 1), segunda.dependsOn, "apunta a la nueva, no a la vieja")
+    }
+
+    @Test
+    fun replanningIsCounted() = conPlan { ctx, id, _ ->
+        assertEquals(0, ctx.impls.get(id)!!.replans)
+        assertEquals(null, ctx.impls.get(id)!!.replannedAt)
+
+        ctx.impls.savePlan(id, "n", "rama", "develop", "fable", listOf(tarea(1)), revision = true)
+        ctx.impls.savePlan(id, "n", "rama", "develop", "fable", listOf(tarea(1)), revision = true)
+
+        assertEquals(2, ctx.impls.get(id)!!.replans, "tres replanificaciones seguidas son una señal")
+        assertTrue(ctx.impls.get(id)!!.replannedAt != null)
+    }
+
+    @Test
+    fun planningFromScratchStillReplacesEverything() = conPlan { ctx, id, tareas ->
+        // Planificar por primera vez no es replanificar: ahí sí se reemplaza todo, porque no hay
+        // nada que preservar que signifique algo.
+        ctx.impls.finishTask(tareas[0].id, "abc", "hecha", 0.1)
+        ctx.impls.savePlan(id, "n", "rama", "develop", "fable", listOf(tarea(1)))
+        assertEquals(1, ctx.impls.tasks(id).size)
+    }
+}
