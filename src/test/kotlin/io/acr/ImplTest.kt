@@ -2721,3 +2721,193 @@ class HiddenRepoTest {
         assertEquals(id, ctx.repos.get(id)?.id)
     }
 }
+
+/**
+ * Resiliencia: distinguir un bache del servidor de un error que no se va a arreglar esperando.
+ */
+class TransientTest {
+
+    @Test
+    fun anOverloadedServerIsWorthWaitingFor() {
+        // Un 529 no dice nada sobre el trabajo: dice que en ese instante había demasiada gente.
+        assertTrue(io.acr.claude.Transient.isTransient("API Error: 529 Overloaded"))
+        assertTrue(io.acr.claude.Transient.isTransient("rate limit exceeded"))
+        assertTrue(io.acr.claude.Transient.isTransient("Error: 429 Too Many Requests"))
+        assertTrue(io.acr.claude.Transient.isTransient("connection reset by peer"))
+        assertTrue(io.acr.claude.Transient.isTransient("503 Service Unavailable"))
+    }
+
+    @Test
+    fun aBadModelNameIsNotGoingToFixItself() {
+        // Tratarlo como pasajero convertiría un error de configuración de un segundo en una espera
+        // infinita, que es peor que el error: el error se lee y se arregla, la espera parece que
+        // algo está pasando.
+        assertTrue(!io.acr.claude.Transient.isTransient("[claude-code:unrecognized_model]"))
+        assertTrue(!io.acr.claude.Transient.isTransient("401 unauthorized"))
+        assertTrue(!io.acr.claude.Transient.isTransient("permission denied"))
+        assertTrue(!io.acr.claude.Transient.isTransient(null))
+        assertTrue(!io.acr.claude.Transient.isTransient("   "))
+    }
+
+    @Test
+    fun permanentWinsOverTransientWhenBothWordsAppear() {
+        // "internal server error: unrecognized_model" no es un bache: reintentarlo cien veces falla
+        // cien veces.
+        assertTrue(!io.acr.claude.Transient.isTransient("500 internal server error: unrecognized_model"))
+    }
+
+    @Test
+    fun itWaitsFiveSecondsAtFirstAndStretchesOnlyIfItLasts() {
+        // Cinco segundos el primer minuto: la mayoría de los baches duran eso. Pasado el minuto el
+        // problema ya no es un bache y machacar no lo apura, sólo suma carga al servidor que está
+        // justamente sobrecargado.
+        assertEquals(5_000L, io.acr.claude.Transient.waitMs(1))
+        assertEquals(5_000L, io.acr.claude.Transient.waitMs(12))
+        assertEquals(15_000L, io.acr.claude.Transient.waitMs(13))
+        assertEquals(30_000L, io.acr.claude.Transient.waitMs(50))
+    }
+}
+
+/** El registro de consumo: completo o no sirve. */
+class UsageTest {
+
+    private fun conCtx(block: (AppContext) -> Unit) {
+        val dir = java.nio.file.Files.createTempDirectory("acr-uso")
+        val ctx = AppContext.bootstrap(dir)
+        try {
+            block(ctx)
+        } finally {
+            ctx.close()
+            dir.toFile().deleteRecursively()
+        }
+    }
+
+    private fun evento(costo: Double, kind: String = "task", model: String = "opus") =
+        io.acr.data.UsageEvent(kind, model, "s1", true, 30, 1_000, 500, 40_000, 2_000, costo)
+
+    @Test
+    fun everyRunIsCountedInBothWindows() = conCtx { ctx ->
+        ctx.usage.record(evento(0.50))
+        ctx.usage.record(evento(1.25))
+
+        val s = ctx.usage.session()
+        assertEquals(2, s.runs)
+        assertEquals(1.75, s.costUsd, 0.001)
+        assertEquals(3_000L, s.billable, "los tokens que se pagan son entrada más salida")
+        assertEquals(84_000L, s.cacheRead + s.cacheWrite, "la caché va aparte: se cobra distinto")
+        assertEquals(2, ctx.usage.week().runs)
+    }
+
+    @Test
+    fun anOldRunFallsOutOfTheSessionWindowButNotTheWeek() = conCtx { ctx ->
+        ctx.usage.record(evento(2.0))
+        // Se envejece a mano: esperar seis horas en un test no prueba nada más.
+        ctx.store.stmt("UPDATE cli_usage SET at = ?") { ps ->
+            ps.setString(1, java.time.Instant.now().minusSeconds(60 * 60 * 6).toString())
+            ps.executeUpdate()
+        }
+        assertEquals(0, ctx.usage.session().runs, "seis horas atrás ya no es esta sesión")
+        assertEquals(1, ctx.usage.week().runs, "pero sí es esta semana")
+    }
+
+    @Test
+    fun itSaysWhereTheMoneyWent() = conCtx { ctx ->
+        // Las dos preguntas son distintas: por actividad dice qué consume, por modelo dice si
+        // conviene bajar de familia en alguna de ellas.
+        ctx.usage.record(evento(3.0, kind = "task", model = "opus"))
+        ctx.usage.record(evento(0.20, kind = "plan", model = "fable"))
+        ctx.usage.record(evento(0.10, kind = "plan", model = "fable"))
+        val desde = java.time.Instant.now().minusSeconds(3_600)
+
+        val porTipo = ctx.usage.byKind(desde)
+        assertEquals("task", porTipo.first().first, "lo más caro primero")
+        assertEquals(2, porTipo.first { it.first == "plan" }.second)
+
+        val porModelo = ctx.usage.byModel(desde)
+        assertEquals("opus", porModelo.first().first)
+    }
+
+    @Test
+    fun theSinkIsPluggedInSoNothingGoesUncounted() = conCtx { _ ->
+        // Nueve lugares lanzan el CLI y van a haber más: pedirle a cada uno que registre es como se
+        // termina con un registro parcial, que parece autoritativo y no lo es.
+        assertTrue(
+            io.acr.claude.ClaudeCli.onUsage != null,
+            "bootstrap tiene que haber enchufado el registro",
+        )
+    }
+}
+
+/**
+ * La lectura de un pedido escrito a mano.
+ *
+ * Sin ella, lo que uno escribe en la consola entra como una tarea con el texto crudo por
+ * descripción: sin pasos, sin tamaño, sin saber en qué repositorio va ni a qué se refiere. El modelo
+ * que después la ejecuta tiene que adivinar todo eso mientras escribe código.
+ */
+class RequestReadingTest {
+
+    private fun tarea(seq: Int, estado: TaskStatus = TaskStatus.PENDING) = ImplTask(
+        "t$seq", "i", null, seq, "tarea $seq", "", emptyList(), TaskSize.M, 10, estado,
+        null, null, null, null, null, null,
+    )
+
+    private fun prompt(pedido: String) = io.acr.impl.ImplPrompt.request(
+        pedido,
+        listOf(tarea(1, TaskStatus.DONE), tarea(2, TaskStatus.RUNNING), tarea(3)),
+        listOf(Triple("be", "BACKEND", "/tmp/be"), Triple("fe", "FRONTEND", "/tmp/fe")),
+        listOf(io.acr.impl.SourceDoc("req.md", "lo que se pide")),
+        "español",
+    )
+
+    @Test
+    fun theRequestIsShownVerbatimAndKeptInTheTask() {
+        // El original tiene que quedar para poder ver si le entendió: sin eso, una lectura
+        // equivocada se ejecuta y nadie puede notarlo.
+        val p = prompt("sacá el approver del token")
+        assertTrue(p.contains("EL PEDIDO, TAL COMO LO ESCRIBIÓ"))
+        assertTrue(p.contains("sacá el approver del token"))
+        assertTrue(p.contains("primero **el pedido textual**"))
+    }
+
+    @Test
+    fun itIsToldToFindWhichTaskItCorrects() {
+        // Una corrección que no sabe qué está corrigiendo termina reescribiendo desde cero lo que
+        // sólo había que ajustar.
+        val p = prompt("corregí eso")
+        assertTrue(p.contains("corrección de algo que ya se hizo"))
+        assertTrue(p.contains("`fixes`"))
+        assertTrue(p.contains("[hecha] 1."), "ve el estado de cada tarea para poder ubicarlo")
+        assertTrue(p.contains("[corriendo] 2."))
+    }
+
+    @Test
+    fun importanceIsJudgedAgainstTheWorkAndNotTheMood() {
+        // El que pide una corrección siempre la siente urgente. Si todo es urgente, la prioridad
+        // deja de ordenar nada.
+        val p = prompt("urgente!!")
+        assertTrue(p.contains("comparado contra lo que falta hacer y no contra las ganas"))
+        listOf("CRITICAL", "HIGH", "NORMAL", "LOW").forEach {
+            assertTrue(p.contains(it), "define $it")
+        }
+    }
+
+    @Test
+    fun itHasToPickTheRepositoryByLooking() {
+        val p = prompt("arreglá la pantalla de saldos")
+        assertTrue(p.contains("andá a buscar dónde vive"))
+        assertTrue(
+            // Sin cruzar el salto de línea del prompt: el texto está partido y buscar la frase
+            // entera fallaría por el formato y no por el contenido.
+            p.contains("repositorio equivocado"),
+            "el costo de equivocarse es media hora después, con un error que no habla del pedido",
+        )
+    }
+
+    @Test
+    fun anUnclearRequestBecomesALowTaskThatSaysSo() {
+        // Mejor una tarea que dice "esto no se entiende" que una que hace algo distinto de lo que se
+        // pidió.
+        assertTrue(prompt("che").contains("es mejor una tarea que dice"))
+    }
+}

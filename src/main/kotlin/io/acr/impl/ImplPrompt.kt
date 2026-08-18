@@ -514,6 +514,95 @@ object ImplPrompt {
         Devolvé el JSON del esquema.
     """.trimIndent()
 
+    /**
+     * Lo que devuelve la lectura de un pedido escrito a mano.
+     *
+     * `importance` decide el lugar en la cola, y por eso lo estima el que entiende el pedido y no el
+     * que lo escribió: quien escribe "corregí esto" siempre lo siente urgente, y si todo es urgente
+     * la prioridad deja de ordenar nada.
+     */
+    val REQUEST_SCHEMA = """
+    {"type":"object","properties":{
+      "title":{"type":"string"},
+      "detail":{"type":"string"},
+      "repo":{"type":"string"},
+      "steps":{"type":"array","items":{"type":"string"}},
+      "size":{"type":"string","enum":["S","M","L","XL"]},
+      "estimate_min":{"type":"integer"},
+      "importance":{"type":"string","enum":["CRITICAL","HIGH","NORMAL","LOW"]},
+      "why":{"type":"string"},
+      "fixes":{"type":"array","items":{"type":"integer"}}
+    },"required":["title","detail","repo","size","estimate_min","importance","steps"]}
+    """.trimIndent()
+
+    /**
+     * Convierte un pedido escrito a mano en una tarea del plan.
+     *
+     * Sin esto, lo que uno escribe entra como una tarea con el texto crudo por descripción: sin
+     * pasos, sin tamaño, sin saber en qué repositorio va ni a qué se refiere. El modelo que después
+     * la ejecuta tiene que adivinar todo eso mientras escribe código, que es el peor momento.
+     *
+     * La importancia la decide esta lectura y no quien escribió: el que pide una corrección siempre
+     * la siente urgente, y si todo es urgente la prioridad deja de ordenar nada. Acá se compara
+     * contra lo que falta hacer, que es la única forma de decir "esto va antes".
+     *
+     * El pedido original se conserva textual en el detalle. Es lo que permite ver si la
+     * interpretación fue la correcta — y sin eso, una lectura equivocada se ejecuta sin que nadie
+     * pueda notarlo.
+     */
+    fun request(
+        pedido: String,
+        tasks: List<ImplTask>,
+        repos: List<Triple<String, String, String>>,
+        docs: List<SourceDoc>,
+        language: String,
+    ): String = """
+        Sos un tech lead. Alguien que está mirando cómo va una implementación te dejó este pedido a
+        mano, mientras el trabajo corría. Convertilo en UNA tarea del plan. Devolvé sólo el JSON.
+
+        EL PEDIDO, TAL COMO LO ESCRIBIÓ
+        $pedido
+
+        REPOSITORIOS
+        ${repos.joinToString("\n") { (nombre, rol, ruta) -> "- $nombre — $rol — $ruta" }}
+
+        Elegí en cuál va mirándolo: si el pedido menciona una pantalla, un endpoint o un archivo,
+        andá a buscar dónde vive. Poner el repositorio equivocado hace que la tarea falle recién al
+        correr, media hora después, con un error que no dice nada del pedido.
+
+        EL PLAN, PARA UBICAR EL PEDIDO
+        ${tasks.joinToString("\n") { t ->
+        val marca = when (t.status) {
+            TaskStatus.DONE -> "[hecha]"
+            TaskStatus.RUNNING -> "[corriendo]"
+            TaskStatus.FAILED -> "[falló]"
+            else -> "[pendiente]"
+        }
+        "  $marca ${t.seq}. ${t.title}"
+    }}
+
+        ${docs.take(6).joinToString("\n\n") { "--- ${it.name} ---\n${it.content.take(6_000)}" }}
+
+        CÓMO LEERLO
+        - Casi siempre es una **corrección de algo que ya se hizo**. Fijate a qué tarea se refiere y
+          ponela en `fixes`; si hay que mirar código para saberlo, miralo. Una corrección que no sabe
+          qué está corrigiendo termina reescribiendo desde cero lo que sólo había que ajustar.
+        - En `detail`, primero **el pedido textual** y después tu interpretación. El original tiene
+          que quedar para poder ver si le entendiste; sin eso, una lectura equivocada se ejecuta y
+          nadie puede notarlo.
+        - `steps`: entre 1 y 5, concretos. Un pedido de una línea puede ser un paso; no lo infles.
+        - `importance`, comparado contra lo que falta hacer y no contra las ganas de quien pidió:
+          **CRITICAL** deja algo roto o inseguro si no se hace ya —una fuga de datos, un endpoint que
+          no valida—; **HIGH** es una corrección de algo ya hecho que las tareas siguientes van a dar
+          por bueno, así que cuanto más tarde se haga más código hay encima; **NORMAL** es trabajo que
+          puede esperar su turno; **LOW** es cosmético o postergable sin costo.
+          En `why`, una línea diciendo por qué esa y no otra.
+        - Si el pedido no se entiende o le falta algo para poder hacerse, decilo en `detail` y poné
+          `importance` en LOW: es mejor una tarea que dice "esto no se entiende" que una que hace
+          algo distinto de lo que se pidió.
+        - Escribí en $language.
+    """.trimIndent()
+
     /** Lo que devuelve el análisis de los documentos. */
     val SPECS_SCHEMA = """
     {"type":"object","properties":{

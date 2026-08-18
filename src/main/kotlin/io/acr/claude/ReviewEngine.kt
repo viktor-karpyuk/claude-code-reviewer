@@ -150,6 +150,7 @@ class ReviewEngine(
         )
         return runCatching {
             val result = ClaudeCli.run(
+                kind = "reply",
                 binary = binary,
                 workDir = workDir,
                 prompt = prompt,
@@ -219,6 +220,7 @@ class ReviewEngine(
 
         return runCatching {
             val result = ClaudeCli.run(
+                kind = "verify",
                 binary = binary,
                 workDir = workDir,
                 prompt = prompt,
@@ -353,6 +355,7 @@ class ReviewEngine(
 
         return runCatching {
             val result = ClaudeCli.run(
+                kind = "final-pass",
                 binary = binary,
                 workDir = workDir,
                 prompt = prompt,
@@ -674,6 +677,7 @@ class ReviewEngine(
             var proc: Process? = null
             val result = try {
                 ClaudeCli.run(
+                kind = "review",
                     binary = binary,
                     workDir = workDir,
                     prompt = prompt,

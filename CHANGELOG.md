@@ -3,6 +3,52 @@
 Reglas de numeración en [CLAUDE.md](CLAUDE.md): un requerimiento **nuevo** incrementa *major*;
 cambiar uno **existente** incrementa *patch*.
 
+## 79.0.0
+
+**Se registra lo que consume cada corrida del CLI**, y desde un solo lugar. Hay nueve sitios que
+lanzan Claude y van a haber más; pedirle a cada uno que se acuerde de registrar es exactamente como
+se termina con un registro parcial — que es peor que no tener ninguno, porque parece autoritativo y
+las decisiones que se toman mirándolo salen mal. Cada corrida queda anotada con su tipo, su modelo,
+su sesión, sus tokens y su costo.
+
+Con eso hay dos ventanas: **las últimas cinco horas** —la que usa Claude Code— y **los últimos siete
+días**. La primera contesta "¿lanzo algo grande ahora o espero?"; la segunda, cuánto va de la semana.
+Y el reparto por actividad y por modelo, que son dos preguntas distintas: una dice qué consume, la
+otra si conviene bajar de familia en alguna.
+
+**Sobre el límite: la app no puede leerlo.** El CLI no lo expone, y el archivo de estadísticas que
+Claude deja en disco no trae límites y se actualiza cuando quiere. Inventar un porcentaje contra un
+tope adivinado sería lo peor de los dos mundos — un número que parece exacto y decide por vos. Así
+que el tope semanal lo declarás vos, y la app aporta la cuenta fiel de su propio consumo, que es la
+parte que causa y la única que puede medir. Avisa al 80%, no al 100%: avisar cuando ya no se puede
+hacer nada con el aviso no es avisar.
+
+**Un `529 Overloaded` ya no mata una implementación.** Un error así no dice nada sobre el trabajo:
+dice que en ese instante había demasiada gente. Ahora se distingue lo pasajero —529, 429, timeouts,
+conexión cortada— de lo que no se arregla esperando, como un modelo inexistente: tratar eso como
+pasajero convertiría un error de configuración de un segundo en una espera infinita.
+
+Lo pasajero se reintenta **cada cinco segundos durante el primer minuto**, y sólo después se estira a
+quince y treinta. Pasado el minuto el problema ya no es un bache, y machacar no lo apura: suma carga
+al servidor que está justamente sobrecargado. No hay tope de intentos — la salida es cancelar, que es
+una decisión de una persona; un tope fijo haría que la tarea se dé por vencida justo cuando el
+servidor estaba volviendo.
+
+**Un pedido de la consola ahora se lee antes de convertirse en tarea.** Antes entraba crudo: el texto
+como descripción, sin pasos, sin tamaño, sin saber en qué repositorio va ni a qué se refiere — y todo
+eso lo tenía que adivinar el modelo que escribe el código, que es el peor momento. Ahora una lectura
+lo convierte en una tarea con título, pasos, repositorio elegido mirando dónde vive lo que se
+menciona, y **la tarea que está corrigiendo**.
+
+La importancia la decide esa lectura y no quien escribió: el que pide una corrección siempre la
+siente urgente, y si todo es urgente la prioridad deja de ordenar nada. Se compara contra lo que
+falta hacer, en cuatro niveles — crítica, alta, normal, baja — y de ahí sale el lugar en la cola.
+
+El pedido original queda **textual** en la tarea, antes de la interpretación: es lo que permite ver
+si le entendió. Y si la lectura no se puede hacer, el pedido entra igual, crudo — perder una
+instrucción porque no se pudo interpretar sería el peor de los dos mundos, porque quien la escribió
+ya se fue.
+
 ## 78.0.0
 
 **Los commits pasaron a ser una sección propia.** Estaban en un desplegable dentro del detalle, y

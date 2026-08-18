@@ -36,6 +36,7 @@ import io.acr.forge.RepoRecord
 import io.acr.i18n.t
 import io.acr.impl.ImplTask
 import io.acr.impl.TaskStatus
+import kotlinx.coroutines.launch
 
 /**
  * La consola de la implementación: darle trabajo mientras corre.
@@ -65,8 +66,9 @@ fun ImplConsole(
     tareas: List<ImplTask>,
     onChange: () -> Unit,
 ) {
+    val scope = androidx.compose.runtime.rememberCoroutineScope()
     var texto by remember(implId) { mutableStateOf("") }
-    var urgente by remember(implId) { mutableStateOf(true) }
+    var leyendo by remember(implId) { mutableStateOf(false) }
     var repoElegido by remember(implId) { mutableStateOf(repos.firstOrNull()?.id) }
     var menuAbierto by remember(implId) { mutableStateOf(false) }
 
@@ -117,11 +119,17 @@ fun ImplConsole(
                             modifier = Modifier.weight(1f),
                             maxLines = 2,
                         )
-                        if (t2.priority > 0 && t2.status == TaskStatus.PENDING) {
+                        if (t2.status == TaskStatus.PENDING && t2.priority != 0) {
                             Text(
-                                t("impl.consoleNext"),
+                                when {
+                                    t2.priority >= 300 -> t("impl.impCritical")
+                                    t2.priority >= 200 -> t("impl.impHigh")
+                                    t2.priority < 0 -> t("impl.impLow")
+                                    else -> t("impl.consoleNext")
+                                },
                                 style = MaterialTheme.typography.labelSmall,
-                                color = StatusColors.NEEDS_HUMAN,
+                                color = if (t2.priority >= 200) StatusColors.NEEDS_HUMAN
+                                else MaterialTheme.colorScheme.onSurfaceVariant,
                             )
                         }
                     }
@@ -144,29 +152,27 @@ fun ImplConsole(
         Spacer(Modifier.height(8.dp))
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
             Button(
-                enabled = texto.isNotBlank() && repoElegido != null,
+                enabled = texto.isNotBlank() && !leyendo,
                 onClick = {
                     val limpio = texto.trim()
-                    ctx.impls.addUserTask(
-                        implId = implId,
-                        repoId = repoElegido,
-                        // El título es la primera línea; el detalle, todo. Una instrucción de un
-                        // párrafo no entra en una fila de tabla, y recortarla ahí perdería
-                        // justamente lo que la hace específica.
-                        title = limpio.lineSequence().first().take(120),
-                        detail = limpio,
-                        urgent = urgente,
-                    )
                     texto = ""
-                    onChange()
+                    leyendo = true
+                    scope.launch {
+                        // El pedido pasa por una lectura que lo convierte en tarea con pasos,
+                        // tamaño, repositorio e importancia. Entrar crudo dejaba todo eso para que
+                        // lo adivine el modelo que escribe el código, que es el peor momento.
+                        ctx.implEngine.addRequest(repos, implId, limpio, repoElegido)
+                        leyendo = false
+                        onChange()
+                    }
                 },
             ) { Text(t("impl.consoleSend")) }
-
-            FilterChip(
-                selected = urgente,
-                onClick = { urgente = !urgente },
-                label = { Text(t("impl.consoleUrgent")) },
-            )
+            if (leyendo) {
+                androidx.compose.material3.CircularProgressIndicator(
+                    Modifier.height(16.dp).width(16.dp),
+                    strokeWidth = 2.dp,
+                )
+            }
 
             // Sólo cuando hay más de uno: preguntar en qué repositorio va algo cuando hay uno solo
             // es pedir que alguien conteste una pregunta que no existe.
@@ -187,7 +193,7 @@ fun ImplConsole(
             }
 
             Text(
-                if (urgente) t("impl.consoleUrgentNote") else t("impl.consoleQueuedNote"),
+                if (leyendo) t("impl.consoleReading") else t("impl.consoleHow"),
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )

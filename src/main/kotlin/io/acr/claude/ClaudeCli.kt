@@ -51,6 +51,19 @@ data class ClaudeResult(
  */
 object ClaudeCli {
 
+    /**
+     * A dónde se anota lo que consumió cada corrida.
+     *
+     * Vive acá y no en cada llamador a propósito. Hay nueve lugares que lanzan el CLI y van a haber
+     * más; pedirle a cada uno que se acuerde de registrar es exactamente como se termina con un
+     * registro de uso incompleto — que es peor que no tener ninguno, porque parece autoritativo y
+     * las decisiones que se toman mirándolo salen mal.
+     *
+     * Se enchufa una vez al arrancar la app. Si nadie lo enchufa, no se registra nada y todo sigue
+     * funcionando: los tests no necesitan una base para correr el CLI.
+     */
+    var onUsage: ((io.acr.data.UsageEvent) -> Unit)? = null
+
     private val json = Json { ignoreUnknownKeys = true; isLenient = true }
 
     /**
@@ -88,6 +101,8 @@ object ClaudeCli {
         disallowedTools: List<String>,
         jsonSchema: String? = null,
         timeoutMinutes: Long = 20,
+        /** Para qué es esta corrida: `review`, `plan`, `task`, `specs`, `audit`, `code-review`. */
+        kind: String = "otro",
         /**
          * Reanudar una sesión anterior en vez de empezar una nueva.
          *
@@ -119,6 +134,7 @@ object ClaudeCli {
             if (!jsonSchema.isNullOrBlank()) { add("--json-schema"); add(jsonSchema) }
         }
 
+        val arranco = System.currentTimeMillis()
         val process = ProcessBuilder(cmd)
             .directory(workDir)
             .redirectErrorStream(false)
@@ -212,7 +228,7 @@ object ClaudeCli {
 
         stdinError.get()?.let { onEvent(ClaudeEvent.Failed("No pude enviarle el prompt al CLI: $it")) }
 
-        ClaudeResult(
+        val resultado = ClaudeResult(
             ok = finished && exit == 0 && !isError && finalText.isNotBlank() && stdinError.get() == null,
             text = finalText,
             structured = structured,
@@ -227,6 +243,25 @@ object ClaudeCli {
                 .filter { it.isNotBlank() }.joinToString("\n"),
             toolUses = toolUses,
         )
+
+        // Lo consumido, desde el único lugar por el que pasan todas las corridas.
+        runCatching {
+            onUsage?.invoke(
+                io.acr.data.UsageEvent(
+                    kind = kind,
+                    model = model,
+                    sessionId = sessionId,
+                    ok = resultado.ok,
+                    seconds = (System.currentTimeMillis() - arranco) / 1_000,
+                    tokensIn = tIn,
+                    tokensOut = tOut,
+                    cacheRead = tCacheRead,
+                    cacheWrite = tCacheWrite,
+                    costUsd = cost,
+                ),
+            )
+        }
+        resultado
     }
 
     /** Turns an assistant event into human-readable progress lines. */

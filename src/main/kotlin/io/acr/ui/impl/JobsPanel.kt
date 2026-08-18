@@ -76,6 +76,14 @@ fun JobsPanel(ctx: AppContext) {
         )
         Spacer(Modifier.height(16.dp))
 
+        // El consumo, arriba: se mira en el mismo momento que "¿qué hay corriendo?" —antes de
+        // lanzar algo grande— y tenerlo en otra pantalla obligaría a cruzar dos lugares para tomar
+        // una sola decisión.
+        UsagePanel(ctx)
+        Spacer(Modifier.height(20.dp))
+        androidx.compose.material3.HorizontalDivider(color = MaterialTheme.colorScheme.surfaceVariant)
+        Spacer(Modifier.height(16.dp))
+
         if (vivos.isEmpty() && muertos.isEmpty()) {
             Text(
                 t("jobs.none"),

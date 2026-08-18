@@ -54,6 +54,7 @@ class AppContext private constructor(
     val jiraSites: io.acr.data.JiraSiteRepository,
     val impls: io.acr.data.ImplRepository,
     val jobs2: io.acr.data.JobRepository,
+    val usage: io.acr.data.UsageRepository,
     val implEngine: io.acr.impl.ImplEngine,
     /** Dónde viven la base y la clave. La pantalla de la base lo necesita para poder mudarse. */
     val dataDir: Path,
@@ -101,6 +102,15 @@ class AppContext private constructor(
         const val PREF_THEME = "ui.theme"
         const val PREF_UI_LANG = "ui.lang"
         const val PREF_CLOSE_ACTION = "ui.closeAction"
+
+        /**
+         * Tope semanal en dólares, declarado a mano.
+         *
+         * La app no puede leer el límite real de la cuenta —el CLI no lo expone— así que el tope lo
+         * pone quien lo conoce. Sin uno declarado no se dibuja ninguna barra: una barra sin
+         * referencia sugiere un límite que la app no sabe.
+         */
+        const val PREF_WEEKLY_BUDGET = "usage.weeklyBudget"
         const val PREF_PR_SORT = "ui.prSort"
         const val PREF_FOLLOWUP_DAYS = "followup.days"
         const val PREF_DASH_COLLAPSED = "ui.dashCollapsed"
@@ -152,6 +162,11 @@ class AppContext private constructor(
             val jiraSites = io.acr.data.JiraSiteRepository(store, secrets)
             val impls = io.acr.data.ImplRepository(store)
             val jobsRepo = io.acr.data.JobRepository(store)
+            val usageRepo = io.acr.data.UsageRepository(store)
+            // Desde el único lugar por el que pasan todas las corridas del CLI. Pedirle a cada
+            // llamador que registre es como se termina con un registro parcial, que es peor que
+            // ninguno: parece autoritativo y las decisiones que se toman mirándolo salen mal.
+            io.acr.claude.ClaudeCli.onUsage = { e -> runCatching { usageRepo.record(e) } }
             val statsCollector = io.acr.stats.StatsCollector(persons, commitStats)
             val replies = ReplyRepository(store)
             val seenPrs = io.acr.data.SeenPrRepository(store)
@@ -192,7 +207,7 @@ class AppContext private constructor(
                 jiraIssues = { repoId, prId -> jira.issuesOf(repoId, prId) },
             )
             val auto = AutoReviewer(repos, reviews, prefs, engine, notifier, replies, seenPrs, prLoader, findings, approvals, jobs)
-            return AppContext(store, repos, reviews, publications, comments, notes, findings, approvals, jobs, guidelines, replies, seenPrs, prCache, prLoader, prefs, engine, auto, notifier, persons, commitStats, statsCollector, reviewStats, prStats, prHistory, rework, health, jira, jiraSites, impls, jobsRepo, implEngine, dir, secrets, fallo)
+            return AppContext(store, repos, reviews, publications, comments, notes, findings, approvals, jobs, guidelines, replies, seenPrs, prCache, prLoader, prefs, engine, auto, notifier, persons, commitStats, statsCollector, reviewStats, prStats, prHistory, rework, health, jira, jiraSites, impls, jobsRepo, usageRepo, implEngine, dir, secrets, fallo)
         }
 
         /** La propiedad `acr.dataDir` gana sobre la ubicación estándar; la usan los tests. */

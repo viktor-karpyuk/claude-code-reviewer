@@ -1275,6 +1275,33 @@ class Store(private val dbPath: Path, val settings: DbSettings = DbSettings()) :
             """
             ALTER TABLE repo ADD COLUMN hidden INTEGER
             """.trimIndent(),
+
+            // v62 — cada corrida del CLI, con lo que consumió.
+            //
+            // El costo ya se guardaba por review y por tarea, pero repartido: no había forma de
+            // contestar "cuánto llevo en las últimas cinco horas" ni "cuánto va esta semana", que
+            // son las dos preguntas que importan cuando hay un límite de por medio.
+            //
+            // Se anota **toda** corrida, desde un solo lugar. Un registro de uso parcial es peor que
+            // ninguno: parece autoritativo y no lo es, y las decisiones que se toman mirándolo
+            // —seguir o parar— salen mal.
+            """
+            CREATE TABLE cli_usage (
+                id           TEXT PRIMARY KEY,
+                at           TEXT NOT NULL,
+                kind         TEXT NOT NULL,
+                model        TEXT,
+                session_id   TEXT,
+                ok           INTEGER NOT NULL DEFAULT 1,
+                seconds      INTEGER,
+                tokens_in    INTEGER NOT NULL DEFAULT 0,
+                tokens_out   INTEGER NOT NULL DEFAULT 0,
+                cache_read   INTEGER NOT NULL DEFAULT 0,
+                cache_write  INTEGER NOT NULL DEFAULT 0,
+                cost_usd     REAL
+            );--split--
+            CREATE INDEX ix_cli_usage_at ON cli_usage(at)
+            """.trimIndent(),
         )
     }
 }

@@ -486,6 +486,44 @@ class ImplRepository(private val store: Store) {
         return id
     }
 
+    /**
+     * Ajusta el lugar de una tarea en la cola.
+     *
+     * Separado de crearla porque la importancia la decide una lectura posterior: quien escribe el
+     * pedido siempre lo siente urgente, y si todo es urgente la prioridad deja de ordenar nada.
+     */
+    fun setTaskPriority(taskId: String, priority: Int) {
+        store.stmt("UPDATE impl_task SET priority = ?, updated_at = ? WHERE id = ?") { ps ->
+            ps.setInt(1, priority)
+            ps.setString(2, Instant.now().toString())
+            ps.setString(3, taskId)
+            ps.executeUpdate()
+        }
+    }
+
+    /** Le pone pasos a una tarea que se creó sin ellos. */
+    fun setTaskSteps(taskId: String, steps: List<String>) {
+        store.transaction { conn ->
+            conn.prepareStatement("DELETE FROM impl_step WHERE task_id = ?").use { ps ->
+                ps.setString(1, taskId); ps.executeUpdate()
+            }
+            val ahora = Instant.now().toString()
+            steps.forEachIndexed { i, texto ->
+                conn.prepareStatement(
+                    "INSERT INTO impl_step(id, task_id, seq, title, status, created_at) VALUES (?,?,?,?,?,?)",
+                ).use { ps ->
+                    ps.setString(1, UlidCreator.getUlid().toString())
+                    ps.setString(2, taskId)
+                    ps.setInt(3, i + 1)
+                    ps.setString(4, texto.take(400))
+                    ps.setString(5, TaskStatus.PENDING.name)
+                    ps.setString(6, ahora)
+                    ps.executeUpdate()
+                }
+            }
+        }
+    }
+
     /** El estado de una tarea, sin traer el resto. Para decidir si hay que reintentarla. */
     fun taskStatus(taskId: String): TaskStatus? =
         store.stmt("SELECT status FROM impl_task WHERE id = ?") { ps ->

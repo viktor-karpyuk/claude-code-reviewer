@@ -260,6 +260,7 @@ class ImplEngine(
                 allowedTools = listOf("Read", "Grep", "Glob", "Bash(git *)", "Bash(ls *)", "Bash(find *)"),
                 disallowedTools = ImplPrompt.DENIED_TOOLS,
                 jsonSchema = ImplPrompt.PLAN_SCHEMA,
+                kind = if (revising) "replan" else "plan",
                 register = { running["$implId#plan"] = it },
                 onEvent = { evt ->
                     resumir(evt)?.let { log(implId, it) }
@@ -693,9 +694,23 @@ class ImplEngine(
         // que hace falta para entender por qué.
         impls.savePrompt(tarea.id, prompt)
 
+        // Reintentar mientras el problema sea del servidor y no del trabajo.
+        //
+        // Un `529 Overloaded` no dice nada sobre la tarea: dice que en ese instante había demasiada
+        // gente. Reintentarlo lo arregla, y una implementación autónoma que se cae por un bache de
+        // diez minutos justo cuando nadie mira es la peor forma de fallar que tiene esto.
+        //
+        // La espera arranca en cinco segundos y se estira sólo si el bache dura: pasado el minuto el
+        // problema ya no es un bache, y machacar cada cinco segundos no lo apura — suma carga al
+        // servidor que está justamente sobrecargado. No hay tope de intentos porque la salida es
+        // cancelar, que es una decisión de una persona; un tope fijo haría que la tarea se dé por
+        // vencida justo cuando el servidor estaba volviendo.
+        var esperas = 0
         val intento = runCatching {
             latiendo(jobId) {
-                ClaudeCli.run(
+                var salida: io.acr.claude.ClaudeResult
+                while (true) {
+                    salida = ClaudeCli.run(
                     binary = binario,
                     workDir = dir,
                     prompt = prompt,
@@ -703,6 +718,7 @@ class ImplEngine(
                     allowedTools = ImplPrompt.WRITE_TOOLS,
                     disallowedTools = ImplPrompt.DENIED_TOOLS,
                     jsonSchema = ImplPrompt.TASK_SCHEMA,
+                    kind = "task",
                     resumeSession = sesion,
                     register = { p ->
                         running[clave] = p
@@ -720,7 +736,24 @@ class ImplEngine(
                         }
                         aContexto(evt)?.let { (k, texto) -> jobs.add(tarea.id, jobId, k, texto) }
                     },
-                )
+                    )
+                    val pasajero = !salida.ok &&
+                        io.acr.claude.Transient.isTransient(salida.stderr + " " + salida.text)
+                    if (!pasajero || implId in cancelled) break
+                    esperas++
+                    val espera = io.acr.claude.Transient.waitMs(esperas)
+                    log(
+                        implId,
+                        "⏳ ${tarea.seq}. el servidor está sobrecargado; reintento en " +
+                            "${espera / 1000}s (van $esperas). " + salida.stderr.take(80),
+                    )
+                    jobs.add(
+                        tarea.id, jobId, ContextKind.NOTE,
+                        "Espera $esperas por el servidor: ${salida.stderr.take(120)}",
+                    )
+                    delay(espera)
+                }
+                salida
             }
         }
         running.remove(clave)
@@ -885,6 +918,153 @@ class ImplEngine(
     }
 
     /**
+     * Lee un pedido escrito a mano y lo convierte en una tarea del plan.
+     *
+     * Sin esto, lo que uno escribe en la consola entra como una tarea con el texto crudo por
+     * descripción: sin pasos, sin tamaño, sin saber en qué repositorio va ni a qué se refiere. El
+     * modelo que después la ejecuta tiene que adivinar todo eso mientras escribe código, que es el
+     * peor momento para adivinar.
+     *
+     * La importancia la decide la lectura y no quien escribió: el que pide una corrección siempre la
+     * siente urgente, y si todo es urgente la prioridad deja de ordenar nada.
+     *
+     * Si la lectura falla —el modelo no está, el servidor se cayó— **el pedido entra igual**, crudo.
+     * Perder una instrucción porque no se pudo interpretar sería el peor de los dos mundos: la
+     * persona ya la escribió y se fue.
+     */
+    suspend fun addRequest(
+        repos: List<RepoRecord>,
+        implId: String,
+        pedido: String,
+        repoSugerido: String?,
+    ): Result<String> {
+        val impl = impls.get(implId) ?: return Result.failure(IllegalStateException("No existe."))
+        val principal = repos.firstOrNull()
+            ?: return Result.failure(IllegalStateException("La implementación no tiene repositorios."))
+        val limpio = pedido.trim()
+        if (limpio.isBlank()) return Result.failure(IllegalStateException("Pedido vacío."))
+
+        val binario = ClaudeCli.resolveBinary(prefs.get(io.acr.AppContext.PREF_CLAUDE_BINARY))
+        val tareas = impls.tasks(implId)
+        val idioma = prefs.get(io.acr.AppContext.PREF_LANGUAGE) ?: "español"
+
+        // El respaldo, por si la lectura no se puede hacer: el pedido crudo, urgente, en el
+        // repositorio que la pantalla sugirió.
+        fun crudo(): String = impls.addUserTask(
+            implId = implId,
+            repoId = repoSugerido ?: principal.id,
+            title = limpio.lineSequence().first().take(120),
+            detail = limpio,
+            urgent = true,
+        )
+
+        if (binario == null) return Result.success(crudo())
+
+        val jobId = jobs.start(JobKind.PLAN, implId, workDir = principal.localPath)
+        log(implId, jobId, "Leyendo el pedido: ${limpio.take(120)}")
+
+        return runCatching {
+            val res = latiendo(jobId) {
+                ClaudeCli.run(
+                    binary = binario,
+                    workDir = File(principal.localPath),
+                    prompt = ImplPrompt.request(
+                        limpio, tareas, describir(repos, implId), loadSources(impl.sources), idioma,
+                    ),
+                    model = impl.planModel ?: PLAN_MODEL,
+                    allowedTools = listOf("Read", "Grep", "Glob", "Bash(git *)", "Bash(ls *)", "Bash(find *)"),
+                    disallowedTools = ImplPrompt.DENIED_TOOLS,
+                    jsonSchema = ImplPrompt.REQUEST_SCHEMA,
+                    kind = "request",
+                    register = { running["$implId#req"] = it },
+                    onEvent = { evt -> resumir(evt)?.let { log(implId, jobId, it) } },
+                )
+            }
+            running.remove("$implId#req")
+            if (!res.ok) error(res.stderr.ifBlank { "La lectura del pedido no devolvió nada." })
+
+            val leido = parseRequest(res.structured ?: res.text)
+                ?: error("La lectura del pedido volvió sin tarea.")
+            val repoId = repos.firstOrNull { it.name.equals(leido.repo, ignoreCase = true) }?.id
+                ?: repoSugerido ?: principal.id
+            val id = impls.addUserTask(
+                implId = implId,
+                repoId = repoId,
+                title = leido.title,
+                // El pedido textual primero y la interpretación después: es lo que permite ver si
+                // le entendió. Sin el original, una lectura equivocada se ejecuta y nadie lo nota.
+                detail = "Lo que se pidió:\n$limpio\n\n${leido.detail}",
+                urgent = leido.priority > 0,
+                estimateMin = leido.estimateMin,
+            )
+            impls.setTaskPriority(id, leido.priority)
+            leido.steps.takeIf { it.isNotEmpty() }?.let { impls.setTaskSteps(id, it) }
+            jobs.finish(jobId, JobState.DONE)
+            log(
+                implId, jobId,
+                "✓ ${leido.importance}: ${leido.title}" +
+                    leido.why?.let { " — $it" }.orEmpty() +
+                    leido.fixes.takeIf { it.isNotEmpty() }
+                        ?.let { "  (corrige " + it.joinToString(", ") { n -> "#$n" } + ")" }.orEmpty(),
+            )
+            id
+        }.recoverCatching {
+            running.remove("$implId#req")
+            jobs.finish(jobId, JobState.FAILED, it.message)
+            log(implId, jobId, "No pude interpretar el pedido; lo agrego tal cual: ${it.message.orEmpty().take(150)}")
+            crudo()
+        }
+    }
+
+    /** Lo que devolvió la lectura de un pedido. */
+    private data class Pedido(
+        val title: String,
+        val detail: String,
+        val repo: String?,
+        val steps: List<String>,
+        val estimateMin: Int?,
+        val importance: String,
+        val why: String?,
+        val fixes: List<Int>,
+    ) {
+        /**
+         * De importancia a lugar en la cola.
+         *
+         * Cuatro niveles y no un número libre: un número invita a comparar dos pedidos que nadie
+         * comparó, y termina en una escala donde todo vale 90.
+         */
+        val priority: Int
+            get() = when (importance.uppercase()) {
+                "CRITICAL" -> 300
+                "HIGH" -> 200
+                "NORMAL" -> 0
+                else -> -100
+            }
+    }
+
+    private fun parseRequest(raw: String): Pedido? {
+        val limpio = raw.trim().removePrefix("```json").removePrefix("```").removeSuffix("```").trim()
+        val obj = runCatching {
+            kotlinx.serialization.json.Json { ignoreUnknownKeys = true; isLenient = true }
+                .parseToJsonElement(limpio).jsonObject
+        }.getOrNull() ?: return null
+        fun texto(k: String) = obj[k]?.jsonPrimitive?.contentOrNull?.trim()
+        val titulo = texto("title")?.takeIf { it.isNotBlank() } ?: return null
+        return Pedido(
+            title = titulo.take(200),
+            detail = texto("detail").orEmpty(),
+            repo = texto("repo"),
+            steps = (obj["steps"] as? JsonArray).orEmpty()
+                .mapNotNull { it.jsonPrimitive.contentOrNull?.trim()?.takeIf { s -> s.isNotBlank() } },
+            estimateMin = texto("estimate_min")?.toIntOrNull(),
+            importance = texto("importance") ?: "NORMAL",
+            why = texto("why"),
+            fixes = (obj["fixes"] as? JsonArray).orEmpty()
+                .mapNotNull { it.jsonPrimitive.contentOrNull?.toIntOrNull() },
+        )
+    }
+
+    /**
      * Analiza los documentos y deja uno nuevo con lo que falta y lo que es ambiguo.
      *
      * Un plan no puede ser mejor que las specs de las que sale. Lo que las specs no dicen, el
@@ -924,6 +1104,7 @@ class ImplEngine(
                 allowedTools = listOf("Read", "Grep", "Glob", "Bash(git *)", "Bash(ls *)", "Bash(find *)"),
                 disallowedTools = ImplPrompt.DENIED_TOOLS,
                 jsonSchema = ImplPrompt.SPECS_SCHEMA,
+                kind = "specs",
                 register = { running["$implId#specs"] = it },
                 onEvent = { evt ->
                     resumir(evt)?.let { log(implId, jobSpecs, it) }
@@ -1010,6 +1191,7 @@ class ImplEngine(
                 allowedTools = listOf("Read", "Grep", "Glob", "Bash(git *)", "Bash(ls *)", "Bash(find *)"),
                 disallowedTools = ImplPrompt.DENIED_TOOLS,
                 jsonSchema = ImplPrompt.AUDIT_SCHEMA,
+                kind = "audit",
                 register = { running["$implId#audit"] = it },
                 onEvent = { evt -> resumir(evt)?.let { log(implId, it) } },
             )
@@ -1178,6 +1360,7 @@ class ImplEngine(
                     allowedTools = ImplPrompt.WRITE_TOOLS,
                     disallowedTools = ImplPrompt.DENIED_TOOLS,
                     jsonSchema = ImplPrompt.REVIEW_SCHEMA,
+                    kind = "code-review",
                     register = { running[clave] = it },
                     onEvent = { evt -> resumir(evt)?.let { log(implId, it) } },
                 )
