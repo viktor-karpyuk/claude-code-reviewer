@@ -517,6 +517,71 @@ private fun SeccionTareas(
             }
         }
 
+        // --- Lo que el plan necesita y nadie declaró ---
+        //
+        // Va arriba de la consola y de las tareas porque es lo que hay que resolver antes de dejar
+        // correr nada: una implementación a la que le falta un repositorio produce tareas que no se
+        // pueden hacer, o —peor, antes de que esto existiera— código escrito en un proyecto ajeno.
+        //
+        // Con el botón para agregarlo de un click cuando el planificador encontró dónde está.
+        // Decirle a alguien "falta mail-ms" y dejar que lo busque es la mitad del trabajo.
+        if (impl.missingRepos.isNotEmpty()) {
+            Spacer(Modifier.height(14.dp))
+            Column(
+                Modifier.fillMaxWidth()
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(StatusColors.NEEDS_HUMAN.copy(alpha = 0.10f))
+                    .padding(12.dp),
+            ) {
+                Text(
+                    t("impl.missingRepos", impl.missingRepos.size),
+                    style = MaterialTheme.typography.titleSmall,
+                    color = StatusColors.NEEDS_HUMAN,
+                )
+                Text(
+                    t("impl.missingReposNote"),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Spacer(Modifier.height(6.dp))
+                impl.missingRepos.forEach { m ->
+                    Row(Modifier.fillMaxWidth().padding(vertical = 3.dp)) {
+                        Column(Modifier.weight(1f)) {
+                            Text(
+                                m.name + m.path?.let { "  ·  $it" }.orEmpty(),
+                                style = MaterialTheme.typography.bodySmall
+                                    .copy(fontFamily = FontFamily.Monospace),
+                            )
+                            // La evidencia, no sólo la conclusión: es lo que permite decidir en un
+                            // vistazo si agregarlo o si el modelo buscó mal.
+                            Text(
+                                m.evidence + m.neededFor?.let { "  —  $it" }.orEmpty(),
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                        TextButton(onClick = {
+                            // Con la ruta que encontró, o abriendo el selector si no la sabe.
+                            val ruta = m.path?.let { p ->
+                                java.io.File(p).takeIf { it.isDirectory }?.absolutePath
+                                    ?: java.io.File(misRepos.firstOrNull()?.localPath.orEmpty(), p)
+                                        .takeIf { it.isDirectory }?.absolutePath
+                            } ?: elegirCarpeta()
+                            ruta?.let { r ->
+                                kotlinx.coroutines.runBlocking { io.acr.claude.Git.init(java.io.File(r)) }
+                                val id = ctx.repos.createLocal(r)
+                                ctx.impls.update(
+                                    implId, impl.title, impl.sources, impl.extraPrompt,
+                                    suyos + io.acr.impl.ImplRepo(id, io.acr.impl.RepoRole.OTHER, null),
+                                )
+                                onChange()
+                            }
+                        }) { Text(t("impl.declareRepo")) }
+                    }
+                }
+            }
+        }
+
         // La consola, arriba de las tareas: lo que se escribe acá se convierte en una y aparece
         // ahí abajo, así que ponerla lejos rompería la relación entre lo que uno pide y dónde
         // aparece.

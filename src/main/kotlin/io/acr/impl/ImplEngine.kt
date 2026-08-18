@@ -274,6 +274,23 @@ class ImplEngine(
             val (resumen, rama, tareas) = parsePlan(res.structured ?: res.text, implId, repos)
             if (tareas.isEmpty()) error("El plan volvió sin tareas.")
 
+            // Lo que el plan necesita y no está declarado. Se guarda aunque el plan haya salido
+            // bien: casi siempre la respuesta no es "el plan está mal" sino "falta declarar un
+            // repositorio", y eso se arregla en dos minutos si alguien se entera.
+            val faltantes = runCatching {
+                parseMissing(
+                    kotlinx.serialization.json.Json { ignoreUnknownKeys = true; isLenient = true }
+                        .parseToJsonElement(
+                            (res.structured ?: res.text).trim()
+                                .removePrefix("```json").removePrefix("```").removeSuffix("```").trim(),
+                        ).jsonObject,
+                )
+            }.getOrDefault(emptyList())
+            impls.setMissingRepos(implId, faltantes)
+            faltantes.forEach { m ->
+                log(implId, "⚠ Falta declarar «${m.name}»${m.path?.let { " ($it)" }.orEmpty()}: ${m.evidence}")
+            }
+
             // Si alguien escribió el nombre de la rama, manda sobre el que propone el modelo. Es
             // una decisión de una persona sobre algo que después va a buscar a mano en git.
             val ramaFinal = if (impl.branchFixed) impl.branch ?: rama else rama
@@ -1332,6 +1349,20 @@ class ImplEngine(
             steps = pasos,
         )
     }
+
+    /** Lo que el plan necesita y nadie declaró, tal como lo dedujo el modelo. */
+    private fun parseMissing(obj: JsonObject): List<MissingRepo> =
+        (obj["missing_repos"] as? JsonArray).orEmpty().mapNotNull { it as? JsonObject }
+            .mapNotNull { o ->
+                val nombre = o["name"]?.jsonPrimitive?.contentOrNull?.trim()?.takeIf { it.isNotBlank() }
+                    ?: return@mapNotNull null
+                MissingRepo(
+                    name = nombre,
+                    path = o["path"]?.jsonPrimitive?.contentOrNull?.trim()?.takeIf { it.isNotBlank() },
+                    evidence = o["evidence"]?.jsonPrimitive?.contentOrNull.orEmpty(),
+                    neededFor = o["needed_for"]?.jsonPrimitive?.contentOrNull?.takeIf { it.isNotBlank() },
+                )
+            }
 
     /** Lee el plan que devolvió el modelo. */
     private fun parsePlan(

@@ -1252,6 +1252,19 @@ class Store(private val dbPath: Path, val settings: DbSettings = DbSettings()) :
             ALTER TABLE impl_task ADD COLUMN priority INTEGER;--split--
             ALTER TABLE impl_task ADD COLUMN source TEXT
             """.trimIndent(),
+
+            // v60 — lo que el plan necesita y nadie declaró.
+            //
+            // El planificador averigua si un servicio que nombran los documentos es un módulo de un
+            // repositorio que ya está —y entonces no falta nada— o un clon aparte. En el segundo
+            // caso lo deja anotado acá en vez de planificar trabajo que iría a parar afuera.
+            //
+            // Se guarda con la evidencia de cómo lo dedujo. Sin eso, "falta mail-ms" es una
+            // afirmación que hay que ir a verificar a mano; con eso —"existe en ../mail-ms con su
+            // propio .git"— se decide en un vistazo si agregarlo o si el modelo buscó mal.
+            """
+            ALTER TABLE implementation ADD COLUMN missing_repos TEXT
+            """.trimIndent(),
         )
     }
 }

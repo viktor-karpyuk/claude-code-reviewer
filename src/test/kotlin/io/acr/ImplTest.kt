@@ -2323,11 +2323,14 @@ class StayInsideTheRepoTest {
             baseBranch = "develop",
             language = "español",
         )
-        assertTrue(p.contains("ESOS SON TODOS LOS REPOSITORIOS QUE HAY"))
+        // La regla no es "prohibido todo lo que no esté en la lista" sino "averiguá primero de qué
+        // se trata": un servicio que los documentos nombran puede ser un módulo de un repositorio
+        // que sí está, y ahí no falta nada.
+        assertTrue(p.contains("Averigualo antes de decidir nada"))
         assertTrue(p.contains("../"), "nombra el patrón concreto que aparece en las specs")
         assertTrue(
-            p.contains("dejalo afuera del plan"),
-            "y da la salida: decirlo, no hacerlo a escondidas",
+            p.contains("no lo planifiques"),
+            "y da la salida para el caso malo: decirlo, no hacerlo a escondidas",
         )
     }
 
@@ -2572,5 +2575,93 @@ class ConsoleTaskTest {
         val mia = ctx.impls.tasks(id).single { it.fromUser }
         assertEquals("corregir el approver", mia.title)
         assertTrue(mia.detail.contains("agregá el test"))
+    }
+}
+
+/**
+ * Distinguir un módulo interno de un repositorio que falta declarar.
+ *
+ * Los documentos nombran servicios —`oauth2`, `mail-ms`, `scheduled-tasks-ms`— sin decir dónde
+ * viven, y hay dos casos que se parecen y se resuelven al revés: si es una carpeta de un
+ * repositorio que ya está, la tarea va ahí; si es un clon aparte, falta declararlo y planificar
+ * trabajo ahí sería escribir en un proyecto ajeno.
+ */
+class MissingRepoTest {
+
+    @Test
+    fun thePlannerIsToldToLookBeforeDecidingItIsMissing() {
+        val p = io.acr.impl.ImplPrompt.plan(
+            docs = listOf(io.acr.impl.SourceDoc("req.md", "mandar mail con mail-ms")),
+            extra = null,
+            repos = listOf(Triple("be", "BACKEND", "/tmp/be")),
+            baseBranch = "develop",
+            language = "español",
+        )
+        assertTrue(p.contains("Averigualo antes de decidir nada"))
+        assertTrue(p.contains("settings.gradle"), "le dice dónde mirar, no sólo que mire")
+        assertTrue(
+            p.contains("no falta nada"),
+            "el caso bueno tiene que estar dicho: un módulo interno no es un repositorio faltante",
+        )
+        assertTrue(p.contains("missing_repos"))
+        assertTrue(
+            p.contains("cómo llegaste a esa conclusión"),
+            "sin la evidencia, «falta mail-ms» es algo que hay que ir a verificar a mano",
+        )
+    }
+
+    @Test
+    fun theTaskAllowsInternalModulesButNotSiblingRepos() {
+        val t = ImplTask(
+            "t", "i", null, 1, "tarea", "tocá el módulo oauth2", emptyList(), TaskSize.M, 10,
+            TaskStatus.PENDING, null, null, null, null, null, null,
+        )
+        val p = io.acr.impl.ImplPrompt.task(t, listOf(t), emptyList(), null, "español")
+        assertTrue(
+            p.contains("Subcarpetas y módulos internos sí"),
+            "prohibir todo lo que no sea la raíz haría fallar tareas que estaban bien",
+        )
+        assertTrue(p.contains("no la hagas"))
+    }
+
+    @Test
+    fun theMissingOnesSurviveWithTheirEvidence() {
+        val dir = java.nio.file.Files.createTempDirectory("acr-miss")
+        val ctx = AppContext.bootstrap(dir)
+        try {
+            val repoId = ctx.repos.create(
+                "tmp-m-${System.nanoTime()}", Provider.BITBUCKET, "acme", "demo",
+                dir.toString(), null, null, null, "", false,
+                io.acr.forge.SkipRules(), io.acr.forge.ReplyMode.OFF,
+            )
+            val id = ctx.impls.create(
+                listOf(io.acr.impl.ImplRepo(repoId, io.acr.impl.RepoRole.OTHER, null)),
+                "faltantes", listOf("/tmp/x.md"), null,
+            )
+            assertTrue(ctx.impls.get(id)!!.missingRepos.isEmpty())
+
+            ctx.impls.setMissingRepos(
+                id,
+                listOf(
+                    io.acr.impl.MissingRepo(
+                        "mail-ms", "../mail-ms",
+                        "existe al lado con su propio .git, no está en el settings.gradle",
+                        "mandar el mail de aviso",
+                    ),
+                    io.acr.impl.MissingRepo("oauth2", null, "no aparece en ningún lado", null),
+                ),
+            )
+
+            val leidos = ctx.impls.get(id)!!.missingRepos
+            assertEquals(2, leidos.size)
+            assertEquals("mail-ms", leidos[0].name)
+            assertEquals("../mail-ms", leidos[0].path)
+            assertTrue(leidos[0].evidence.contains(".git"))
+            assertEquals("mandar el mail de aviso", leidos[0].neededFor)
+            assertEquals(null, leidos[1].path, "sin ruta también se guarda: la evidencia es lo que vale")
+        } finally {
+            ctx.close()
+            dir.toFile().deleteRecursively()
+        }
     }
 }

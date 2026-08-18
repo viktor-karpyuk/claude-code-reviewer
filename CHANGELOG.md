@@ -3,6 +3,28 @@
 Reglas de numeración en [CLAUDE.md](CLAUDE.md): un requerimiento **nuevo** incrementa *major*;
 cambiar uno **existente** incrementa *patch*.
 
+## 76.0.0
+
+**Un servicio que los documentos nombran ahora se averigua antes de decidir nada.** La versión
+anterior prohibía todo lo que no estuviera en la lista de repositorios, y eso era demasiado grueso:
+`oauth2`, `mail-ms`, `scheduled-tasks-ms` pueden ser dos cosas muy distintas que se parecen y se
+resuelven al revés.
+
+- **Un módulo de un repositorio que ya está** —un módulo Maven, un subdirectorio, algo que el
+  `settings.gradle` raíz incluye—. Entonces no falta nada: la tarea va en ese repositorio y el
+  detalle dice en qué carpeta. Prohibirlo habría hecho fallar tareas que estaban bien.
+- **Un clon aparte que nadie declaró.** Ahí sí no se planifica, porque lo que se escriba queda
+  suelto encima de la rama que ese clon tuviera abierta.
+
+Para el segundo caso el plan devuelve **qué falta declarar, con la evidencia de cómo lo dedujo**:
+"existe en `../mail-ms` con su propio `.git`", "no aparece en el `settings.gradle` ni como carpeta".
+Sin eso, "falta mail-ms" es una afirmación que hay que ir a verificar a mano; con eso se decide en
+un vistazo si agregarlo o si el modelo buscó mal.
+
+Eso aparece arriba de todo en la implementación, con un botón que **lo declara de un click** usando
+la ruta que encontró. Casi siempre la respuesta no es "el plan está mal" sino "falta declarar un
+repositorio", y eso se arregla en dos minutos si alguien se entera.
+
 ## 75.0.0
 
 **Una consola para darle trabajo a la implementación mientras corre.** El módulo es autónomo y ese

@@ -896,6 +896,27 @@ class ImplRepository(private val store: Store) {
         }
     }
 
+    /**
+     * Guarda los repositorios que el plan necesita y no están declarados.
+     *
+     * Separados por un carácter de control y no por una coma o un pipe: las rutas y las
+     * explicaciones traen de todo, y un separador que puede aparecer en el contenido es un parser
+     * que falla el día que alguien escribe una ruta con una coma.
+     */
+    fun setMissingRepos(implId: String, faltantes: List<io.acr.impl.MissingRepo>) {
+        store.stmt("UPDATE implementation SET missing_repos = ? WHERE id = ?") { ps ->
+            ps.setString(
+                1,
+                faltantes.joinToString("\n") { m ->
+                    listOf(m.name, m.path.orEmpty(), m.evidence, m.neededFor.orEmpty())
+                        .joinToString("\u0001") { it.replace('\n', ' ').replace('\u0001', ' ') }
+                },
+            )
+            ps.setString(2, implId)
+            ps.executeUpdate()
+        }
+    }
+
     /** Cuántas tareas dejar correr a la vez. Null o cero es sin tope. */
     fun setMaxParallel(implId: String, max: Int?) {
         store.stmt("UPDATE implementation SET max_parallel = ? WHERE id = ?") { ps ->
@@ -927,7 +948,8 @@ class ImplRepository(private val store: Store) {
             """SELECT id, repo_id, title, sources, extra_prompt, branch, base_branch, status,
                       plan_summary, plan_model, code_model, error, cost_usd, created_at,
                       planned_at, finished_at, review_guidance, review_min, review_max,
-                      review_each, branch_fixed, replans, replanned_at, max_parallel
+                      review_each, branch_fixed, replans, replanned_at, max_parallel,
+                      missing_repos
                  FROM implementation $tail""",
         ) { ps ->
             bind(ps)
@@ -963,6 +985,16 @@ class ImplRepository(private val store: Store) {
                                 reviewEach = (rs.getObject(20)?.let { rs.getInt(20) } ?: 0) == 1,
                                 branchFixed = (rs.getObject(21)?.let { rs.getInt(21) } ?: 0) == 1,
                                 maxParallel = rs.getObject(24)?.let { rs.getInt(24) }?.takeIf { it > 0 },
+                                missingRepos = rs.getString(25).orEmpty().lines()
+                                    .filter { it.isNotBlank() }
+                                    .mapNotNull { l ->
+                                        val p = l.split('\u0001')
+                                        if (p.size < 3) null
+                                        else io.acr.impl.MissingRepo(
+                                            p[0], p[1].takeIf { it.isNotBlank() }, p[2],
+                                            p.getOrNull(3)?.takeIf { it.isNotBlank() },
+                                        )
+                                    },
                                 replans = rs.getObject(22)?.let { rs.getInt(22) } ?: 0,
                                 replannedAt = rs.getString(23),
                             ),

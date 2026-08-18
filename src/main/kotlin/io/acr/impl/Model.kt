@@ -180,6 +180,8 @@ data class Implementation(
      * que alguien está usando.
      */
     val maxParallel: Int? = null,
+    /** Repositorios que el plan necesita y que no están declarados. */
+    val missingRepos: List<MissingRepo> = emptyList(),
     val replans: Int = 0,
     val replannedAt: String? = null,
     val planModel: String?,
@@ -227,6 +229,22 @@ data class ReviewPass(
     val costUsd: Double?,
     val createdAt: String,
     val kind: ReviewKind = ReviewKind.CODE,
+)
+
+/**
+ * Un repositorio que el plan necesita y que nadie declaró.
+ *
+ * Con la evidencia de cómo se dedujo, porque sin eso "falta mail-ms" es una afirmación que hay que
+ * ir a verificar a mano. Con "existe en ../mail-ms con su propio .git" se decide en un vistazo si
+ * agregarlo o si el modelo buscó mal.
+ */
+data class MissingRepo(
+    val name: String,
+    /** Dónde lo encontró, si lo encontró. Es lo que permite agregarlo de un click. */
+    val path: String?,
+    val evidence: String,
+    /** Para qué hacía falta. Sin esto no se puede decidir si vale la pena agregarlo. */
+    val neededFor: String?,
 )
 
 /**

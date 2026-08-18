@@ -90,7 +90,13 @@ object ImplPrompt {
         "size":{"type":"string","enum":["S","M","L","XL"]},
         "estimate_min":{"type":"integer"},
         "steps":{"type":"array","items":{"type":"string"}}
-      },"required":["seq","title","detail","repo","size","estimate_min","steps"]}}
+      },"required":["seq","title","detail","repo","size","estimate_min","steps"]}},
+      "missing_repos":{"type":"array","items":{"type":"object","properties":{
+        "name":{"type":"string"},
+        "path":{"type":"string"},
+        "evidence":{"type":"string"},
+        "needed_for":{"type":"string"}
+      },"required":["name","evidence"]}}
     },"required":["summary","branch","tasks"]}
     """.trimIndent()
 
@@ -133,17 +139,29 @@ object ImplPrompt {
         escrito sólo desde los documentos propone crear cosas que ya están y usa convenciones que
         estos proyectos no tienen, y eso se paga en cada tarea.
 
-        **ESOS SON TODOS LOS REPOSITORIOS QUE HAY.** No planifiques trabajo en ningún otro, ni
-        siquiera en carpetas hermanas que veas al lado —`../otro-servicio`, `../common`— por más
-        que los documentos las mencionen y por más que el cambio parezca imposible sin tocarlas.
-        Un repositorio que no está en la lista no tiene rama creada, no se commitea y nadie lo mira:
-        lo que se escriba ahí queda suelto, sin registrar, encima de la rama que ese clon tuviera
-        abierta. Es trabajo perdido que además ensucia el repositorio de otro.
+        CUANDO EL DOCUMENTO NOMBRA ALGO QUE NO ESTÁ EN LA LISTA
+        Los documentos mencionan servicios y módulos por su nombre —`oauth2`, `mail-ms`,
+        `scheduled-tasks-ms`, `common`— sin decir dónde viven. **Averigualo antes de decidir nada**,
+        porque hay dos casos que se parecen y se resuelven al revés:
 
-        Si algo del documento necesita un repositorio que no está en la lista, **decilo en el
-        `summary` y dejalo afuera del plan**. Que falte una parte y esté dicho es un problema que se
-        resuelve en dos minutos agregando el repositorio; que se escriba a escondidas no se descubre
-        hasta que alguien encuentra los archivos sueltos.
+        1. **Es una parte de un repositorio que sí está en la lista.** Un módulo Maven, un
+           subdirectorio, un `settings.gradle` que lo incluye, un paquete adentro del mismo árbol.
+           Entonces no falta nada: la tarea va en ese repositorio, y en el `detail` decís en qué
+           carpeta de adentro. Buscalo de verdad —`ls`, `find`, mirá el `pom.xml` o el
+           `settings.gradle` raíz— antes de darlo por ausente.
+        2. **Es un clon aparte que nadie declaró.** Existe al lado —`../mail-ms`— o no existe en
+           ninguna parte. Entonces **no lo planifiques**: no tiene rama creada, no se commitea y
+           nadie lo mira, así que lo que se escriba ahí queda suelto encima de la rama que ese clon
+           tuviera abierta. Es trabajo perdido que además ensucia el repositorio de otro.
+
+        Para el segundo caso está `missing_repos`: poné el nombre, la ruta si la encontraste, y en
+        `evidence` **cómo llegaste a esa conclusión** —"existe en ../mail-ms con su propio .git",
+        "no aparece en el settings.gradle de timelogbook-be ni como carpeta"—. Eso es lo que
+        permite decidir si hay que agregarlo o si te equivocaste buscando.
+
+        Casi siempre la respuesta no es "el plan está mal" sino "falta declarar un repositorio", y
+        eso se arregla en dos minutos. Lo que no se arregla es el código escrito a escondidas en un
+        proyecto que no era: eso no se descubre hasta que alguien encuentra los archivos sueltos.
 
         ${if (repos.size > 1) """
         ESTO ABARCA VARIOS REPOSITORIOS
@@ -373,11 +391,13 @@ object ImplPrompt {
 
         REGLAS
         - **Todo lo que escribas tiene que quedar adentro de este repositorio**, el del directorio
-          en el que estás parado. Nada de `../otro-servicio`, nada de rutas absolutas a otro
-          proyecto, por más que la descripción de la tarea las mencione. Afuera de acá no hay rama
-          creada ni commit: lo que escribas queda suelto encima de la rama que ese clon tuviera
-          abierta, sin registrar, y se descubre semanas después. Si esta tarea sólo se puede hacer
-          tocando otro repositorio, **no la hagas**: decilo y dejala fallar.
+          en el que estás parado. Subcarpetas y módulos internos sí —si el servicio que nombra la
+          tarea resulta ser un módulo de acá adentro, ese es su lugar y está bien—. Lo que no es
+          este árbol, no: nada de `../otro-servicio` ni rutas absolutas a otro proyecto, por más que
+          la descripción los mencione. Afuera no hay rama creada ni commit, así que lo que escribas
+          queda suelto encima de la rama que ese clon tuviera abierta y se descubre semanas después.
+          Si esta tarea sólo se puede hacer tocando otro repositorio, **no la hagas**: decilo y
+          dejala fallar, que se resuelve declarando ese repositorio.
         - Hacé SÓLO esta tarea. Lo que corresponde a otra, dejalo para esa: adelantarse rompe el
           orden del plan y hace imposible saber qué quedó hecho.
         - Terminá con el proyecto compilando y con los tests en verde. Corré la compilación y los
