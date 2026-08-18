@@ -2248,3 +2248,58 @@ class ReplanTest {
         assertEquals(1, ctx.impls.tasks(id).size)
     }
 }
+
+/**
+ * La guía de revisión es complementaria: se suma al criterio del sistema, no lo reemplaza.
+ */
+class ReviewGuidanceTest {
+
+    private fun prompt(guia: String) = io.acr.impl.ImplPrompt.plan(
+        docs = listOf(io.acr.impl.SourceDoc("req.md", "lo que se pide")),
+        extra = null,
+        repos = listOf(Triple("be", "BACKEND", "/tmp/be")),
+        baseBranch = "develop",
+        language = "español",
+        revision = "1. una tarea" to guia,
+    )
+
+    @Test
+    fun withoutNotesTheCriteriaStandAlone() {
+        // Vacío es vacío. Rellenar con una frase inventada sería ponerle palabras a alguien que no
+        // dijo nada, y el modelo las leería como una instrucción más.
+        val p = prompt("")
+        assertTrue(p.contains("ESTO ES UNA REVISIÓN"), "el criterio sigue estando entero")
+        assertTrue(
+            !p.contains("ESTO PIDIÓ QUIEN LO MANDÓ A REVISAR"),
+            "pero no aparece una sección de acotaciones vacía",
+        )
+        assertTrue(p.contains("haya o no acotaciones"), "y el prompt lo dice explícitamente")
+    }
+
+    @Test
+    fun blankSpacesCountAsNothing() {
+        assertTrue(!prompt("   \n  ").contains("ESTO PIDIÓ QUIEN"))
+    }
+
+    @Test
+    fun withNotesTheyAddInsteadOfReplacing() {
+        val p = prompt("Usá el patrón del módulo de pagos.")
+        assertTrue(p.contains("Usá el patrón del módulo de pagos."))
+        assertTrue(
+            p.contains("no en lugar de lo de arriba"),
+            "si se leyera como la orden principal, el criterio de revisión quedaría anulado por " +
+                "una acotación de una línea",
+        )
+        assertTrue(
+            p.indexOf("ESTO ES UNA REVISIÓN") < p.indexOf("ESTO PIDIÓ QUIEN"),
+            "el criterio primero, las acotaciones después",
+        )
+    }
+
+    @Test
+    fun aNoteThatContradictsTheCriteriaWins() {
+        // Quien escribe conoce el proyecto; el criterio general no. Sin decirlo, el modelo tiene
+        // que adivinar a cuál hacerle caso y suele elegir el que está escrito con más autoridad.
+        assertTrue(prompt("algo").contains("mandan"))
+    }
+}

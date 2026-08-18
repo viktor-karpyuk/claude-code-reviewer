@@ -180,9 +180,10 @@ class ImplEngine(
 
         // El plan actual, para revisarlo en vez de rehacerlo.
         val revision = if (!revising) null else run {
-            val guia = guidance?.takeIf { it.isNotBlank() }
-                ?: "Revisá el plan con el criterio de arriba. No hay nada puntual para corregir: " +
-                "buscá vos qué está flojo."
+            // Vacío es vacío: el prompt de revisión ya sabe qué mirar, y rellenar con una frase
+            // inventada sería ponerle palabras a alguien que no dijo nada. El modelo las leería
+            // como una instrucción más.
+            val guia = guidance.orEmpty()
             val previas = impls.tasks(implId)
             val intocables = previas.filter {
                 it.status == TaskStatus.DONE || it.status == TaskStatus.RUNNING

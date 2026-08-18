@@ -3,6 +3,22 @@
 Reglas de numeración en [CLAUDE.md](CLAUDE.md): un requerimiento **nuevo** incrementa *major*;
 cambiar uno **existente** incrementa *patch*.
 
+## 72.1.0
+
+**Las acotaciones de la revisión son complementarias.** El campo pasó a llamarse "Acotaciones
+(opcional)" y dice lo que hace: se suman al criterio de revisión, no lo reemplazan.
+
+Sin nada escrito, el bloque de acotaciones directamente no aparece en el prompt. Antes se rellenaba
+con una frase inventada —"no hay nada puntual para corregir, buscá vos qué está flojo"— que es
+ponerle palabras a alguien que no habló, y el modelo las leía como una instrucción más. El criterio
+de revisión ya está completo por sí solo, y ahora lo dice explícitamente: es lo que hay que hacer
+haya o no acotaciones.
+
+Con texto, se presenta como lo que es —"esto pidió quien lo mandó a revisar", después del criterio y
+no en su lugar— y con una regla clara para el desempate: si una acotación contradice el criterio
+general, mandan las acotaciones. Quien las escribió conoce el proyecto; el criterio general no. Sin
+decirlo, el modelo tenía que adivinar a cuál hacerle caso.
+
 ## 72.0.0
 
 **Replanificar ya no destruye lo que pasó.** Antes reemplazaba el plan entero: se perdía el registro

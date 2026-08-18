@@ -123,6 +123,12 @@ fun PlanReview(
             onValueChange = { guia = it; confirmando = false },
             label = { Text(t("impl.reviewGuidance")) },
             placeholder = { Text(t("impl.reviewPlaceholder")) },
+            supportingText = {
+                Text(
+                    t("impl.reviewGuidanceNote"),
+                    style = MaterialTheme.typography.labelSmall,
+                )
+            },
             minLines = 2,
             maxLines = 6,
             enabled = !running && !revisando,

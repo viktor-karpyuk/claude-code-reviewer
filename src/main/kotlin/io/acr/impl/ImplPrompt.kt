@@ -174,7 +174,17 @@ object ImplPrompt {
         - Escribí en $language.
 
         ${revision?.let { (planViejo, guia) ->
-        REVIEW_RULES + "\n\nPLAN ACTUAL\n" + planViejo + "\n\nEN QUÉ SENTIDO REVISARLO\n" + guia
+        REVIEW_RULES + "\n\nPLAN ACTUAL\n" + planViejo +
+            // La guía es complementaria, no la orden principal. Cuando no hay nada escrito, este
+            // bloque no aparece: el criterio de revisión ya está completo arriba, y agregar un
+            // "no hay nada puntual que corregir" sería ponerle palabras a alguien que no habló —y
+            // el modelo las leería como una instrucción.
+            guia.trim().takeIf { it.isNotBlank() }?.let { g ->
+                "\n\nADEMÁS, ESTO PIDIÓ QUIEN LO MANDÓ A REVISAR\n" +
+                    "Son acotaciones sobre lo de arriba, no en lugar de lo de arriba: el criterio de " +
+                    "revisión sigue valiendo entero. Si algo de esto contradice ese criterio, mandan " +
+                    "estas líneas — quien las escribió conoce el proyecto.\n\n" + g
+            }.orEmpty()
     }.orEmpty()}
 
         QUÉ NO PONER EN EL PLAN
@@ -208,6 +218,8 @@ object ImplPrompt {
           paso que no dice dónde ni qué no es un paso.
 
         Detallá más donde haga falta: una tarea con pasos vagos es una tarea que va a improvisar.
+
+        Esto es lo que hay que hacer siempre, haya o no acotaciones de quien pidió la revisión.
     """.trimIndent()
 
     /**
