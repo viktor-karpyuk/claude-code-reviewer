@@ -3,6 +3,16 @@
 Reglas de numeración en [CLAUDE.md](CLAUDE.md): un requerimiento **nuevo** incrementa *major*;
 cambiar uno **existente** incrementa *patch*.
 
+## 81.1.0
+
+**La lista de implementaciones dice dónde escribe cada una**: en su taller o directo en tus clones.
+Es la diferencia entre "esto puede estar tocando mi árbol de trabajo ahora mismo" y "no", y no estaba
+a la vista en ningún lado.
+
+Cuando el taller ya no está en disco lo dice también —"devuelto y limpio"— porque eso es distinto de
+nunca haber tenido uno, y sin distinguirlos una implementación terminada se vería igual que una que
+trabaja directo en tus clones.
+
 ## 81.0.0
 
 Más sobre la gestión de talleres, con el foco en el peor caso silencioso.

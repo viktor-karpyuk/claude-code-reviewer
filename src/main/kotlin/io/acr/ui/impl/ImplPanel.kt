@@ -198,6 +198,7 @@ fun ImplPanel(ctx: AppContext, repos: List<io.acr.forge.RepoRecord>) {
             )
             ColHead(t("impl.thRepos"), 200.dp)
             ColHead(t("impl.thBranch"), 170.dp)
+            ColHead(t("impl.thWhere"), 150.dp)
             ColHead(t("impl.thProgress"), 190.dp)
         }
         HorizontalDivider()
@@ -238,6 +239,27 @@ fun ImplPanel(ctx: AppContext, repos: List<io.acr.forge.RepoRecord>) {
                         .copy(fontFamily = FontFamily.Monospace),
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.width(170.dp),
+                    maxLines = 1,
+                )
+                // Dónde escribe: en su taller o directo en los clones. Es la diferencia entre "esto
+                // puede estar tocando mi árbol de trabajo ahora mismo" y "no", y no estaba a la
+                // vista en ningún lado de la lista.
+                //
+                // Y si el taller ya no está en disco, se dice: significa que el trabajo se devolvió
+                // y se limpió, que es distinto de nunca haber tenido uno.
+                val taller = io.acr.ui.dbState(impl.id, version, initial = null as Boolean?) {
+                    if (!impl.useWorkspace) null else ctx.workspaces.dirOf(impl.id).isDirectory
+                }
+                Text(
+                    when {
+                        !impl.useWorkspace -> t("impl.whereClones")
+                        taller == true -> t("impl.whereWorkspace")
+                        else -> t("impl.whereDone")
+                    },
+                    style = MaterialTheme.typography.labelSmall,
+                    color = if (impl.useWorkspace && taller == true) StatusColors.RUNNING
+                    else MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.width(150.dp),
                     maxLines = 1,
                 )
                 Column(Modifier.width(190.dp)) {
