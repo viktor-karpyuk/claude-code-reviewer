@@ -3078,3 +3078,98 @@ class WorkspaceTest {
         assertTrue(sueltos.first().exists(), "se listan, no se borran: no hay con qué verificarlas")
     }
 }
+
+/**
+ * Dónde vive un repositorio para una implementación, según el momento.
+ *
+ * Es una sola función para el motor y para las pantallas. Si el motor commitea en el taller y la
+ * pantalla lee el clon, la pantalla muestra cero commits y cero diffs mientras el trabajo avanza —la
+ * misma clase de error que "el tablero decía que todo había salido bien": dos fuentes para una sola
+ * verdad.
+ */
+class WorkDirResolutionTest {
+
+    private fun conRaiz(block: (io.acr.impl.Workspaces, java.io.File) -> Unit) {
+        val base = java.nio.file.Files.createTempDirectory("acr-dir").toFile()
+        try {
+            block(io.acr.impl.Workspaces(java.io.File(base, "ws")), base)
+        } finally {
+            base.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun withoutWorkspaceItIsAlwaysTheClone() = conRaiz { ws, base ->
+        val clon = java.io.File(base, "clon").apply { mkdirs() }
+        assertEquals(clon, ws.dirFor("i1", false, "proyecto", clon.absolutePath))
+    }
+
+    @Test
+    fun withWorkspaceItIsTheCopyWhileItExists() = conRaiz { ws, base ->
+        val clon = java.io.File(base, "clon").apply { mkdirs() }
+        ws.repoDir("i1", "proyecto").mkdirs()
+        assertEquals(ws.repoDir("i1", "proyecto"), ws.dirFor("i1", true, "proyecto", clon.absolutePath))
+    }
+
+    @Test
+    fun onceTheWorkshopIsGoneItFallsBackToTheClone() = conRaiz { ws, base ->
+        // Cuando la implementación termina, el taller se borra y todo pasa a estar en el clon.
+        // Preguntando sólo por la marca, la pantalla seguiría buscando en una carpeta que ya no
+        // existe y no encontraría ni un commit.
+        val clon = java.io.File(base, "clon").apply { mkdirs() }
+        assertEquals(clon, ws.dirFor("i1", true, "proyecto", clon.absolutePath))
+    }
+}
+
+/**
+ * Lo que un taller ocupa de verdad.
+ *
+ * Con `--local`, git enlaza los objetos al repositorio original en vez de copiarlos: la mayoría de lo
+ * que se ve adentro no ocupa disco propio. Medido de un caso real, `du` informa 708 MB para un clon
+ * cuyo costo verdadero es 36 MB. Con ese número a la vista alguien borra un taller para recuperar
+ * espacio que nunca gastó, y se lleva puesto el trabajo.
+ */
+class WorkspaceSizeTest {
+
+    @Test
+    fun sharedObjectsDoNotCountAsSpaceToReclaim() {
+        val base = java.nio.file.Files.createTempDirectory("acr-tam").toFile()
+        try {
+            val origen = java.io.File(base, "origen").apply { mkdirs() }
+            kotlinx.coroutines.runBlocking {
+                io.acr.claude.Git.init(origen)
+                // Un archivo grande para que la diferencia sea visible y no ruido.
+                java.io.File(origen, "grande.bin").writeBytes(ByteArray(2 * 1024 * 1024) { 7 })
+                io.acr.claude.Git.commitAll(origen, "inicial")
+            }
+            val ws = io.acr.impl.Workspaces(java.io.File(base, "ws"))
+            val repo = io.acr.forge.RepoRecord(
+                id = "r", name = "origen", provider = Provider.BITBUCKET, owner = "a", slug = "b",
+                localPath = origen.absolutePath, token = null,
+            )
+            val rama = kotlinx.coroutines.runBlocking { io.acr.claude.Git.currentBranch(origen) } ?: "main"
+            kotlinx.coroutines.runBlocking { ws.prepare("i1", listOf(repo), "f-x", { rama }) }
+
+            val copia = ws.repoDir("i1", "origen")
+            val todo = copia.walkTopDown().filter { it.isFile }.sumOf { it.length() }
+            val real = kotlinx.coroutines.runBlocking {
+                ws.inspect("i1", "t", listOf(repo), "f-x")
+            }.sizeBytes
+
+            // Lo que se descuenta es exactamente `.git/objects`: el árbol de trabajo son copias
+            // frescas que sí ocupan, los objetos son enlaces que no. En un repositorio real la
+            // diferencia es enorme —670 MB de historial contra 35 MB de archivos— y es la que hace
+            // que un taller salga barato.
+            val objetos = java.io.File(copia, ".git/objects").walkTopDown()
+                .filter { it.isFile }.sumOf { it.length() }
+            assertTrue(objetos > 0, "el clon tiene objetos enlazados")
+            assertTrue(todo > real, "sumar todo sobreestima: $todo vs $real")
+            assertTrue(
+                real <= todo - objetos + 1024,
+                "lo enlazado no cuenta como espacio a recuperar ($real de $todo, $objetos enlazados)",
+            )
+        } finally {
+            base.deleteRecursively()
+        }
+    }
+}

@@ -250,7 +250,7 @@ class ImplEngine(
         return runCatching {
             val res = latiendo(jobPlan) { ClaudeCli.run(
                 binary = binario,
-                workDir = dir,
+                workDir = dondeMirar(implId, impl.useWorkspace, principal),
                 prompt = ImplPrompt.plan(
                     docs, impl.extraPrompt,
                     repos.map { r ->
@@ -352,6 +352,8 @@ class ImplEngine(
         val enWorkspace = impl.useWorkspace && workspaces != null
         fun dirDe(r: RepoRecord): File =
             if (enWorkspace) workspaces!!.repoDir(implId, r.name) else File(r.localPath)
+        // Nota: acá se usa `repoDir` y no `dirFor` a propósito. `prepare` todavía no corrió, así que
+        // la carpeta puede no existir y `dirFor` caería al clon — que es justo lo que no queremos.
 
         // Con workspace, lo que el usuario tenga sin commitear en su clon no importa: no se toca su
         // árbol de trabajo. Eso elimina de raíz el bloqueo que hasta ahora impedía arrancar.
@@ -1042,7 +1044,7 @@ class ImplEngine(
             val res = latiendo(jobId) {
                 ClaudeCli.run(
                     binary = binario,
-                    workDir = File(principal.localPath),
+                    workDir = dondeMirar(implId, impl.useWorkspace, principal),
                     prompt = ImplPrompt.request(
                         limpio, tareas, describir(repos, implId), loadSources(impl.sources), idioma,
                     ),
@@ -1173,7 +1175,7 @@ class ImplEngine(
         return runCatching {
             val res = latiendo(jobSpecs) { ClaudeCli.run(
                 binary = binario,
-                workDir = File(principal.localPath),
+                workDir = dondeMirar(implId, impl.useWorkspace, principal),
                 prompt = ImplPrompt.improveSpecs(docs, describir(repos, implId), impl.extraPrompt, idioma),
                 model = impl.planModel ?: PLAN_MODEL,
                 allowedTools = listOf("Read", "Grep", "Glob", "Bash(git *)", "Bash(ls *)", "Bash(find *)"),
@@ -1260,7 +1262,9 @@ class ImplEngine(
         return runCatching {
             val res = ClaudeCli.run(
                 binary = binario,
-                workDir = File(principal.localPath),
+                // Auditar contra los documentos exige ver el código como está ahora: en el taller
+                // si lo hay, porque ahí está lo que las tareas escribieron.
+                workDir = dondeMirar(implId, impl.useWorkspace, principal),
                 prompt = ImplPrompt.auditPlan(docs, plan, describir(repos, implId), idioma),
                 model = impl.planModel ?: PLAN_MODEL,
                 allowedTools = listOf("Read", "Grep", "Glob", "Bash(git *)", "Bash(ls *)", "Bash(find *)"),
@@ -1300,13 +1304,29 @@ class ImplEngine(
         }
     }
 
-    /** Nombre, rol y ruta de cada repositorio, como los espera el prompt. */
+    /**
+     * Nombre, rol y ruta de cada repositorio, como los espera el prompt.
+     *
+     * La ruta es la del taller cuando existe, no la del clon. Importa más de lo que parece: quien
+     * planifica, audita o analiza tiene que mirar **el código como está ahora**, con lo que las
+     * tareas ya escribieron. Mirando el clon, una replanificación no ve nada de lo hecho y vuelve a
+     * proponer trabajo que ya está.
+     */
     private fun describir(repos: List<RepoRecord>, implId: String): List<Triple<String, String, String>> {
         val cfg = impls.reposOf(implId)
+        val usa = impls.get(implId)?.useWorkspace == true
         return repos.map { r ->
-            Triple(r.name, (cfg.firstOrNull { it.repoId == r.id }?.role ?: RepoRole.OTHER).name, r.localPath)
+            Triple(
+                r.name,
+                (cfg.firstOrNull { it.repoId == r.id }?.role ?: RepoRole.OTHER).name,
+                dondeMirar(implId, usa, r).absolutePath,
+            )
         }
     }
+
+    /** Dónde está hoy el código de un repositorio para esta implementación. */
+    private fun dondeMirar(implId: String, usaWorkspace: Boolean, r: RepoRecord): File =
+        workspaces?.dirFor(implId, usaWorkspace, r.name, r.localPath) ?: File(r.localPath)
 
     /**
      * Dónde dejar el documento de aclaraciones.

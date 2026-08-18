@@ -53,8 +53,14 @@ data class Workspace(
  * dos tareas del mismo repositorio siguen sin poder correr a la vez —comparten el árbol— pero dos
  * implementaciones distintas ya no se estorban, que es donde estaba el choque real.
  *
- * El clon es `--local`: enlaza los objetos en vez de copiarlos, así que un repositorio de dos gigas
- * se clona en un segundo. Sin eso, esto sería inviable.
+ * El clon es `--local`: enlaza los objetos en vez de copiarlos. Medido sobre un repositorio real de
+ * 1,7 GB: cuatro segundos, y de disco propio ocupa 36 MB —los archivos versionados— porque los 670 MB
+ * de historial quedan enlazados. Sin eso, esto sería inviable.
+ *
+ * **Lo que el taller no se lleva es lo que no está versionado**: `target/`, `node_modules`, cachés de
+ * compilación. Eso es bueno para el disco y tiene un costo real que conviene saber: la primera
+ * compilación adentro del taller arranca en frío, así que una tarea que compila puede tardar más de
+ * lo que tardaría en el clon del usuario. La estimación del plan no lo sabe.
  *
  * **El trabajo no vive acá.** Al terminar se empuja cada rama al clon del usuario y recién entonces
  * se borra el workspace, después de comparar los dos shas. El orden importa: borrar primero y
@@ -67,6 +73,26 @@ class Workspaces(private val root: File) {
     fun dirOf(implId: String): File = File(root, implId)
 
     fun repoDir(implId: String, repoName: String): File = File(dirOf(implId), repoName)
+
+    /**
+     * Dónde vive de verdad este repositorio para esta implementación, ahora.
+     *
+     * Una sola función para toda la app —el motor y las pantallas— porque si el motor commitea en el
+     * taller y la pantalla lee el clon, la pantalla muestra cero commits y cero diffs mientras el
+     * trabajo avanza. Es la misma clase de error que "el tablero decía que todo había salido bien":
+     * dos fuentes para una sola verdad.
+     *
+     * Mira el disco y no sólo la marca: cuando la implementación termina, el taller se borra y todo
+     * pasa a estar en el clon. Preguntando por la marca, la pantalla seguiría buscando en una
+     * carpeta que ya no existe.
+     */
+    fun dirFor(implId: String, useWorkspace: Boolean, repoName: String, localPath: String): File {
+        if (useWorkspace) {
+            val ws = repoDir(implId, repoName)
+            if (ws.isDirectory) return ws
+        }
+        return File(localPath)
+    }
 
     /**
      * Prepara el workspace: clona lo que falte y deja cada repositorio en la rama.
@@ -122,8 +148,16 @@ class Workspaces(private val root: File) {
             log("${r.name}: «$rama» quedó en el clon.")
             r.name to null
         } else {
-            log("${r.name}: no pude devolver «$rama». ${res.output.take(200)}")
-            r.name to res.output.take(300)
+            // El caso más común y el más fácil de arreglar: git no deja pisar la rama que el
+            // destino tiene abierta. Decirlo con el nombre y la salida ahorra buscar el error.
+            val abierta = Git.currentBranch(File(r.localPath)) == rama
+            val detalle = if (abierta) {
+                "el clon está parado en «$rama»: pasalo a otra rama y volvé a devolver."
+            } else {
+                res.output.take(300)
+            }
+            log("${r.name}: no pude devolver «$rama». $detalle")
+            r.name to detalle
         }
     }
 
@@ -185,12 +219,22 @@ class Workspaces(private val root: File) {
         root.listFiles()?.filter { it.isDirectory && it.name !in implIds }.orEmpty()
 
     /**
-     * Cuánto ocupa, contando sólo archivos.
+     * Cuánto se recupera borrando esto.
      *
-     * Con `--local` la mayoría de los objetos son enlaces al repositorio original, así que este
-     * número sobreestima el espacio real. Se muestra igual porque la pregunta que contesta —"¿esto
-     * está creciendo?"— se responde bien con un número consistente, aunque sea alto.
+     * Sumar todos los archivos daría un número enorme y falso: con `--local`, git **enlaza** los
+     * objetos al repositorio original en vez de copiarlos, así que la mayoría de lo que se ve
+     * adentro no ocupa disco propio. Medido de un caso real: `du` informa 708 MB para un clon cuyo
+     * costo verdadero es 36 MB — casi veinte veces más. Con ese número a la vista, alguien borra un
+     * taller para recuperar espacio que en realidad nunca gastó, y se lleva puesto el trabajo.
+     *
+     * Así que se suman sólo los archivos con un único enlace: exactamente lo que desaparecería.
      */
-    private fun tamano(dir: File): Long =
-        runCatching { dir.walkTopDown().filter { it.isFile }.sumOf { it.length() } }.getOrDefault(0)
+    private fun tamano(dir: File): Long = runCatching {
+        dir.walkTopDown().filter { it.isFile }.sumOf { f ->
+            val enlaces = runCatching {
+                java.nio.file.Files.getAttribute(f.toPath(), "unix:nlink") as? Int
+            }.getOrNull() ?: 1
+            if (enlaces > 1) 0L else f.length()
+        }
+    }.getOrDefault(0)
 }

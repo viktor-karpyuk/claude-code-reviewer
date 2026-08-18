@@ -47,6 +47,11 @@ import io.acr.impl.ImplTask
 fun TaskDiffView(
     repo: RepoRecord?,
     task: ImplTask,
+    /**
+     * Dónde está el commit. Con taller, los commits viven ahí hasta que la implementación termina y
+     * se devuelven: leyendo siempre el clon, cada tarea mostraba "sin diff" mientras trabajaba.
+     */
+    workDir: java.io.File? = null,
 ) {
     val archivos = task.diff?.files.orEmpty()
     if (archivos.isEmpty() || repo == null || task.commitSha == null) return
@@ -59,7 +64,7 @@ fun TaskDiffView(
                 abierto = if (abierto == f.path) null else f.path
             }
             if (abierto == f.path) {
-                DiffDeArchivo(repo, task.commitSha, f.path)
+                DiffDeArchivo(repo, task.commitSha, f.path, workDir)
             }
         }
     }
@@ -120,11 +125,15 @@ internal fun FilaArchivo(f: FileChange, abierto: Boolean, onClick: () -> Unit) {
  * sigue —las otras tareas, el resto de la pantalla— fuera de la vista.
  */
 @Composable
-internal fun DiffDeArchivo(repo: RepoRecord, sha: String, path: String) {
-    val texto = io.acr.ui.dbState(repo.id, sha, path, initial = null as String?) {
-        kotlinx.coroutines.runBlocking {
-            io.acr.claude.Git.commitDiff(java.io.File(repo.localPath), sha, path)
-        }
+internal fun DiffDeArchivo(
+    repo: RepoRecord,
+    sha: String,
+    path: String,
+    workDir: java.io.File? = null,
+) {
+    val dir = workDir ?: java.io.File(repo.localPath)
+    val texto = io.acr.ui.dbState(repo.id, sha, path, dir.path, initial = null as String?) {
+        kotlinx.coroutines.runBlocking { io.acr.claude.Git.commitDiff(dir, sha, path) }
     }
     val lineas = remember(texto) { texto?.let { io.acr.claude.DiffParser.parse(it) }.orEmpty() }
     val hScroll = rememberScrollState()
@@ -172,11 +181,10 @@ internal fun DiffDeArchivo(repo: RepoRecord, sha: String, path: String) {
  * lado, y duplicarlos en la base sería mantener dos versiones de la misma verdad.
  */
 @Composable
-fun CommitDiffView(repo: RepoRecord, sha: String) {
-    val archivos = io.acr.ui.dbState(repo.id, sha, initial = null as List<FileChange>?) {
-        kotlinx.coroutines.runBlocking {
-            io.acr.claude.Git.commitStats(java.io.File(repo.localPath), sha)
-        }
+fun CommitDiffView(repo: RepoRecord, sha: String, workDir: java.io.File? = null) {
+    val dir = workDir ?: java.io.File(repo.localPath)
+    val archivos = io.acr.ui.dbState(repo.id, sha, dir.path, initial = null as List<FileChange>?) {
+        kotlinx.coroutines.runBlocking { io.acr.claude.Git.commitStats(dir, sha) }
     }
     var abierto by remember(sha) { mutableStateOf<String?>(null) }
 
@@ -199,7 +207,7 @@ fun CommitDiffView(repo: RepoRecord, sha: String) {
     Column(Modifier.fillMaxWidth()) {
         archivos.forEach { f ->
             FilaArchivo(f, abierto == f.path) { abierto = if (abierto == f.path) null else f.path }
-            if (abierto == f.path) DiffDeArchivo(repo, sha, f.path)
+            if (abierto == f.path) DiffDeArchivo(repo, sha, f.path, dir)
         }
     }
 }

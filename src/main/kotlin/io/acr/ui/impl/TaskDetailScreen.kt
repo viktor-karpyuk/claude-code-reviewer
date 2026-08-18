@@ -59,6 +59,13 @@ fun TaskDetailScreen(
     onRetry: () -> Unit,
     /** Frenar la tarea que está corriendo. Deja lo hecho y la devuelve a la cola. */
     onPause: () -> Unit,
+    /**
+     * Dónde está el commit de la tarea.
+     *
+     * Con taller, los commits viven ahí hasta que la implementación termina y se devuelven: leyendo
+     * siempre el clon, cada tarea mostraba "sin diff" mientras el trabajo avanzaba.
+     */
+    workDir: java.io.File? = null,
 ) {
     val analisis = task.diff?.files?.let { io.acr.impl.analyze(it) }
     // Una tarea que todavía no corrió no tiene commit, ni código, ni resultado. Mostrarle esas
@@ -348,7 +355,7 @@ fun TaskDetailScreen(
                 )
             }
             Spacer(Modifier.height(8.dp))
-            TaskDiffView(repo = repo, task = task)
+            TaskDiffView(repo = repo, task = task, workDir = workDir)
         }
 
         // --- El prompt, plegado ---

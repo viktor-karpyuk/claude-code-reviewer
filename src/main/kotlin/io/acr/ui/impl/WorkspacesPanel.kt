@@ -207,6 +207,7 @@ fun WorkspacesPanel(ctx: AppContext) {
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
             huerfanos.forEach { d ->
+                var confirmando by remember(d.path) { mutableStateOf(false) }
                 Row(Modifier.fillMaxWidth().padding(top = 2.dp), verticalAlignment = Alignment.CenterVertically) {
                     Text(
                         d.name,
@@ -218,6 +219,26 @@ fun WorkspacesPanel(ctx: AppContext) {
                     TextButton(onClick = {
                         runCatching { java.awt.Desktop.getDesktop().open(d) }
                     }) { Text(t("impl.openRepo")) }
+                    // Se puede borrar, pero a ciegas y diciéndolo. Sin implementación no hay rama ni
+                    // clon con el que comparar, así que la app no puede afirmar que no se pierde
+                    // nada. Dejarlo sin salida sería peor: la carpeta quedaría para siempre.
+                    TextButton(onClick = {
+                        if (!confirmando) {
+                            confirmando = true
+                        } else {
+                            runCatching { d.deleteRecursively() }
+                            version++
+                        }
+                    }) {
+                        Text(if (confirmando) t("ws.orphanConfirm") else t("ws.delete"))
+                    }
+                    if (confirmando) {
+                        Text(
+                            t("ws.orphanWarn"),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = StatusColors.FAILED,
+                        )
+                    }
                 }
             }
         }

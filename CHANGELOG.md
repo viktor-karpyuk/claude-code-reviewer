@@ -3,6 +3,40 @@
 Reglas de numeración en [CLAUDE.md](CLAUDE.md): un requerimiento **nuevo** incrementa *major*;
 cambiar uno **existente** incrementa *patch*.
 
+## 80.1.0
+
+Barrido sobre los talleres, que son lo más nuevo y lo más riesgoso. **La pantalla mentía durante toda
+una corrida con taller**: los commits, los diffs y el contador seguían leyendo tu clon mientras el
+trabajo pasaba en la copia. O sea que una implementación podía llevar diez commits hechos y el
+tablero mostrar cero — la misma clase de error que arreglamos en la v73, otra vez, por el mismo
+motivo: dos fuentes para una sola verdad.
+
+Ahora hay **una sola función** que contesta dónde vive un repositorio para una implementación, y la
+usan el motor y las pantallas. Mira el disco y no la marca: cuando la implementación termina y el
+taller se borra, todo pasa a estar en el clon, y preguntando por la marca la pantalla seguiría
+buscando en una carpeta que ya no existe.
+
+**Planificar, auditar y analizar miraban el código sin lo que las tareas habían escrito.** Una
+replanificación a mitad de camino no veía nada de lo hecho y podía volver a proponer trabajo que ya
+estaba. Ahora los tres miran el taller cuando lo hay.
+
+**El árbol sucio de tu clon ya no bloquea nada** con taller: no se toca. Ese bloqueo era la razón por
+la que "retomar" parecía muerto, y con taller no tiene sentido que siga.
+
+**El tamaño que mostraba era casi veinte veces el real.** `du` informa 708 MB para un clon cuyo costo
+verdadero es 36 MB, porque `--local` enlaza los objetos en vez de copiarlos. Con ese número a la
+vista, alguien borra un taller para recuperar espacio que nunca gastó y se lleva puesto el trabajo.
+Ahora se suman sólo los archivos que desaparecerían de verdad.
+
+Medido sobre un repositorio real de 1,7 GB: **cuatro segundos** para clonar y 36 MB de disco propio.
+Lo que el taller no se lleva es lo que no está versionado —`target/`, `node_modules`, cachés—, y eso
+tiene un costo que conviene saber: la primera compilación adentro arranca en frío.
+
+También: un interruptor para elegir dónde trabaja cada implementación —bloqueado una vez que hay
+commits, porque cambiarlo dejaría la mitad del trabajo de cada lado—, y las carpetas huérfanas ahora
+se pueden borrar, a ciegas y diciéndolo: sin implementación no hay rama ni clon con el que comparar,
+así que la app no puede afirmar que no se pierde nada. Dejarlas sin salida era peor.
+
 ## 80.0.0
 
 **Cada implementación trabaja en su propio taller.** Hasta ahora escribía directamente en tu clon, y

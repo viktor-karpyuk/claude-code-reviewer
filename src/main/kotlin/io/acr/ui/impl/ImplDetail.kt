@@ -111,7 +111,7 @@ fun ImplDetail(
     var sucios by remember(implId) { mutableStateOf(emptySet<String>()) }
     var ajenos by remember(implId) { mutableStateOf(emptyList<io.acr.forge.RepoRecord>()) }
     val rama = impl.branch
-    androidx.compose.runtime.LaunchedEffect(misRepos, version, rama) {
+    androidx.compose.runtime.LaunchedEffect(misRepos, version, rama, impl.useWorkspace) {
         val medidos = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
             misRepos.map { r ->
                 val d = java.io.File(r.localPath)
@@ -119,7 +119,14 @@ fun ImplDetail(
             }
         }
         sucios = medidos.filter { it.second }.map { it.first.id }.toSet()
-        ajenos = medidos.filter { it.second && it.third != rama }.map { it.first }
+        // Con taller, lo que el clon tenga sin commitear deja de importar: no se toca su árbol de
+        // trabajo. Seguir bloqueando por eso mantendría el botón muerto por una razón que ya no
+        // existe — que es justo el problema que el taller vino a resolver.
+        ajenos = if (impl.useWorkspace) {
+            emptyList()
+        } else {
+            medidos.filter { it.second && it.third != rama }.map { it.first }
+        }
     }
     val repo = misRepos.firstOrNull()
     val corriendo = impl.status == ImplStatus.RUNNING || impl.status == ImplStatus.PLANNING
@@ -165,6 +172,9 @@ fun ImplDetail(
                 implTitle = impl.title,
                 onBack = { tareaAbierta = null; version++ },
                 onHome = { tareaAbierta = null; onBack() },
+                workDir = misRepos.firstOrNull { it.id == tar.repoId }?.let { r ->
+                    ctx.workspaces.dirFor(implId, impl.useWorkspace, r.name, r.localPath)
+                },
                 onRetry = { ctx.impls.resetTask(tar.id); tareaAbierta = null; version++ },
                 // Frenar la implementación y no sólo esta tarea: el proceso es de la
                 // implementación, y matarlo sin que el motor se entere lo dejaría relanzándolo en
@@ -246,14 +256,18 @@ fun ImplDetail(
                 )
                 Text(
                     t("impl.fromBranch", cfg?.baseBranch ?: t("impl.currentBranch")) +
-                        (impl.branch?.let { "  →  $it" }.orEmpty()),
+                        (impl.branch?.let { "  →  $it" }.orEmpty()) +
+                        (if (impl.useWorkspace) "  ·  " + t("impl.inWorkspace") else ""),
                     style = MaterialTheme.typography.labelSmall.copy(fontFamily = FontFamily.Monospace),
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.weight(1f),
                 )
                 // Lo sucio se resuelve acá y no en la terminal: el stash no pierde nada y se
                 // recupera con `git stash pop`, así que puede ser un botón.
-                if (sucio) {
+                // Con taller, lo que el clon tenga sin commitear es asunto del usuario y no del
+                // motor: ofrecerle guardarlo en el stash sería proponerle tocar su trabajo por una
+                // razón que ya no existe.
+                if (sucio && !impl.useWorkspace) {
                     Text(
                         t("impl.dirty"),
                         style = MaterialTheme.typography.labelSmall,
@@ -775,7 +789,10 @@ private fun SeccionTareas(
                     misRepos.sumOf { r ->
                         val base = suyos.firstOrNull { it.repoId == r.id }?.baseBranch
                             ?: impl.baseBranch ?: "develop"
-                        io.acr.claude.Git.commitsBetween(java.io.File(r.localPath), base, r2).size
+                        io.acr.claude.Git.commitsBetween(
+                            ctx.workspaces.dirFor(implId, impl.useWorkspace, r.name, r.localPath),
+                            base, r2,
+                        ).size
                     }
                 }
             }

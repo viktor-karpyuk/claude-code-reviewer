@@ -65,8 +65,13 @@ fun ImplCommitsScreen(
                 misRepos.flatMap { r ->
                     val base = suyos.firstOrNull { it.repoId == r.id }?.baseBranch
                         ?: impl.baseBranch ?: "develop"
-                    io.acr.claude.Git.commitsBetween(java.io.File(r.localPath), base, rama)
-                        .map { r.name to it }
+                    // Donde el trabajo esté ahora: el taller mientras corre, el clon cuando ya se
+                    // devolvió y se borró. Leyendo siempre el clon, la lista quedaba vacía durante
+                    // toda la implementación.
+                    io.acr.claude.Git.commitsBetween(
+                        ctx.workspaces.dirFor(impl.id, impl.useWorkspace, r.name, r.localPath),
+                        base, rama,
+                    ).map { r.name to it }
                 }
             }
         }
@@ -192,7 +197,12 @@ fun ImplCommitsScreen(
                         }
                     }
                     Spacer(Modifier.height(10.dp))
-                    repo?.let { CommitDiffView(it, c.sha) }
+                    repo?.let {
+                        CommitDiffView(
+                            it, c.sha,
+                            ctx.workspaces.dirFor(impl.id, impl.useWorkspace, it.name, it.localPath),
+                        )
+                    }
                 }
             }
         }

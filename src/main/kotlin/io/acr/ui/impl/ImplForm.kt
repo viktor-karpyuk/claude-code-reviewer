@@ -68,6 +68,7 @@ fun ImplForm(
     var revMax by remember(impl?.id) { mutableStateOf(impl?.reviewMax ?: 5) }
     var revCada by remember(impl?.id) { mutableStateOf(impl?.reviewEach ?: false) }
     var paralelo by remember(impl?.id) { mutableStateOf(impl?.maxParallel ?: 0) }
+    var taller by remember(impl?.id) { mutableStateOf(impl?.useWorkspace ?: true) }
     var replanificar by remember(impl?.id) { mutableStateOf(false) }
     // La lista se vuelve a leer al agregar una carpeta. La que llega por parámetro se cargó antes
     // de abrir el formulario, así que sin esto la carpeta recién registrada no existe para la
@@ -268,6 +269,30 @@ fun ImplForm(
             }
         }
 
+        // --- Dónde trabaja ---
+        Spacer(Modifier.height(18.dp))
+        Seccion(t("impl.fWorkspace"), t("impl.fWorkspaceNote"))
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Checkbox(
+                checked = taller,
+                onCheckedChange = { taller = it },
+                // Cambiar esto con trabajo hecho dejaría la mitad de los commits en un lado y la
+                // mitad en el otro. Se decide antes de arrancar.
+                enabled = impl == null || impl.branch == null,
+            )
+            Text(
+                if (taller) t("impl.fWorkspaceOn") else t("impl.fWorkspaceOff"),
+                style = MaterialTheme.typography.bodySmall,
+            )
+        }
+        if (impl?.branch != null) {
+            Text(
+                t("impl.fWorkspaceLocked"),
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+
         // --- Cuántas a la vez ---
         Spacer(Modifier.height(18.dp))
         Seccion(t("impl.fParallel"), t("impl.fParallelNote"))
@@ -338,6 +363,7 @@ fun ImplForm(
                     if (!ramaAuto || impl?.branchFixed == true) ctx.impls.setBranch(id, laRama)
                     ctx.impls.setReviewPolicy(id, revMin, revMax, revCada)
                     ctx.impls.setMaxParallel(id, paralelo.takeIf { it > 0 })
+                    if (impl == null || impl.branch == null) ctx.impls.setUseWorkspace(id, taller)
                     onSaved(id)
                 },
             ) { Text(t("common.save")) }
