@@ -452,7 +452,7 @@ class ImplEngine(
                         continue
                     }
 
-                    val listas = ready(todas, porId, repos)
+                    val listas = ready(todas, porId, repos, impl.maxParallel)
                     if (listas.isEmpty()) {
                         val pendientes = todas.count { it.status == TaskStatus.PENDING }
                         val fallidas = todas.count { it.status == TaskStatus.FAILED }
@@ -568,6 +568,14 @@ class ImplEngine(
         todas: List<ImplTask>,
         porId: Map<String, RepoRecord>,
         repos: List<RepoRecord>,
+        /**
+         * Tope de tareas a la vez, encima del límite físico. Null es sin tope.
+         *
+         * El límite por repositorio existe porque dos modelos en el mismo árbol se pisan; este
+         * existe por otra razón: seis procesos a la vez cuestan seis veces y ocupan una máquina que
+         * alguien está usando. Son dos cosas distintas y por eso se aplican las dos.
+         */
+        maxParalelo: Int? = null,
     ): List<ImplTask> {
         val hechas = todas.filter { it.status == TaskStatus.DONE }.map { it.seq }.toSet()
         val existen = todas.map { it.seq }.toSet()
@@ -588,6 +596,10 @@ class ImplEngine(
                 val repo = (porId[t.repoId] ?: repos.firstOrNull())?.id ?: return@filter false
                 ocupados.add(repo)
             }
+            // El tope se aplica al final, sobre lo que ya pasó el filtro del repositorio: cortar
+            // antes dejaría afuera tareas de repositorios distintos por culpa de una que se
+            // descarta igual.
+            .let { if (maxParalelo == null || maxParalelo <= 0) it else it.take(maxParalelo) }
             .toList()
     }
 

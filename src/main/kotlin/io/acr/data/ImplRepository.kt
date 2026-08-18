@@ -851,6 +851,15 @@ class ImplRepository(private val store: Store) {
         }
     }
 
+    /** Cuántas tareas dejar correr a la vez. Null o cero es sin tope. */
+    fun setMaxParallel(implId: String, max: Int?) {
+        store.stmt("UPDATE implementation SET max_parallel = ? WHERE id = ?") { ps ->
+            if (max == null || max <= 0) ps.setNull(1, java.sql.Types.INTEGER) else ps.setInt(1, max)
+            ps.setString(2, implId)
+            ps.executeUpdate()
+        }
+    }
+
     /** Cuántas pasadas de revisión hacer, y si además revisar después de cada tarea. */
     fun setReviewPolicy(implId: String, min: Int, max: Int, each: Boolean) {
         store.stmt(
@@ -873,7 +882,7 @@ class ImplRepository(private val store: Store) {
             """SELECT id, repo_id, title, sources, extra_prompt, branch, base_branch, status,
                       plan_summary, plan_model, code_model, error, cost_usd, created_at,
                       planned_at, finished_at, review_guidance, review_min, review_max,
-                      review_each, branch_fixed, replans, replanned_at
+                      review_each, branch_fixed, replans, replanned_at, max_parallel
                  FROM implementation $tail""",
         ) { ps ->
             bind(ps)
@@ -908,6 +917,7 @@ class ImplRepository(private val store: Store) {
                                 reviewMax = rs.getObject(19)?.let { rs.getInt(19) } ?: 5,
                                 reviewEach = (rs.getObject(20)?.let { rs.getInt(20) } ?: 0) == 1,
                                 branchFixed = (rs.getObject(21)?.let { rs.getInt(21) } ?: 0) == 1,
+                                maxParallel = rs.getObject(24)?.let { rs.getInt(24) }?.takeIf { it > 0 },
                                 replans = rs.getObject(22)?.let { rs.getInt(22) } ?: 0,
                                 replannedAt = rs.getString(23),
                             ),

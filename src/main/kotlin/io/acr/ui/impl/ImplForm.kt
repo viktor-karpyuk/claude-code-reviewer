@@ -67,6 +67,7 @@ fun ImplForm(
     var revMin by remember(impl?.id) { mutableStateOf(impl?.reviewMin ?: 2) }
     var revMax by remember(impl?.id) { mutableStateOf(impl?.reviewMax ?: 5) }
     var revCada by remember(impl?.id) { mutableStateOf(impl?.reviewEach ?: false) }
+    var paralelo by remember(impl?.id) { mutableStateOf(impl?.maxParallel ?: 0) }
     var replanificar by remember(impl?.id) { mutableStateOf(false) }
     // La lista se vuelve a leer al agregar una carpeta. La que llega por parámetro se cargó antes
     // de abrir el formulario, así que sin esto la carpeta recién registrada no existe para la
@@ -267,6 +268,24 @@ fun ImplForm(
             }
         }
 
+        // --- Cuántas a la vez ---
+        Spacer(Modifier.height(18.dp))
+        Seccion(t("impl.fParallel"), t("impl.fParallelNote"))
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            (0..6).forEach { n ->
+                FilterChip(
+                    selected = paralelo == n,
+                    onClick = { paralelo = n },
+                    label = { Text(if (n == 0) t("impl.fParallelAuto") else n.toString()) },
+                )
+            }
+        }
+        Text(
+            if (paralelo == 0) t("impl.fParallelAutoNote") else t("impl.fParallelFixed", paralelo),
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+
         // --- Parámetros ---
         Spacer(Modifier.height(18.dp))
         Seccion(t("impl.extra"), t("impl.extraNote"))
@@ -318,6 +337,7 @@ fun ImplForm(
                     // pisar la que ya eligió el plan de una implementación en marcha.
                     if (!ramaAuto || impl?.branchFixed == true) ctx.impls.setBranch(id, laRama)
                     ctx.impls.setReviewPolicy(id, revMin, revMax, revCada)
+                    ctx.impls.setMaxParallel(id, paralelo.takeIf { it > 0 })
                     onSaved(id)
                 },
             ) { Text(t("common.save")) }

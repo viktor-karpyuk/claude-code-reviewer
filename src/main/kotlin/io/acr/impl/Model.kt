@@ -171,6 +171,15 @@ data class Implementation(
      * —tres replanificaciones seguidas son una señal de que el problema no está en el plan—, y la
      * fecha dice si lo que uno está mirando es de antes o de después del último cambio.
      */
+    /**
+     * Cuántas tareas se dejan correr a la vez. Null es sin tope.
+     *
+     * El motor ya tiene un límite físico —una tarea por repositorio, porque dos modelos escribiendo
+     * en el mismo árbol se pisan— y este se le suma encima. Existe porque el límite físico no es el
+     * único que importa: seis procesos de Claude a la vez cuestan seis veces y ocupan una máquina
+     * que alguien está usando.
+     */
+    val maxParallel: Int? = null,
     val replans: Int = 0,
     val replannedAt: String? = null,
     val planModel: String?,

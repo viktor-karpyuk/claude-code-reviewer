@@ -3,6 +3,27 @@
 Reglas de numeración en [CLAUDE.md](CLAUDE.md): un requerimiento **nuevo** incrementa *major*;
 cambiar uno **existente** incrementa *patch*.
 
+## 74.0.0
+
+**Los commits de la rama se abren y muestran su código.** La lista decía qué se hizo y cuándo, y no
+había forma de ver qué: contestar eso obligaba a abrir el repositorio en una terminal, o sea salirse
+de la herramienta justo en la pregunta más común. Ahora cada commit se despliega en sus archivos, y
+cada archivo en su diff — lo mismo que ya mostraba una tarea, partiendo de un sha suelto. Los
+archivos se leen del historial de git y no se guardan: git no se va a ningún lado, y duplicarlos en
+la base sería mantener dos versiones de la misma verdad. Al lado, un botón que abre la carpeta del
+repositorio, para lo que la app no hace.
+
+**Se puede poner un tope de tareas simultáneas.** El motor ya lanzaba en paralelo lo que las
+dependencias permiten, con un límite físico: nunca dos en el mismo repositorio, porque dos modelos
+escribiendo el mismo árbol se pisan. Pero ese no es el único límite que importa — en una
+implementación de seis repositorios son seis procesos de Claude a la vez, que cuestan seis veces y
+ocupan una máquina que alguien está usando. El tope se aplica **después** del filtro por
+repositorio: cortando antes, una tarea del segundo repositorio quedaba afuera por culpa de una del
+primero que se descartaba igual. Sin tope sigue mandando el criterio del motor.
+
+**Las duraciones que quedaban en minutos crudos pasaron a `HH:MM`**, incluido el eje del Gantt: un
+plan de ocho horas con marcas cada "240m" obliga a dividir para ubicarse.
+
 ## 73.0.0
 
 **El trabajo se escapaba del repositorio y nadie se enteraba.** Esto explica el "sigue escribiendo

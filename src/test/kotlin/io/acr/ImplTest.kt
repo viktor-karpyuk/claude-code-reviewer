@@ -2416,3 +2416,59 @@ class JobLogTest {
         }
     }
 }
+
+/** El tope de tareas simultáneas, encima del límite por repositorio. */
+class MaxParallelTest {
+
+    private fun repo(id: String) = io.acr.forge.RepoRecord(
+        id = id, name = id, provider = Provider.BITBUCKET, owner = "acme", slug = id,
+        localPath = "/tmp/$id", token = null,
+    )
+
+    private fun tarea(seq: Int, repoId: String) = ImplTask(
+        "t$seq", "i", repoId, seq, "tarea $seq", "", emptyList(), TaskSize.M, 10,
+        TaskStatus.PENDING, null, null, null, null, null, null,
+    )
+
+    private val base = io.acr.data.Store(
+        java.nio.file.Files.createTempDirectory("acr-max").resolve("x.db"),
+    )
+    private val motor = io.acr.impl.ImplEngine(
+        io.acr.data.ImplRepository(base), io.acr.data.PrefsRepo(base), io.acr.data.JobRepository(base),
+    )
+
+    @Test
+    fun withoutACapItRunsWhateverDependenciesAllow() {
+        val repos = listOf(repo("a"), repo("b"), repo("c"))
+        val todas = repos.mapIndexed { i, r -> tarea(i + 1, r.id) }
+        assertEquals(3, motor.ready(todas, repos.associateBy { it.id }, repos, null).size)
+    }
+
+    @Test
+    fun theCapLimitsWhatStartsAtOnce() {
+        // Seis procesos de Claude a la vez cuestan seis veces y ocupan una máquina que alguien está
+        // usando: el límite físico no es el único que importa.
+        val repos = listOf(repo("a"), repo("b"), repo("c"))
+        val todas = repos.mapIndexed { i, r -> tarea(i + 1, r.id) }
+        assertEquals(2, motor.ready(todas, repos.associateBy { it.id }, repos, 2).size)
+        assertEquals(listOf(1, 2), motor.ready(todas, repos.associateBy { it.id }, repos, 2).map { it.seq })
+    }
+
+    @Test
+    fun theCapIsAppliedAfterTheRepositoryFilter() {
+        // Si se cortara antes, una tarea del segundo repositorio quedaría afuera por culpa de una
+        // del primero que se descarta igual — y el tope terminaría siendo más chico de lo pedido.
+        val a = repo("a")
+        val b = repo("b")
+        val todas = listOf(tarea(1, a.id), tarea(2, a.id), tarea(3, b.id))
+        val listas = motor.ready(todas, listOf(a, b).associateBy { it.id }, listOf(a, b), 2)
+        assertEquals(listOf(1, 3), listas.map { it.seq }, "una por repositorio, y el tope no las recorta")
+    }
+
+    @Test
+    fun zeroMeansNoCap() {
+        val repos = listOf(repo("a"), repo("b"))
+        val todas = repos.mapIndexed { i, r -> tarea(i + 1, r.id) }
+        assertEquals(2, motor.ready(todas, repos.associateBy { it.id }, repos, 0).size)
+    }
+}

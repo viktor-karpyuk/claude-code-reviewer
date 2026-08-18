@@ -1226,6 +1226,16 @@ class Store(private val dbPath: Path, val settings: DbSettings = DbSettings()) :
             );--split--
             CREATE INDEX ix_job_log ON job_log(job_id, at)
             """.trimIndent(),
+
+            // v58 — cuántas tareas a la vez.
+            //
+            // El motor ya lanza en paralelo lo que las dependencias permiten, con un límite físico:
+            // una tarea por repositorio. En una implementación de seis repositorios eso son seis
+            // procesos de Claude a la vez, y no siempre se quiere —cuesta plata, y la máquina la
+            // está usando alguien—. Null es sin tope: el criterio sigue siendo el del motor.
+            """
+            ALTER TABLE implementation ADD COLUMN max_parallel INTEGER
+            """.trimIndent(),
         )
     }
 }

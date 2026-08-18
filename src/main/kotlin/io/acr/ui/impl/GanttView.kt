@@ -242,7 +242,9 @@ fun GanttView(
                     val px = x(m)
                     drawLine(tenue, Offset(px, eje - 4 * d), Offset(px, size.height), strokeWidth = 1f)
                     drawText(
-                        medidor, if (m == 0.0) "0" else "${m.toInt()}m",
+                        // El eje también pasa a horas cuando el plan es largo: un plan de ocho
+                        // horas con marcas cada "240m" obliga a dividir para ubicarse.
+                        medidor, if (m == 0.0) "0" else io.acr.impl.minutosLegibles(m),
                         topLeft = Offset(px + 3 * d, 2f), style = chico,
                     )
                     m += paso

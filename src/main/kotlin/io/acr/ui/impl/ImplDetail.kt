@@ -693,10 +693,22 @@ private fun SeccionTareas(
                     maxHeight = 240.dp,
                     defaultCollapsed = true,
                 ) {
+                    // Qué commit está abierto. La lista decía qué se hizo y cuándo, y no había
+                    // forma de ver qué: abrir el repositorio en una terminal para contestar eso es
+                    // salirse de la herramienta justo en la pregunta más común.
+                    var commitAbierto by remember(implId) { mutableStateOf<String?>(null) }
                     commits.forEach { (repoNombre, c) ->
-                        Row(Modifier.fillMaxWidth().padding(vertical = 1.dp)) {
+                        val suyo = misRepos.firstOrNull { it.name == repoNombre } ?: misRepos.firstOrNull()
+                        Row(
+                            Modifier.fillMaxWidth()
+                                .clickable {
+                                    commitAbierto = if (commitAbierto == c.sha) null else c.sha
+                                }
+                                .padding(vertical = 1.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
                             Text(
-                                c.sha.take(7),
+                                (if (commitAbierto == c.sha) "▾ " else "▸ ") + c.sha.take(7),
                                 style = MaterialTheme.typography.labelSmall
                                     .copy(fontFamily = FontFamily.Monospace),
                                 modifier = Modifier.width(70.dp),
@@ -722,6 +734,18 @@ private fun SeccionTareas(
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 modifier = Modifier.width(84.dp),
                             )
+                            // Abrir la carpeta del repositorio: para lo que la app no hace —correr
+                            // algo, mirar con otra herramienta— el camino más corto es el sistema.
+                            suyo?.let { r ->
+                                TextButton(onClick = {
+                                    runCatching {
+                                        java.awt.Desktop.getDesktop().open(java.io.File(r.localPath))
+                                    }
+                                }) { Text(t("impl.openRepo")) }
+                            }
+                        }
+                        if (commitAbierto == c.sha && suyo != null) {
+                            CommitDiffView(suyo, c.sha)
                         }
                     }
                 }

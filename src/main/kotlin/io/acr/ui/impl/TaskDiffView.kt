@@ -67,7 +67,7 @@ fun TaskDiffView(
 
 /** Una fila de archivo: qué le pasó, cuál es y cuánto cambió. */
 @Composable
-private fun FilaArchivo(f: FileChange, abierto: Boolean, onClick: () -> Unit) {
+internal fun FilaArchivo(f: FileChange, abierto: Boolean, onClick: () -> Unit) {
     Row(
         Modifier.fillMaxWidth()
             .clickable(onClick = onClick)
@@ -120,7 +120,7 @@ private fun FilaArchivo(f: FileChange, abierto: Boolean, onClick: () -> Unit) {
  * sigue —las otras tareas, el resto de la pantalla— fuera de la vista.
  */
 @Composable
-private fun DiffDeArchivo(repo: RepoRecord, sha: String, path: String) {
+internal fun DiffDeArchivo(repo: RepoRecord, sha: String, path: String) {
     val texto = io.acr.ui.dbState(repo.id, sha, path, initial = null as String?) {
         kotlinx.coroutines.runBlocking {
             io.acr.claude.Git.commitDiff(java.io.File(repo.localPath), sha, path)
@@ -157,6 +157,49 @@ private fun DiffDeArchivo(repo: RepoRecord, sha: String, path: String) {
     ) {
         lineas.forEach { l ->
             io.acr.ui.code.DiffRow(line = l, hScroll = hScroll, onClick = {})
+        }
+    }
+}
+
+/**
+ * Los archivos de un commit cualquiera, con su diff.
+ *
+ * Lo mismo que muestra una tarea, pero partiendo de un sha suelto: la lista de commits de la rama
+ * decía qué se hizo y cuándo, y no había forma de ver qué. Abrir el repositorio en una terminal para
+ * contestar eso es salirse de la herramienta justo en la pregunta más común.
+ *
+ * Los archivos se leen del commit y no se guardan: son del historial de git, que no se va a ningún
+ * lado, y duplicarlos en la base sería mantener dos versiones de la misma verdad.
+ */
+@Composable
+fun CommitDiffView(repo: RepoRecord, sha: String) {
+    val archivos = io.acr.ui.dbState(repo.id, sha, initial = null as List<FileChange>?) {
+        kotlinx.coroutines.runBlocking {
+            io.acr.claude.Git.commitStats(java.io.File(repo.localPath), sha)
+        }
+    }
+    var abierto by remember(sha) { mutableStateOf<String?>(null) }
+
+    if (archivos == null) {
+        Text(
+            t("impl.loadingDiff"),
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        return
+    }
+    if (archivos.isEmpty()) {
+        Text(
+            t("impl.noDiff"),
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        return
+    }
+    Column(Modifier.fillMaxWidth()) {
+        archivos.forEach { f ->
+            FilaArchivo(f, abierto == f.path) { abierto = if (abierto == f.path) null else f.path }
+            if (abierto == f.path) DiffDeArchivo(repo, sha, f.path)
         }
     }
 }

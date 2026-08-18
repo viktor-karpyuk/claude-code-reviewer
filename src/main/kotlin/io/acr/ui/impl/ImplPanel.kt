@@ -337,7 +337,7 @@ private fun Kpi(titulo: String, valor: String, alerta: Boolean) {
 @Composable
 fun tiempo(p: Progress): String {
     if (p.total == 0) return ""
-    val falta = if (p.remainingMin > 0) "  ·  " + t("impl.remaining", p.remainingMin.toInt()) else ""
+    val falta = if (p.remainingMin > 0) "  ·  " + t("impl.remaining", io.acr.impl.minutosLegibles(p.remainingMin)) else ""
     val desvio = p.drift?.takeIf { p.done > 0 }?.let { "  ·  " + t("impl.drift", "%.1f".format(it)) }.orEmpty()
     return falta + desvio
 }
