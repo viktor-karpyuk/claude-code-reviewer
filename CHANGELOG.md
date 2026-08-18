@@ -3,6 +3,31 @@
 Reglas de numeración en [CLAUDE.md](CLAUDE.md): un requerimiento **nuevo** incrementa *major*;
 cambiar uno **existente** incrementa *patch*.
 
+## 83.0.0
+
+**Un PR mergeado sale de todas las secciones del tablero.** Hasta ahora la app no tenía forma de
+enterarse de que un PR se cerró: el caché guarda sólo los abiertos y se reemplaza entero, así que un
+PR mergeado simplemente desaparecía de ahí — pero las respuestas sin contestar y los hallazgos sin
+verificar viven en otras tablas, indexados por número de PR, y nadie les avisaba. "Te respondieron"
+mandaba a un PR que ya nadie puede tocar.
+
+La señal no cuesta una llamada extra: **lo que estaba en la lista de abiertos y ya no está, se
+cerró**. Eso se anota al refrescar, y todas las secciones lo filtran desde un solo lugar — filtrar en
+cada consulta habría significado acordarse en seis lugares distintos, y el que se olvide es el que
+va a mostrar trabajo sobre un PR cerrado.
+
+Dos cuidados que valen la pena:
+
+- **Con la lista vacía no se concluye nada.** Un repositorio puede quedarse sin PRs abiertos, sí,
+  pero una respuesta vacía también puede venir de un error que no falló del todo — y dar todo por
+  cerrado de golpe borraría el tablero entero.
+- **Un PR reabierto vuelve a pedir trabajo.** Y se anota el cierre en vez de borrar lo pendiente:
+  borrar historial para limpiar una lista es cambiar el pasado.
+
+En **actividad reciente** los PRs cerrados sí siguen apareciendo, ahora marcados. Ahí lo que importa
+es qué pasó, no qué falta hacer, y esconderlos sería borrar el pasado; pero sin la marca uno hace
+click esperando trabajo y se encuentra con un PR mergeado.
+
 ## 82.0.1
 
 **Se revierte el filtro de PRs aprobados que introduje en la versión anterior.** Estaba mal por dos

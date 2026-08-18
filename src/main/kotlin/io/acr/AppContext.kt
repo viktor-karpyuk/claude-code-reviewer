@@ -55,6 +55,7 @@ class AppContext private constructor(
     val impls: io.acr.data.ImplRepository,
     val jobs2: io.acr.data.JobRepository,
     val usage: io.acr.data.UsageRepository,
+    val closedPrs: io.acr.data.ClosedPrRepository,
     val workspaces: io.acr.impl.Workspaces,
     val implEngine: io.acr.impl.ImplEngine,
     /** Dónde viven la base y la clave. La pantalla de la base lo necesita para poder mudarse. */
@@ -164,6 +165,7 @@ class AppContext private constructor(
             val impls = io.acr.data.ImplRepository(store)
             val jobsRepo = io.acr.data.JobRepository(store)
             val usageRepo = io.acr.data.UsageRepository(store)
+            val closedPrs = io.acr.data.ClosedPrRepository(store)
             // Desde el único lugar por el que pasan todas las corridas del CLI. Pedirle a cada
             // llamador que registre es como se termina con un registro parcial, que es peor que
             // ninguno: parece autoritativo y las decisiones que se toman mirándolo salen mal.
@@ -229,7 +231,7 @@ class AppContext private constructor(
                 jiraIssues = { repoId, prId -> jira.issuesOf(repoId, prId) },
             )
             val auto = AutoReviewer(repos, reviews, prefs, engine, notifier, replies, seenPrs, prLoader, findings, approvals, jobs, comments)
-            return AppContext(store, repos, reviews, publications, comments, notes, findings, approvals, jobs, guidelines, replies, seenPrs, prCache, prLoader, prefs, engine, auto, notifier, persons, commitStats, statsCollector, reviewStats, prStats, prHistory, rework, health, jira, jiraSites, impls, jobsRepo, usageRepo, workspaces, implEngine, dir, secrets, fallo)
+            return AppContext(store, repos, reviews, publications, comments, notes, findings, approvals, jobs, guidelines, replies, seenPrs, prCache, prLoader, prefs, engine, auto, notifier, persons, commitStats, statsCollector, reviewStats, prStats, prHistory, rework, health, jira, jiraSites, impls, jobsRepo, usageRepo, closedPrs, workspaces, implEngine, dir, secrets, fallo)
         }
 
         /** La propiedad `acr.dataDir` gana sobre la ubicación estándar; la usan los tests. */

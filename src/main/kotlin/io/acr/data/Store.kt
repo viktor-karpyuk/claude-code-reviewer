@@ -1315,6 +1315,26 @@ class Store(private val dbPath: Path, val settings: DbSettings = DbSettings()) :
             """
             ALTER TABLE implementation ADD COLUMN use_workspace INTEGER
             """.trimIndent(),
+
+            // v64 — la app se entera de que un PR se cerró.
+            //
+            // Hasta acá no había forma de saberlo. El caché guarda sólo los abiertos y se reemplaza
+            // entero, así que un PR mergeado simplemente desaparecía de ahí — pero las respuestas
+            // sin contestar y los hallazgos sin verificar viven en sus propias tablas, indexados por
+            // número de PR, y nadie les avisaba. El tablero seguía pidiendo trabajo sobre un PR que
+            // ya nadie puede tocar.
+            //
+            // La señal no cuesta una llamada extra: **ausencia de la lista de abiertos es cierre**.
+            // Se anota acá en vez de borrar el trabajo pendiente, porque un PR se puede reabrir y
+            // porque borrar historial para limpiar una lista es cambiar el pasado.
+            """
+            CREATE TABLE closed_pr (
+                repo_id   TEXT NOT NULL REFERENCES repo(id) ON DELETE CASCADE,
+                pr_id     INTEGER NOT NULL,
+                closed_at TEXT NOT NULL,
+                PRIMARY KEY (repo_id, pr_id)
+            )
+            """.trimIndent(),
         )
     }
 }

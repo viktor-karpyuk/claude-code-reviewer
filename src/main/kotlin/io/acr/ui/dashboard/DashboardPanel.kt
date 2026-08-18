@@ -108,14 +108,23 @@ fun DashboardPanel(ctx: AppContext, onOpenPr: (repoId: String, prId: Long) -> Un
     }
     LaunchedEffect(running.size, tick / 10) {
         snapshot = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+            // Los PRs que ya se cerraron. Todo lo que el tablero pide como pendiente se filtra por
+            // acá: un PR mergeado no puede recibir más trabajo, así que sus respuestas sin
+            // contestar y sus hallazgos sin verificar dejan de ser deuda en ese momento. Sin esto,
+            // "te respondieron" mandaba a un PR que ya nadie puede tocar.
+            val cerrados = ctx.closedPrs.all()
+            fun <T> vivos(xs: List<T>, repoDe: (T) -> String, prDe: (T) -> Long): List<T> =
+                xs.filter { prDe(it) !in cerrados[repoDe(it)].orEmpty() }
+
             Snapshot(
-                ready = ctx.reviews.readyToPublish(),
-                published = ctx.reviews.published(),
+                ready = vivos(ctx.reviews.readyToPublish(), { it.repoId }, { it.prId }),
+                published = vivos(ctx.reviews.published(), { it.repoId }, { it.prId }),
                 recent = ctx.reviews.recent(),
                 usage = ctx.reviews.usage(),
                 repoNames = ctx.repos.list().associate { it.id to it.name },
-                replies = ctx.replies.openOnes(),
-                awaitingThem = ctx.reviews.awaitingThem(),
+                replies = vivos(ctx.replies.openOnes(), { it.repoId }, { it.prId }),
+                awaitingThem = vivos(ctx.reviews.awaitingThem(), { it.repoId }, { it.prId }),
+                cerrados = cerrados,
                 totals = ctx.reviews.totals(),
                 current = ctx.reviews.currentPeriods(),
                 daily = ctx.reviews.statsByPeriod("day", 14),
@@ -293,7 +302,14 @@ fun DashboardPanel(ctx: AppContext, onOpenPr: (repoId: String, prId: Long) -> Un
                 item { Empty(io.acr.i18n.t("dash.noneReady")) }
             }
             items(if ("ready" in plegadas) emptyList() else snapshot.ready, key = { "r-${it.id}" }) { r ->
-                ReviewRow(r, snapshot.repoNames[r.repoId] ?: r.repoId) { onOpenPr(r.repoId, r.prId) }
+                ReviewRow(
+                    r,
+                    snapshot.repoNames[r.repoId] ?: r.repoId,
+                    // En la actividad reciente un PR cerrado sí va: lo que importa acá es qué pasó,
+                    // no qué falta hacer. Pero marcado — sin eso, uno hace click esperando trabajo y
+                    // se encuentra con un PR que ya nadie puede tocar.
+                    cerrado = r.prId in snapshot.cerrados[r.repoId].orEmpty(),
+                ) { onOpenPr(r.repoId, r.prId) }
             }
             }
 
@@ -494,6 +510,14 @@ private data class Snapshot(
     val replies: List<io.acr.data.ReplyDraft> = emptyList(),
     /** PRs donde ya contestaste todo y la pelota está del otro lado. */
     val awaitingThem: List<ReviewRecord> = emptyList(),
+    /**
+     * Los PRs que ya se cerraron, por repositorio.
+     *
+     * Las listas de arriba ya vienen filtradas; esto queda para lo que se muestra sin filtrar —la
+     * actividad reciente— donde un PR mergeado sí tiene sentido que aparezca, pero marcado. Ahí lo
+     * que importa no es "qué hay que hacer" sino "qué pasó", y ocultarlo sería borrar el pasado.
+     */
+    val cerrados: Map<String, Set<Long>> = emptyMap(),
     val totals: io.acr.data.ReviewRepository.Totals =
         io.acr.data.ReviewRepository.Totals(0, 0, 0, 0, 0, 0),
     val current: io.acr.data.ReviewRepository.Current =
@@ -721,7 +745,12 @@ private fun RunningCard(p: RunProgress, elapsed: String, onOpen: () -> Unit, onC
 }
 
 @Composable
-private fun ReviewRow(r: ReviewRecord, repoName: String, onOpen: () -> Unit) {
+private fun ReviewRow(
+    r: ReviewRecord,
+    repoName: String,
+    cerrado: Boolean = false,
+    onOpen: () -> Unit,
+) {
     Row(
         Modifier.fillMaxWidth().clickableText(onOpen).padding(vertical = 6.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -739,6 +768,14 @@ private fun ReviewRow(r: ReviewRecord, repoName: String, onOpen: () -> Unit) {
             maxLines = 1,
         )
         Text(r.prTitle, style = MaterialTheme.typography.bodySmall, modifier = Modifier.weight(1f), maxLines = 1)
+        if (cerrado) {
+            Text(
+                io.acr.i18n.t("dash.prClosed"),
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(end = 8.dp),
+            )
+        }
         r.costUsd?.let {
             Text(
                 "~US$ ${"%.3f".format(it)}",

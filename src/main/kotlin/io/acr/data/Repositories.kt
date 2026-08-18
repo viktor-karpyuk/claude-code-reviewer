@@ -1582,6 +1582,13 @@ class ReplyRepository(private val store: Store) {
     /** Todas las respuestas de un repo, sin importar el PR. */
     fun forPr2(repoId: String): List<ReplyDraft> = query("WHERE repo_id = ?") { it.setString(1, repoId) }
 
+    /**
+     * Los PRs que se cerraron: mergeados o rechazados.
+     *
+     * Todo lo que el tablero muestra como pendiente pasa por acá. Un PR cerrado no puede recibir
+     * más trabajo, así que sus respuestas sin contestar y sus hallazgos sin verificar dejan de ser
+     * deuda en el momento en que se mergea.
+     */
     fun openCountsByPr(repoId: String): Map<Long, Int> =
         store.stmt(
             """SELECT pr_id, COUNT(*) FROM reply_draft
@@ -1725,9 +1732,44 @@ class PrCacheRepository(private val store: Store) {
         return Cached(prs, meta.first, meta.second)
     }
 
-    /** Reemplaza la lista entera: un PR que se cerró tiene que desaparecer, no quedar pegado. */
+    /**
+     * Reemplaza la lista entera: un PR que se cerró tiene que desaparecer, no quedar pegado.
+     *
+     * Y de paso se anota **cuáles** se cerraron. Es el único momento en que la app puede saberlo sin
+     * gastar una llamada: lo que estaba en la lista de abiertos y ya no está, se cerró. Sin esa
+     * anotación, las respuestas sin contestar y los hallazgos sin verificar de un PR mergeado
+     * siguen pidiendo trabajo para siempre — viven en otras tablas y nadie les avisa.
+     */
     fun put(repoId: String, prs: List<io.acr.forge.PullRequest>, etag: String?) {
         store.transaction { conn ->
+            // Los que estaban abiertos y ya no vienen. Se calcula antes de borrar el caché, que es
+            // lo único que sabe cómo era la lista hace un rato.
+            val antes = mutableSetOf<Long>()
+            conn.prepareStatement("SELECT pr_id FROM pr_cache WHERE repo_id = ?").use { ps ->
+                ps.setString(1, repoId)
+                ps.executeQuery().use { rs -> while (rs.next()) antes += rs.getLong(1) }
+            }
+            val ahora = prs.map { it.id }.toSet()
+            val ahoraIso = Instant.now().toString()
+            // Con la lista vacía no se concluye nada. Un repositorio puede quedarse sin PRs
+            // abiertos, sí, pero también una respuesta vacía puede venir de un error que no falló
+            // del todo — y dar todo por cerrado de golpe borraría el tablero entero.
+            if (ahora.isNotEmpty()) {
+                (antes - ahora).forEach { id ->
+                    conn.prepareStatement(
+                        "INSERT OR IGNORE INTO closed_pr(repo_id, pr_id, closed_at) VALUES (?,?,?)",
+                    ).use { ps ->
+                        ps.setString(1, repoId); ps.setLong(2, id); ps.setString(3, ahoraIso)
+                        ps.executeUpdate()
+                    }
+                }
+            }
+            // Y al revés: un PR reabierto vuelve a pedir trabajo.
+            ahora.forEach { id ->
+                conn.prepareStatement("DELETE FROM closed_pr WHERE repo_id = ? AND pr_id = ?").use { ps ->
+                    ps.setString(1, repoId); ps.setLong(2, id); ps.executeUpdate()
+                }
+            }
             conn.prepareStatement("DELETE FROM pr_cache WHERE repo_id = ?").use { ps ->
                 ps.setString(1, repoId); ps.executeUpdate()
             }
@@ -2164,5 +2206,38 @@ class GuidelineRepository(private val store: Store) {
                     )
                 }
             }
+        }
+}
+
+/**
+ * Los PRs cerrados de un repositorio.
+ *
+ * Vive aparte y lo consultan todas las secciones del tablero. Filtrar en cada consulta habría
+ * significado acordarse en seis lugares distintos, y el que se olvide es el que va a mostrar trabajo
+ * sobre un PR que ya nadie puede tocar.
+ */
+class ClosedPrRepository(private val store: Store) {
+
+    fun of(repoId: String): Set<Long> =
+        store.stmt("SELECT pr_id FROM closed_pr WHERE repo_id = ?") { ps ->
+            ps.setString(1, repoId)
+            ps.executeQuery().use { rs -> buildSet { while (rs.next()) add(rs.getLong(1)) } }
+        }
+
+    /** Todos, por repositorio: el tablero mira varios a la vez. */
+    fun all(): Map<String, Set<Long>> =
+        store.stmt("SELECT repo_id, pr_id FROM closed_pr") { ps ->
+            ps.executeQuery().use { rs ->
+                buildMap<String, MutableSet<Long>> {
+                    while (rs.next()) getOrPut(rs.getString(1)) { mutableSetOf() } += rs.getLong(2)
+                }
+            }
+        }
+
+    fun closedAt(repoId: String, prId: Long): String? =
+        store.stmt("SELECT closed_at FROM closed_pr WHERE repo_id = ? AND pr_id = ?") { ps ->
+            ps.setString(1, repoId)
+            ps.setLong(2, prId)
+            ps.executeQuery().use { if (it.next()) it.getString(1) else null }
         }
 }

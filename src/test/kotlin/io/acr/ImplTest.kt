@@ -3335,3 +3335,74 @@ class WontFixTest {
         assertEquals(io.acr.data.Resolution.WONT_FIX, io.acr.data.Resolution.fromApi("wont_fix"))
     }
 }
+
+/**
+ * Que la app se entere de que un PR se cerró.
+ *
+ * Hasta ahora no había forma: el caché guarda sólo los abiertos y se reemplaza entero, así que un PR
+ * mergeado desaparecía de ahí — pero las respuestas sin contestar y los hallazgos sin verificar
+ * viven en otras tablas, indexados por número de PR, y nadie les avisaba. El tablero mandaba a un PR
+ * que ya nadie puede tocar.
+ */
+class ClosedPrTest {
+
+    private fun conRepo(block: (AppContext, String) -> Unit) {
+        val dir = java.nio.file.Files.createTempDirectory("acr-cerrado")
+        val ctx = AppContext.bootstrap(dir)
+        try {
+            val id = ctx.repos.create(
+                "tmp-cp-${System.nanoTime()}", Provider.BITBUCKET, "acme", "demo",
+                dir.toString(), null, null, null, "", false,
+                io.acr.forge.SkipRules(), io.acr.forge.ReplyMode.OFF,
+            )
+            block(ctx, id)
+        } finally {
+            ctx.close()
+            dir.toFile().deleteRecursively()
+        }
+    }
+
+    private fun pr(id: Long) = io.acr.forge.PullRequest(
+        id = id, title = "PR $id", author = "alguien", sourceBranch = "f$id", targetBranch = "develop",
+        headSha = "sha$id", state = io.acr.forge.PrState.OPEN, commentCount = 0,
+        updatedOn = "", url = "", isDraft = false, createdOn = "",
+    )
+
+    @Test
+    fun whatLeavesTheOpenListIsClosed() = conRepo { ctx, repoId ->
+        // La señal no cuesta una llamada extra: ausencia de la lista de abiertos es cierre.
+        ctx.prCache.put(repoId, listOf(pr(1), pr(2), pr(3)), null)
+        assertTrue(ctx.closedPrs.of(repoId).isEmpty())
+
+        ctx.prCache.put(repoId, listOf(pr(1), pr(3)), null)
+        assertEquals(setOf(2L), ctx.closedPrs.of(repoId))
+    }
+
+    @Test
+    fun anEmptyListConcludesNothing() = conRepo { ctx, repoId ->
+        // Un repositorio puede quedarse sin PRs abiertos, sí. Pero una respuesta vacía también
+        // puede venir de un error que no falló del todo, y dar todo por cerrado de golpe borraría
+        // el tablero entero.
+        ctx.prCache.put(repoId, listOf(pr(1), pr(2)), null)
+        ctx.prCache.put(repoId, emptyList(), null)
+        assertTrue(ctx.closedPrs.of(repoId).isEmpty(), "con la lista vacía no se concluye nada")
+    }
+
+    @Test
+    fun aReopenedPrAsksForWorkAgain() = conRepo { ctx, repoId ->
+        ctx.prCache.put(repoId, listOf(pr(1), pr(2)), null)
+        ctx.prCache.put(repoId, listOf(pr(1)), null)
+        assertEquals(setOf(2L), ctx.closedPrs.of(repoId))
+
+        ctx.prCache.put(repoId, listOf(pr(1), pr(2)), null)
+        assertTrue(ctx.closedPrs.of(repoId).isEmpty(), "volvió a estar abierto: vuelve a contar")
+    }
+
+    @Test
+    fun theClosingIsDatedSoItCanBeShown() = conRepo { ctx, repoId ->
+        ctx.prCache.put(repoId, listOf(pr(1), pr(2)), null)
+        ctx.prCache.put(repoId, listOf(pr(1)), null)
+        assertTrue(ctx.closedPrs.closedAt(repoId, 2) != null)
+        assertEquals(null, ctx.closedPrs.closedAt(repoId, 1))
+    }
+}
