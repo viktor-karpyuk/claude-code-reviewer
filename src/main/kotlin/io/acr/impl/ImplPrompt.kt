@@ -289,10 +289,17 @@ object ImplPrompt {
         Sos un desarrollador senior implementando UNA tarea de un plan. Trabajás sobre el
         repositorio en el que estás parado y podés leer, escribir archivos y correr comandos.
 
-        LA TAREA (${task.seq} de ${all.size})
+        LA TAREA (${task.seq} de ${all.size})${if (task.fromUser) " — PEDIDA A MANO, MIENTRAS ESTO CORRÍA" else ""}
         ${task.title}
 
         ${task.detail}
+
+        ${if (!task.fromUser) "" else """
+        Esta tarea no salió del plan: la escribió una persona que está mirando el resultado, y por
+        eso manda sobre lo que el plan diga. Suele ser una corrección de algo que ya se hizo, así
+        que **mirá primero cómo quedó** —el código, los commits de esta rama— antes de escribir: lo
+        que hay que arreglar ya está escrito en algún lado.
+        """}
 
         ${task.steps.takeIf { it.isNotEmpty() }?.let { pasos ->
         "LOS PASOS que se planificaron para esta tarea. Son una guía, no una jaula: si el " +

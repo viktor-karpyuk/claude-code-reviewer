@@ -3,6 +3,32 @@
 Reglas de numeración en [CLAUDE.md](CLAUDE.md): un requerimiento **nuevo** incrementa *major*;
 cambiar uno **existente** incrementa *patch*.
 
+## 75.0.0
+
+**Una consola para darle trabajo a la implementación mientras corre.** El módulo es autónomo y ese
+sigue siendo el punto, pero autónomo no quiere decir sordo: mirando el resultado uno ve cosas que el
+plan no podía ver —una tarea que resolvió algo de una forma que no sirve, un detalle que faltaba en
+las specs— y hasta ahora la única salida era frenar todo, editar, replanificar y volver a arrancar.
+Para una corrección de dos líneas, eso es tirar media hora de trabajo en curso.
+
+Lo que se escribe entra como una tarea más, con dos diferencias:
+
+- **Puede pasar al frente.** Una corrección existe para atenderse antes que lo que quedaba; si
+  tuviera que esperar su turno al final de la fila, llegaría cuando ya no sirve. La prioridad va en
+  una columna aparte del número de tarea: el número es una referencia estable —"la 4 depende de la
+  1", el mensaje de un commit— y renumerar para meter algo en el medio rompería todas esas
+  referencias de golpe. La tarea se agrega al final y corre primero.
+- **Queda marcada como escrita a mano**, y quien la ejecuta lo sabe: manda sobre el plan, y como
+  casi siempre es una corrección de algo que ya está escrito, lo primero que hace es ir a mirarlo en
+  vez de ponerse a escribir.
+
+No mata lo que está corriendo. Una tarea a mitad de camino tiene un proceso escribiendo archivos, y
+cortarlo para adelantar otra deja el árbol a medias: la urgente entra en cuanto se libere un lugar.
+Para lo que no puede esperar eso, está el botón de frenar.
+
+Arriba del campo queda el historial de lo pedido, con en qué terminó cada cosa. Sin eso, escribir
+una instrucción y verla desaparecer entre veinticinco tareas se siente como hablarle a un pozo.
+
 ## 74.0.0
 
 **Los commits de la rama se abren y muestran su código.** La lista decía qué se hizo y cuándo, y no

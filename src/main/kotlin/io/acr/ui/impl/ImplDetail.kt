@@ -517,6 +517,14 @@ private fun SeccionTareas(
             }
         }
 
+        // La consola, arriba de las tareas: lo que se escribe acá se convierte en una y aparece
+        // ahí abajo, así que ponerla lejos rompería la relación entre lo que uno pide y dónde
+        // aparece.
+        if (tareas.isNotEmpty()) {
+            Spacer(Modifier.height(14.dp))
+            ImplConsole(ctx, implId, misRepos, tareas, onChange)
+        }
+
         // --- Las tareas: primero la tira, después la tabla ---
         //
         // La tira sale de las mismas tareas que la tabla de abajo, no de otro lado: es el plan

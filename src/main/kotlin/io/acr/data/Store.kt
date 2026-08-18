@@ -1236,6 +1236,22 @@ class Store(private val dbPath: Path, val settings: DbSettings = DbSettings()) :
             """
             ALTER TABLE implementation ADD COLUMN max_parallel INTEGER
             """.trimIndent(),
+
+            // v59 — tareas que uno agrega sobre la marcha, y que pueden pasar al frente.
+            //
+            // La prioridad va aparte del número de tarea a propósito. El número es el orden del
+            // plan y es una referencia estable —"la 4 depende de la 1"—; renumerar para meter algo
+            // urgente en el medio rompería todas esas referencias y las de los commits ya hechos.
+            // Con una columna aparte, la tarea urgente se agrega al final y **corre primero**, sin
+            // tocar nada de lo que ya estaba.
+            //
+            // `source` distingue lo que planificó el modelo de lo que pidió una persona. No es
+            // decoración: una instrucción escrita a mano manda sobre el plan, y quien la ejecuta
+            // tiene que saber que viene de alguien que está mirando el resultado.
+            """
+            ALTER TABLE impl_task ADD COLUMN priority INTEGER;--split--
+            ALTER TABLE impl_task ADD COLUMN source TEXT
+            """.trimIndent(),
         )
     }
 }

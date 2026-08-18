@@ -2472,3 +2472,105 @@ class MaxParallelTest {
         assertEquals(2, motor.ready(todas, repos.associateBy { it.id }, repos, 0).size)
     }
 }
+
+/**
+ * La consola: darle trabajo a la implementación mientras corre.
+ *
+ * Lo que se escribe entra como una tarea más, con dos diferencias que importan: puede pasar al
+ * frente, y quien la ejecuta sabe que la escribió una persona.
+ */
+class ConsoleTaskTest {
+
+    private fun conPlan(block: (AppContext, String, String) -> Unit) {
+        val dir = java.nio.file.Files.createTempDirectory("acr-cons")
+        val ctx = AppContext.bootstrap(dir)
+        try {
+            val repoId = ctx.repos.create(
+                "tmp-c-${System.nanoTime()}", Provider.BITBUCKET, "acme", "demo",
+                dir.toString(), null, null, null, "", false,
+                io.acr.forge.SkipRules(), io.acr.forge.ReplyMode.OFF,
+            )
+            val id = ctx.impls.create(
+                listOf(io.acr.impl.ImplRepo(repoId, io.acr.impl.RepoRole.OTHER, null)),
+                "consola", listOf("/tmp/x.md"), null,
+            )
+            ctx.impls.savePlan(
+                id, "r", "rama", "develop", "fable",
+                (1..3).map {
+                    ImplTask("", "", repoId, it, "tarea $it", "", emptyList(), TaskSize.M, 10,
+                        TaskStatus.PENDING, null, null, null, null, null, null)
+                },
+            )
+            block(ctx, id, repoId)
+        } finally {
+            ctx.close()
+            dir.toFile().deleteRecursively()
+        }
+    }
+
+    @Test
+    fun anUrgentTaskGoesToTheEndButRunsFirst() = conPlan { ctx, id, repoId ->
+        // El número es una referencia estable —"la 4 depende de la 1", el mensaje de un commit— y
+        // renumerar para meter algo en el medio rompería todas esas referencias de golpe. Por eso
+        // se agrega al final y se adelanta con la prioridad.
+        ctx.impls.addUserTask(id, repoId, "corregir el approver", "sacalo del token", urgent = true)
+
+        val tareas = ctx.impls.tasks(id)
+        assertEquals(4, tareas.size)
+        val mia = tareas.single { it.fromUser }
+        assertEquals(4, mia.seq, "al final, sin tocar la numeración de las que ya estaban")
+        assertTrue(mia.priority > 0)
+    }
+
+    @Test
+    fun theEngineTakesTheUrgentOneBeforeThePending() = conPlan { ctx, id, repoId ->
+        ctx.impls.addUserTask(id, repoId, "urgente", "corregir", urgent = true)
+        val repo = ctx.repos.get(repoId)!!
+        val motor = io.acr.impl.ImplEngine(ctx.impls, ctx.prefs, ctx.jobs2)
+
+        val listas = motor.ready(ctx.impls.tasks(id), mapOf(repoId to repo), listOf(repo))
+        assertEquals(4, listas.single().seq, "la urgente primero, aunque sea la última del plan")
+    }
+
+    @Test
+    fun withoutUrgencyItWaitsItsTurn() = conPlan { ctx, id, repoId ->
+        ctx.impls.addUserTask(id, repoId, "cuando puedas", "algo", urgent = false)
+        val repo = ctx.repos.get(repoId)!!
+        val motor = io.acr.impl.ImplEngine(ctx.impls, ctx.prefs, ctx.jobs2)
+
+        assertEquals(1, motor.ready(ctx.impls.tasks(id), mapOf(repoId to repo), listOf(repo)).single().seq)
+    }
+
+    @Test
+    fun whoRunsItKnowsAPersonWroteIt() {
+        // Manda sobre el plan, y suele ser una corrección de algo que ya está escrito: lo primero
+        // es ir a mirarlo, no ponerse a escribir.
+        val aMano = ImplTask(
+            "t", "i", null, 9, "corregir", "sacá el approver del token", emptyList(), TaskSize.M, 10,
+            TaskStatus.PENDING, null, null, null, null, null, null, fromUser = true,
+        )
+        val p = io.acr.impl.ImplPrompt.task(aMano, listOf(aMano), emptyList(), null, "español")
+        assertTrue(p.contains("PEDIDA A MANO"))
+        assertTrue(p.contains("manda sobre lo que el plan diga"))
+        assertTrue(p.contains("mirá primero cómo quedó"))
+
+        val delPlan = aMano.copy(fromUser = false)
+        assertTrue(!io.acr.impl.ImplPrompt.task(delPlan, listOf(delPlan), emptyList(), null, "español")
+            .contains("PEDIDA A MANO"))
+    }
+
+    @Test
+    fun theTitleIsTheFirstLineAndTheDetailIsEverything() = conPlan { ctx, id, repoId ->
+        // Una instrucción de un párrafo no entra en una fila de tabla, y recortarla ahí perdería
+        // justamente lo que la hace específica.
+        ctx.impls.addUserTask(
+            id, repoId,
+            "corregir el approver",
+            "corregir el approver\nque salga del token, no del body\ny agregá el test",
+            urgent = true,
+        )
+        val mia = ctx.impls.tasks(id).single { it.fromUser }
+        assertEquals("corregir el approver", mia.title)
+        assertTrue(mia.detail.contains("agregá el test"))
+    }
+}

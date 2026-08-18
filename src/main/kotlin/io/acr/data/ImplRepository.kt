@@ -336,7 +336,7 @@ class ImplRepository(private val store: Store) {
             """SELECT id, impl_id, seq, title, detail, depends_on, size, estimate_min, status,
                       commit_sha, result, error, cost_usd, started_at, finished_at, repo_id,
                       files_added, files_modified, files_deleted, lines_added, lines_deleted,
-                      files_detail, prompt, created_at, updated_at
+                      files_detail, prompt, created_at, updated_at, priority, source
                  FROM impl_task WHERE impl_id = ? ORDER BY seq""",
         ) { ps ->
             ps.setString(1, implId)
@@ -385,6 +385,8 @@ class ImplRepository(private val store: Store) {
                                 createdAt = rs.getString(24),
                                 updatedAt = rs.getString(25),
                                 steps = pasos[rs.getString(1)].orEmpty(),
+                                priority = rs.getObject(26)?.let { rs.getInt(26) } ?: 0,
+                                fromUser = rs.getString(27) == "USER",
                             ),
                         )
                     }
@@ -440,6 +442,49 @@ class ImplRepository(private val store: Store) {
                 }
             }
         }
+
+    /**
+     * Agrega una tarea escrita a mano, opcionalmente al frente de la cola.
+     *
+     * Se numera al final para no tocar las referencias que ya existen —los `depends_on`, los
+     * mensajes de los commits— y se adelanta con la prioridad, que es lo que el motor mira primero.
+     * Meterla en el medio renumerando habría roto todo eso de golpe.
+     */
+    fun addUserTask(
+        implId: String,
+        repoId: String?,
+        title: String,
+        detail: String,
+        urgent: Boolean,
+        estimateMin: Int? = null,
+    ): String {
+        val id = UlidCreator.getUlid().toString()
+        val ahora = Instant.now().toString()
+        val seq = store.stmt("SELECT COALESCE(MAX(seq), 0) + 1 FROM impl_task WHERE impl_id = ?") { ps ->
+            ps.setString(1, implId)
+            ps.executeQuery().use { if (it.next()) it.getInt(1) else 1 }
+        }
+        store.stmt(
+            """INSERT INTO impl_task(id, impl_id, seq, title, detail, depends_on, size,
+                     estimate_min, status, repo_id, created_at, updated_at, priority, source)
+               VALUES (?,?,?,?,?,'',?,?,?,?,?,?,?,'USER')""",
+        ) { ps ->
+            ps.setString(1, id)
+            ps.setString(2, implId)
+            ps.setInt(3, seq)
+            ps.setString(4, title.take(200))
+            ps.setString(5, detail)
+            ps.setString(6, TaskSize.M.name)
+            if (estimateMin == null) ps.setNull(7, java.sql.Types.INTEGER) else ps.setInt(7, estimateMin)
+            ps.setString(8, TaskStatus.PENDING.name)
+            ps.setString(9, repoId)
+            ps.setString(10, ahora)
+            ps.setString(11, ahora)
+            ps.setInt(12, if (urgent) 100 else 0)
+            ps.executeUpdate()
+        }
+        return id
+    }
 
     /** El estado de una tarea, sin traer el resto. Para decidir si hay que reintentarla. */
     fun taskStatus(taskId: String): TaskStatus? =

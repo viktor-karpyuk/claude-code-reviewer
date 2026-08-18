@@ -293,6 +293,16 @@ data class ImplTask(
     /** Última vez que cambió algo suyo. Distinto de terminada: replanificar también la modifica. */
     val updatedAt: String? = null,
     val steps: List<ImplStep> = emptyList(),
+    /**
+     * Cuánto se adelanta en la cola. Cero es el orden del plan.
+     *
+     * Va aparte del número de tarea porque el número es una referencia estable —"la 4 depende de la
+     * 1", el mensaje de un commit— y renumerar para meter algo urgente en el medio rompería todas
+     * esas referencias de golpe.
+     */
+    val priority: Int = 0,
+    /** Si la escribió una persona sobre la marcha en vez de salir del plan. */
+    val fromUser: Boolean = false,
 ) {
     /** Cuánto tardó de verdad, en minutos. Null mientras no haya terminado. */
     val actualMin: Double?

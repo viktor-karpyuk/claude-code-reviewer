@@ -589,9 +589,10 @@ class ImplEngine(
                 // trabada sin nada roto y sin nada que decir—. El orden del plan manda.
                 t.dependsOn.filter { it in existen && it < t.seq }.all { it in hechas }
             }
-            // En orden de plan: cuando dos pueden arrancar y comparten repositorio, va la de
-            // antes. El número de tarea es lo que alguien mira para saber por dónde va.
-            .sortedBy { it.seq }
+            // Primero lo urgente, después el orden del plan. Una corrección escrita a mano
+            // mientras esto corre existe justamente para atenderse antes que lo que quedaba: si
+            // tuviera que esperar su turno al final de la fila, llegaría cuando ya no sirve.
+            .sortedWith(compareByDescending<ImplTask> { it.priority }.thenBy { it.seq })
             .filter { t ->
                 val repo = (porId[t.repoId] ?: repos.firstOrNull())?.id ?: return@filter false
                 ocupados.add(repo)
