@@ -87,9 +87,12 @@ fun ImplDetail(
     }
     // Late mientras haya algo corriendo, esté abierta la lista o el detalle de una tarea: es lo
     // que hace que el estado persistido llegue a la pantalla sin tener que salir y volver.
+    // Cada tres segundos y no cada uno. El latido dispara la relectura de todo lo que la pantalla
+    // muestra —tareas, pasos, revisiones, contexto—, y una tarea dura minutos: refrescar tres veces
+    // más seguido no adelanta ninguna noticia y sí hace que la pantalla trabaje todo el tiempo.
     androidx.compose.runtime.LaunchedEffect(corriendoAlgo(tareas)) {
         while (corriendoAlgo(tareas)) {
-            kotlinx.coroutines.delay(1_000)
+            kotlinx.coroutines.delay(3_000)
             tic++
         }
     }
@@ -105,6 +108,28 @@ fun ImplDetail(
     }
     // En el orden en que se cargaron: el primero es el principal y el plan arranca mirándolo.
     val misRepos = remember(suyos, repos) { suyos.mapNotNull { r -> repos.firstOrNull { it.id == r.repoId } } }
+
+    // El estado de git se mide cuando cambia algo, no en cada latido.
+    //
+    // Preguntarle a git por cada repositorio en cada recomposición son dos subprocesos por
+    // repositorio por segundo, en el hilo de la interfaz, mientras la implementación corre. Es la
+    // clase de trabajo que hace que una pantalla que "sólo muestra" se sienta trabada.
+    //
+    // `sucios` son los que tienen cambios sin commitear; `ajenos`, los que además están parados en
+    // otra rama — esos son los que impiden arrancar, porque lo que hay ahí no es nuestro.
+    var sucios by remember(implId) { mutableStateOf(emptySet<String>()) }
+    var ajenos by remember(implId) { mutableStateOf(emptyList<io.acr.forge.RepoRecord>()) }
+    val rama = impl.branch
+    androidx.compose.runtime.LaunchedEffect(misRepos, version, rama) {
+        val medidos = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+            misRepos.map { r ->
+                val d = java.io.File(r.localPath)
+                Triple(r, io.acr.claude.Git.isDirty(d), io.acr.claude.Git.currentBranch(d))
+            }
+        }
+        sucios = medidos.filter { it.second }.map { it.first.id }.toSet()
+        ajenos = medidos.filter { it.second && it.third != rama }.map { it.first }
+    }
     val repo = misRepos.firstOrNull()
     val corriendo = impl.status == ImplStatus.RUNNING || impl.status == ImplStatus.PLANNING
 
@@ -239,9 +264,7 @@ fun ImplDetail(
         Spacer(Modifier.height(8.dp))
         misRepos.forEach { r ->
             val cfg = suyos.firstOrNull { it.repoId == r.id }
-            val sucio = io.acr.ui.dbState(r.id, version, initial = false) {
-                kotlinx.coroutines.runBlocking { io.acr.claude.Git.isDirty(java.io.File(r.localPath)) }
-            }
+            val sucio = r.id in sucios
             Row(Modifier.fillMaxWidth().padding(vertical = 1.dp), verticalAlignment = Alignment.CenterVertically) {
                 Text(
                     r.name,
@@ -277,7 +300,7 @@ fun ImplDetail(
                 CircularProgressIndicator(Modifier.height(18.dp).width(18.dp), strokeWidth = 2.dp)
             } else {
                 Button(
-                    enabled = repo != null,
+                    enabled = repo != null && ajenos.isEmpty(),
                     onClick = {
                         scope.launch {
                             // De las specs al código de una sola vez: planifica y sigue. Frenar
@@ -299,6 +322,21 @@ fun ImplDetail(
                         },
                     )
                 }
+            }
+            // Y por qué no se puede, al lado del botón: el motivo estaba en el error de arriba,
+            // que después de la primera vez ya nadie vuelve a leer porque no cambia.
+            if (!corriendo && ajenos.isNotEmpty()) {
+                Text(
+                    t("impl.blockedBy", ajenos.joinToString(", ") { it.name }),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.error,
+                )
+                TextButton(onClick = {
+                    ctx.appScope.launch {
+                        ajenos.forEach { ctx.implEngine.stashDirty(it) }
+                        version++
+                    }
+                }) { Text(t("impl.stashAll")) }
             }
             Spacer(Modifier.weight(1f))
             impl.costUsd?.let {

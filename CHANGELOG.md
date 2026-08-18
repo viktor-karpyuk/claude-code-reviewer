@@ -3,6 +3,29 @@
 Reglas de numeración en [CLAUDE.md](CLAUDE.md): un requerimiento **nuevo** incrementa *major*;
 cambiar uno **existente** incrementa *patch*.
 
+## 71.1.0
+
+**"Retomar" parecía un botón muerto, y no lo era.** El motor rechaza la corrida cuando un
+repositorio tiene cambios sin commitear que no son de esta implementación, y lo hacía en el primer
+instante: apretar dejaba en pantalla el mismo error que ya estaba, sin que nada cambiara. Desde
+afuera eso es exactamente igual a un botón que no hace nada.
+
+Ahora el bloqueo se ve **antes** de apretar: el botón queda deshabilitado, al lado dice qué
+repositorio lo traba y hay un "guardarlos y desbloquear" que resuelve los tres de una. Un botón que
+no puede funcionar no tiene que parecer que puede. Y el rechazo también queda en el feed, así que
+apretar deja rastro aunque falle al instante. El mensaje además dice en qué rama están esos cambios,
+que es lo que permite reconocerlos como propios.
+
+**La pantalla dejó de trabajar de más mientras algo corre.** Le preguntaba a git por cada
+repositorio en cada recomposición —dos subprocesos por repositorio, en el hilo de la interfaz— y
+releía todo una vez por segundo. Ahora el estado de git se mide cuando cambia algo, fuera del hilo
+de la interfaz, y el latido pasó de un segundo a tres: una tarea dura minutos, así que refrescar
+tres veces más seguido no adelanta ninguna noticia.
+
+**Desde la lista de trabajos se puede abrir el contexto** de la tarea que ese job estaba corriendo.
+Es lo que contesta la pregunta que trae a alguien ahí cuando ve un job muerto: qué alcanzó a hacer
+antes de cortarse.
+
 ## 71.0.0
 
 **Cincuenta y cuatro textos mostraban el marcador crudo.** `Vivos ({0})`, `3 de {1} tareas`,

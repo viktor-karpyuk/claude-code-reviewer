@@ -304,8 +304,13 @@ class ImplEngine(
                 if (!nuestra) {
                     // Se nombra el repositorio y se dice la salida concreta. Antes decía "guardalos
                     // o descartalos" sin decir cuál de los repositorios era el del problema.
-                    val msg = "${r.name} tiene cambios sin commitear. Desde la pantalla podés " +
-                        "guardarlos en el stash y seguir; se recuperan con `git stash pop`."
+                    val msg = "${r.name} tiene cambios sin commitear en «${Git.currentBranch(d)}», " +
+                        "que no son de esta implementación. Guardalos en el stash desde la pantalla " +
+                        "y volvé a intentar; se recuperan con `git stash pop`."
+                    // Al feed además del estado: rechazar en el primer instante dejaba la pantalla
+                    // igual que antes de apretar —el mismo error, sin nada nuevo— y eso se lee como
+                    // un botón que no hace nada.
+                    log(implId, "No puedo arrancar. $msg")
                     impls.setStatus(implId, ImplStatus.FAILED, msg)
                     return Result.failure(IllegalStateException(msg))
                 }

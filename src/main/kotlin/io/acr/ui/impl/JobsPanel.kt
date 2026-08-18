@@ -1,5 +1,6 @@
 package io.acr.ui.impl
 
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -124,6 +125,27 @@ private fun Fila(
     onChange: () -> Unit,
 ) {
     val muerto = job.stale(ahora)
+    // El contexto de la tarea que este job estaba corriendo.
+    //
+    // Es lo que contesta la pregunta que trae a alguien acá cuando ve un job muerto: "¿qué alcanzó
+    // a hacer antes de cortarse?". Sin esto, la fila dice que algo se interrumpió y no dice nada
+    // sobre qué quedó a medias — que es justamente lo que hay que saber para decidir si retomar.
+    var abierto by remember(job.id) { mutableStateOf(false) }
+    val contexto = if (abierto && job.taskId != null) {
+        io.acr.ui.dbState(job.taskId, abierto, initial = emptyList<io.acr.impl.ContextEntry>()) {
+            ctx.jobs2.contextOf(job.taskId)
+        }
+    } else {
+        emptyList()
+    }
+    val tarea = if (abierto && job.taskId != null) {
+        io.acr.ui.dbState(job.taskId, abierto, initial = null as io.acr.impl.ImplTask?) {
+            ctx.impls.tasks(job.implId).firstOrNull { it.id == job.taskId }
+        }
+    } else {
+        null
+    }
+
     Column(Modifier.fillMaxWidth().padding(vertical = 5.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text(
@@ -139,10 +161,18 @@ private fun Fila(
                 modifier = Modifier.width(110.dp),
             )
             Text(
-                titulos[job.implId] ?: job.implId.take(8),
+                (if (job.taskId != null) (if (abierto) "▾  " else "▸  ") else "") +
+                    (titulos[job.implId] ?: job.implId.take(8)),
                 style = MaterialTheme.typography.bodySmall,
                 maxLines = 1,
-                modifier = Modifier.weight(1f),
+                modifier = Modifier.weight(1f)
+                    .then(
+                        if (job.taskId != null) {
+                            Modifier.clickable { abierto = !abierto }
+                        } else {
+                            Modifier
+                        },
+                    ),
             )
             // El intento importa: un job que va por el tercero está contando una historia distinta
             // de uno que arrancó recién, aunque los dos digan "corriendo".
@@ -185,8 +215,68 @@ private fun Fila(
                 modifier = Modifier.padding(start = 70.dp),
             )
         }
+        if (abierto) {
+            Column(Modifier.fillMaxWidth().padding(start = 70.dp, top = 4.dp, bottom = 6.dp)) {
+                tarea?.let {
+                    Text(
+                        "#${it.seq}  ${it.title}",
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
+                if (contexto.isEmpty()) {
+                    Text(
+                        t("impl.contextEmpty"),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                } else {
+                    Text(
+                        t("impl.contextNote"),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Spacer(Modifier.height(3.dp))
+                    contexto.forEach { e ->
+                        Row(Modifier.fillMaxWidth()) {
+                            Text(
+                                marcaDe(e.kind),
+                                style = MaterialTheme.typography.labelSmall,
+                                color = colorDeContexto(e.kind),
+                                modifier = Modifier.width(18.dp),
+                            )
+                            Text(
+                                e.text,
+                                style = MaterialTheme.typography.labelSmall
+                                    .copy(fontFamily = FontFamily.Monospace),
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.weight(1f),
+                            )
+                        }
+                    }
+                }
+            }
+        }
         HorizontalDivider(color = MaterialTheme.colorScheme.surfaceVariant)
     }
+}
+
+/** La marca de cada clase de hecho. Las mismas que en el detalle de la tarea. */
+private fun marcaDe(k: io.acr.impl.ContextKind): String = when (k) {
+    io.acr.impl.ContextKind.FILE -> "✎"
+    io.acr.impl.ContextKind.CMD -> "$"
+    io.acr.impl.ContextKind.STEP -> "✓"
+    io.acr.impl.ContextKind.DECISION -> "◆"
+    io.acr.impl.ContextKind.INTERRUPT -> "⏸"
+    io.acr.impl.ContextKind.RESUME -> "↻"
+    io.acr.impl.ContextKind.NOTE -> "·"
+}
+
+@Composable
+private fun colorDeContexto(k: io.acr.impl.ContextKind) = when (k) {
+    io.acr.impl.ContextKind.STEP -> StatusColors.DONE
+    io.acr.impl.ContextKind.INTERRUPT, io.acr.impl.ContextKind.DECISION -> StatusColors.NEEDS_HUMAN
+    io.acr.impl.ContextKind.RESUME -> StatusColors.RUNNING
+    else -> MaterialTheme.colorScheme.onSurfaceVariant
 }
 
 @Composable
